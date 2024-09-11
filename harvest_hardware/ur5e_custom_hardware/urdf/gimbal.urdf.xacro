@@ -1,0 +1,204 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<robot xmlns:xacro="http://ros.org/wiki/xacro" name="gimbal_urdf">
+<!-- This URDF was automatically created by SolidWorks to URDF Exporter! Originally created by Stephen Brawner (brawner@gmail.com) 
+     Commit Version: 1.6.0-4-g7f85cfe  Build Version: 1.6.7995.38578
+     For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
+  <xacro:macro name="gimbal_macro">
+    <link
+      name="gimbal_base_link">
+      <inertial>
+        <origin
+          xyz="0.0336460086636299 1.91394764093578E-05 0.065168929373858"
+          rpy="0 0 0" />
+        <mass
+          value="0.10275299110215" />
+        <inertia
+          ixx="0.00014206840782907"
+          ixy="-2.88136939462501E-07"
+          ixz="-2.00404815957952E-05"
+          iyy="0.000247979124881713"
+          iyz="-1.73576391905378E-08"
+          izz="0.000197897075798218" />
+      </inertial>
+      <visual>
+        <origin
+          xyz="0 0 0"
+          rpy="0 0 0" />
+        <geometry>
+          <mesh
+            filename="package://gimbal_ur_description/meshes/base_link.STL" />
+        </geometry>
+        <material
+          name="">
+          <color
+            rgba="0.501960784313725 0.501960784313725 0.501960784313725 1" />
+        </material>
+      </visual>
+      <!-- <collision>
+        <origin
+          xyz="0 0 0"
+          rpy="0 0 0" />
+        <geometry>
+          <mesh
+            filename="package://gimbal_ur_description/meshes/base_link.STL" />
+        </geometry>
+      </collision> -->
+    </link>
+    <link
+      name="mid_link">
+      <inertial>
+        <origin
+          xyz="-0.0172336434948986 0.0197542301370697 -0.00162642838239672"
+          rpy="0 0 0" />
+        <mass
+          value="0.0113754397942682" />
+        <inertia
+          ixx="2.70507401167344E-06"
+          ixy="-4.31360472710167E-08"
+          ixz="-9.80240852168054E-08"
+          iyy="2.65914406619723E-06"
+          iyz="9.28247349172708E-08"
+          izz="3.23718130953593E-06" />
+      </inertial>
+      <visual>
+        <origin
+          xyz="0 0 0"
+          rpy="0 0 0" />
+        <geometry>
+          <mesh
+            filename="package://gimbal_ur_description/meshes/mid_link.STL" />
+        </geometry>
+        <material
+          name="">
+          <color
+            rgba="0.501960784313725 0.501960784313725 0.501960784313725 1" />
+        </material>
+      </visual>
+      <!-- <collision>
+        <origin
+          xyz="0 0 0"
+          rpy="0 0 0" />
+        <geometry>
+          <mesh
+            filename="package://gimbal_ur_description/meshes/mid_link.STL" />
+        </geometry>
+      </collision> -->
+    </link>
+    <joint
+      name="mid_joint"
+      type="revolute">
+      <origin
+        xyz="0.02975 0 0.0975"
+        rpy="1.5708 1.5708 0" />
+      <parent
+        link="gimbal_base_link" />
+      <child
+        link="mid_link" />
+      <axis
+        xyz="1 0 0" />
+      <limit
+        lower="0"
+        upper="0"
+        effort="0"
+        velocity="0" />
+    </joint>
+    <link
+      name="dist_link">
+      <inertial>
+        <origin
+          xyz="0.0163966658321164 -0.00685060795640711 -0.001618955216546"
+          rpy="0 0 0" />
+        <mass
+          value="0.0182511913895472" />
+        <inertia
+          ixx="1.26767607234961E-05"
+          ixy="-8.29381838986479E-07"
+          ixz="-2.18676297528429E-07"
+          iyy="1.10381871193297E-05"
+          iyz="9.13640369977937E-08"
+          izz="5.30328670558707E-06" />
+      </inertial>
+      <visual>
+        <origin
+          xyz="0 0 0"
+          rpy="0 0 .3958" />
+        <geometry>
+          <mesh
+            filename="package://gimbal_ur_description/meshes/dist_link.STL" />
+        </geometry>
+        <material
+          name="">
+          <color
+            rgba="0.501960784313725 0.501960784313725 0.501960784313725 1" />
+        </material>
+      </visual>
+      <!-- <collision>
+        <origin
+          xyz="0 0 0"
+          rpy="0 0 0" />
+        <geometry>
+          <mesh
+            filename="package://gimbal_ur_description/meshes/dist_link.STL" />
+        </geometry>
+      </collision> -->
+    </link>
+    <joint
+      name="dist_joint"
+      type="revolute">
+      <origin
+        xyz="-0.0325 0.0255 0"
+        rpy="0 0 1.5708" />
+      <parent
+        link="mid_link" />
+      <child
+        link="dist_link" />
+      <axis
+        xyz="0 0 -1" />
+      <limit
+        lower="0"
+        upper="0"
+        effort="0"
+        velocity="0" />
+    </joint>
+
+    <joint name="tof_gimbal_camera_joint" type="fixed">
+        <parent link="dist_link"/>
+        <child link="tof_gimbal_camera_optical_link"/>
+        <origin xyz="0.037 0 0.012" rpy="1.5708 -1.5708 1.5708"/>
+    </joint>
+    <link name="tof_gimbal_camera_optical_link">
+    </link>
+        <joint name="rgb_gimbal_camera_joint" type="fixed">
+        <parent link="dist_link"/>
+        <child link="rgb_gimbal_camera_optical_link"/>
+        <origin xyz="0.028 0 -0.015" rpy="1.5708 -1.5708 1.5708"/>
+    </joint>
+    <link name="rgb_gimbal_camera_optical_link">
+    </link>
+     <ros2_control name="gimbal_ros2_control" type="system">
+      <hardware>
+      <plugin>mock_components/GenericSystem</plugin>
+      </hardware>
+      <joint name="mid_joint">
+      <command_interface name="position"/>
+      <state_interface name="position">
+        <!-- <param name="initial_value">0.0</param> -->
+      </state_interface>
+      </joint>
+      <joint name="dist_joint">
+      <command_interface name="position"/>
+      <state_interface name="position">
+        <!-- <param name="initial_value">0.0</param> -->
+      </state_interface>
+      </joint>
+     </ros2_control>
+
+    <xacro:arg name="use_nominal_extrinsics" default="false" />
+    <xacro:include filename="$(find realsense2_description)/urdf/_d435i.urdf.xacro"/>
+
+    <xacro:sensor_d435i parent="dist_link" use_nominal_extrinsics="$(arg use_nominal_extrinsics)">
+      <origin xyz=".027 -.012 0" rpy="4.71239 0 0"/>
+    </xacro:sensor_d435i>
+
+  </xacro:macro>
+</robot>

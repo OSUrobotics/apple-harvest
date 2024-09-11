@@ -1,0 +1,34 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" >
+    <xacro:macro name="gripper_macro">
+
+    <joint name="gripper_palm_camera_joint" type="fixed">
+        <parent link="gripper_link"/>
+        <child link="gripper_palm_camera_link_optical"/>
+        <origin xyz="0.00 0 0.0" rpy="0 0 0"/>
+    </joint>
+
+    <link name="gripper_palm_camera_link_optical">
+        <visual>
+            <geometry>
+                <box size="0.03 0.03 0.01"/>
+            </geometry>
+        </visual>
+    </link>
+    
+    <link name="gripper_link">
+        <collision>
+            <origin xyz="0.00 0 -0.105" rpy="0 0 0"/>
+            <geometry>
+                <box size="0.06 0.06 0.2"/>
+            </geometry>
+        </collision>
+        <visual>
+            <origin xyz="0.00 0 -0.105" rpy="0 0 0"/>
+            <geometry>
+                <box size="0.06 0.06 0.2"/>
+            </geometry>
+        </visual>
+    </link>
+</xacro:macro>
+</robot>
