@@ -11,13 +11,12 @@
     <joint name="gripper_top_camera_joint" type="fixed">
         <parent link="gripper_link"/>
         <child link="gripper_top_camera_link"/>
-        <origin xyz="0.00 0 0.0" rpy="0 0 0"/>
+        <origin xyz="0.00 -.08 -0.085" rpy="0 0 0"/>
     </joint>
 
     <link name="gripper_top_camera_link">
         <visual>
             <geometry>
-                <origin xyz="0.00 0 -0.085" rpy="0 0 0"/>
                 <box size="0.03 0.03 0.01"/>
             </geometry>
         </visual>
@@ -45,5 +44,12 @@
             </geometry>
         </visual>
     </link>
+
+    <xacro:arg name="use_nominal_extrinsics" default="false" />
+    <xacro:include filename="$(find realsense2_description)/urdf/_d435i.urdf.xacro"/>
+    <xacro:sensor_d435i parent="gripper_top_camera_link" use_nominal_extrinsics="$(arg use_nominal_extrinsics)">
+      <origin xyz="0 0 0" rpy="0 -1.571 1.571"/>
+    </xacro:sensor_d435i>
+
 </xacro:macro>
 </robot>
