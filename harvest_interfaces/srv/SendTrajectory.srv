@@ -1,0 +1,7 @@
+# Request: A list of waypoints
+std_msgs/Float32MultiArray waypoints
+
+---
+
+# Response: Success flag
+bool success

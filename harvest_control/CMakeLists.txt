@@ -15,25 +15,53 @@ find_package(std_srvs REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(moveit_ros_planning_interface REQUIRED)
+find_package(controller_manager_msgs REQUIRED)
+find_package(trajectory_msgs REQUIRED)
 find_package(harvest_interfaces)
 
 
 ### C++ ###
+add_executable(move_arm src/move_arm.cpp)
+
+target_include_directories(move_arm PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>)
+
+target_compile_features(move_arm PUBLIC c_std_99 cxx_std_17)  # Require C99 and C++17
+
+ament_target_dependencies(
+  move_arm
+  "moveit_ros_planning_interface"
+  "harvest_interfaces"
+  "rclcpp"
+  "trajectory_msgs"
+  "std_srvs"
+)
 
 ### PYTHON ###
 # Install Python modules
 ament_python_install_package(${PROJECT_NAME})
+
 # Install Python executables
 install(PROGRAMS
   scripts/local_planner.py
+  scripts/coordinate_to_trajectory.py
   DESTINATION lib/${PROJECT_NAME}
 )
+
+install(TARGETS move_arm
+  DESTINATION lib/${PROJECT_NAME})
 
 ### LAUNCH ###
 # Install launch files.
 install(DIRECTORY
   launch
   DESTINATION share/${PROJECT_NAME}/
+)
+
+# Install resources files.
+install(DIRECTORY resource/
+  DESTINATION share/${PROJECT_NAME}/resource
 )
 
 if(BUILD_TESTING)
