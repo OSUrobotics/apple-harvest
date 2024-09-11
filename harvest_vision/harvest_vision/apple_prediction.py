@@ -17,7 +17,7 @@ import numpy as np
 from ultralytics import YOLO
 # pointcloud reconstruction
 import open3d as o3d
-from sphere_ransac import Sphere
+from .sphere_ransac import Sphere
 # realsense library
 import pyrealsense2 as rs
 
@@ -35,7 +35,7 @@ class ApplePredictionRS(Node):
         self.marker_pub = self.create_publisher(MarkerArray, "apple_markers", 10)
 
         ### YOLO SETUP
-        self.model = YOLO("train6/weights/best.pt")  # pretrained YOLOv8n model
+        self.model = YOLO("/home/keegan/rtest/harvest_reconstruction/train6/weights/best.pt")  # pretrained YOLOv8n model
         if self.model: 
             self.get_logger().info("Succesfully loaded YOLO model.") 
         else:
@@ -73,7 +73,18 @@ class ApplePredictionRS(Node):
         self.upper_rad_bound = 0.06
         self.ransac_thresh = .0001
         self.ransac_iters = 10000
+        self.apple_centers = None
+        self.apple_radii = None
+        # self.timer = self.create_timer(1, self.callback)
+        self.c2 = 0
 
+
+    def callback(self):
+
+        if self.apple_centers and self.apple_radii and self.c2 < 1:
+            print("HERE")
+            self.publish_markers(self.apple_centers, self.apple_radii)
+            self.c2 += 1
 
     def prediction_callback_srv(self, request, response):
         rgb_image, depth_image = self.take_picture()
@@ -82,7 +93,10 @@ class ApplePredictionRS(Node):
         centers, radii = self.get_apple_centers(rgb_image, depth_image, apple_masks)
         transformed_poses = self.transform_apple_poses(centers)
         self.publish_markers(transformed_poses, radii)
-        response.apple_pose = transformed_poses
+        response.apple_poses = transformed_poses
+        self.apple_centers = transformed_poses
+        self.apple_radii = radii
+        self.c2 = 0
         return response
 
 
@@ -90,7 +104,7 @@ class ApplePredictionRS(Node):
         transformed_poses = PoseArray()
         for i in apple_poses:
             origin = PoseStamped()
-            origin.header.frame_id = "rs_camera_link"
+            origin.header.frame_id = "camera_color_optical_frame"
             origin.pose.position.x = i[0]
             origin.pose.position.y = i[1]
             origin.pose.position.z = i[2]
@@ -107,7 +121,7 @@ class ApplePredictionRS(Node):
     
     def publish_markers(self, apple_poses, apple_radii):
         markers = MarkerArray()
-        for i in len(apple_poses.poses):
+        for i in range(len(apple_poses.poses)):
             marker = Marker()
             marker.header.frame_id = "base_link"
             marker.header.stamp = self.get_clock().now().to_msg()
@@ -115,9 +129,9 @@ class ApplePredictionRS(Node):
             marker.type = Marker.SPHERE
             marker.action = Marker.ADD
             # Set the scale
-            marker.scale.x = apple_radii[i]
-            marker.scale.y = apple_radii[i]
-            marker.scale.z = apple_radii[i]
+            marker.scale.x = apple_radii[i] * 2
+            marker.scale.y = apple_radii[i] * 2
+            marker.scale.z = apple_radii[i] * 2
             # Set the color
             marker.color.r = 1.0
             marker.color.g = 0.0
@@ -132,7 +146,8 @@ class ApplePredictionRS(Node):
             marker.pose.orientation.z = 0.0
             marker.pose.orientation.w = 1.0
             markers.markers.append(marker)
-            self.get_logger().info(f"Apple found at: [{apple_poses.poses[i].pose.position.x}, {apple_poses.poses[i].pose.position.y}, {apple_poses.poses[i].pose.position.z}] with radius {apple_radii[i]}")
+            self.marker_counter += 1
+            self.get_logger().info(f"Apple found at: [{apple_poses.poses[i].position.x}, {apple_poses.poses[i].position.y}, {apple_poses.poses[i].position.z}] with radius {apple_radii[i]}")
         self.marker_pub.publish(markers)
 
 
@@ -199,7 +214,7 @@ class ApplePredictionRS(Node):
         center = None
         radius = None
         sph_ransac = Sphere()
-        center, radius, inliers = sph_ransac.fit(pcd, ransac_thresh=self.ransac_thresh, maxIteration=self.ransac_iters, 
+        center, radius, inliers = sph_ransac.fit(pcd, thresh=self.ransac_thresh, maxIteration=self.ransac_iters, 
                                                  lower_rad_bound=self.lower_rad_bound, upper_rad_bound=self.upper_rad_bound)
 
         return center, radius
@@ -212,6 +227,9 @@ class ApplePredictionRS(Node):
         for mask in masks: 
             # segment only the apple portions
             depth_segmented = np.where(mask, depth, 0)
+            print(depth_segmented[depth_segmented>0])
+            if np.median(depth_segmented[depth_segmented>0] > 1000):
+                continue
             # create RGBD image (NEEDS TO BE IN RGB FORMAT NOT BGR TO LOOK RIGHT, doesnt super matter for anything other than visualization)
             rgb_pc = o3d.geometry.Image(rgb)
             depth_pc = o3d.geometry.Image(depth_segmented)
@@ -221,7 +239,7 @@ class ApplePredictionRS(Node):
                 rgbd_image,
                 o3d.camera.PinholeCameraIntrinsic(width=848, height=480, fx=609.6989, fy=609.8549, cx=420.2079, cy=235.2782))
             # Transforms pointcloud to be facing the correct direction.
-            pcd.transform([[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]])
+            # pcd.transform([[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]])
             # o3d.visualization.draw_geometries([pcd])
             center, radius = self.ransac_apple_estimation(np.array(pcd.points))
 
@@ -236,7 +254,8 @@ class ApplePredictionRS(Node):
                 visualization.append(mesh_sphere)
 
         if self.debug_flag:
-            o3d.visualization.draw_geometries(visualization)
+            pass
+            # o3d.visualization.draw_geometries(visualization)
 
         return apple_centers, apple_radii
 
