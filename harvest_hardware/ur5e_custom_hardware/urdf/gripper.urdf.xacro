@@ -4,7 +4,7 @@
 
     <joint name="gripper_palm_camera_joint" type="fixed">
         <parent link="gripper_link"/>
-        <child link="gripper_palm_camera_link_optical"/>
+        <child link="gripper_palm_camera_optical_link"/>
         <origin xyz="0.00 0 0.0" rpy="0 0 0"/>
     </joint>
 
@@ -22,7 +22,7 @@
         </visual>
     </link>
 
-    <link name="gripper_palm_camera_link_optical">
+    <link name="gripper_palm_camera_optical_link">
         <visual>
             <geometry>
                 <box size="0.03 0.03 0.01"/>

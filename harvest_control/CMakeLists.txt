@@ -44,8 +44,8 @@ ament_python_install_package(${PROJECT_NAME})
 
 # Install Python executables
 install(PROGRAMS
-  scripts/local_planner.py
   scripts/coordinate_to_trajectory.py
+  scripts/visual_servo.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

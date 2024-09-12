@@ -24,6 +24,7 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
+            'gripper_palm_camera = ur5e_custom_hardware.gripper_palm_camera:main',
         ],
     },
 )
