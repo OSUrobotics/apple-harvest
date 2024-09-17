@@ -21,6 +21,8 @@
   <exec_depend>controller_manager_msgs</exec_depend>
   <exec_depend>moveit_ros_planning_interface</exec_depend>
   <exec_depend>harvest_interfaces</exec_depend>
+  <build_depend>jsoncpp</build_depend>
+  <exec_depend>jsoncpp</exec_depend>
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>

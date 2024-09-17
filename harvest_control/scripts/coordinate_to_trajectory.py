@@ -13,7 +13,8 @@ from ament_index_python.packages import get_package_share_directory
 from geometry_msgs.msg import Point
 from visualization_msgs.msg import Marker, MarkerArray
 from std_msgs.msg import Float32MultiArray, MultiArrayDimension
-from harvest_interfaces.srv import CoordinateToTrajectory, SendTrajectory, VoxelMask
+from std_srvs.srv import Empty
+from harvest_interfaces.srv import CoordinateToTrajectory, SendTrajectory, VoxelMask, ApplePrediction
 
 
 class CoordinateToTrajectoryService(Node):
@@ -22,10 +23,13 @@ class CoordinateToTrajectoryService(Node):
         
         # Create the service
         self.coord_to_traj_srv = self.create_service(CoordinateToTrajectory, 'coordinate_to_trajectory', self.coord_to_traj_callback)
+        self.return_home_traj_srv = self.create_service(Empty, 'return_home_trajectory', self.return_home_traj_callback)
         self.voxel_mask = self.create_service(VoxelMask, 'voxel_mask', self.voxel_mask_callback)
 
         # Create the service client
         self.client = self.create_client(SendTrajectory, 'execute_arm_trajectory')
+        self.return_home_client = self.create_client(Empty, 'return_home_trajectory')
+        self.apple_pred_client = self.create_client(ApplePrediction, 'sort_apple_predictions')
 
         # Create a publisher for MarkerArray
         self.marker_publisher = self.create_publisher(MarkerArray, 'voxel_markers', 10)
@@ -40,28 +44,22 @@ class CoordinateToTrajectoryService(Node):
         tree_wire_filter_file = os.path.join(package_share_directory, 'resource', 'tree_wire_mask.json')
         self.load_tree_wire_filter_ranges(tree_wire_filter_file)
 
+        self.reversed_path = None
+
         # Define maximum distance tolerance between target location and precomputed voxel
         self.distance_tol = 0.5
 
         # Load voxel data
-        y_trans = 0
+        # y_trans = 0
         self.voxel_data = np.loadtxt(os.path.join(package_share_directory, 'resource', 'reachable_voxel_centers.csv'))
         self.paths = np.load(os.path.join(package_share_directory, 'resource', 'reachable_paths.npy'))
         self.paths_orig = np.copy(self.paths)
 
-        self.load_voxel_data(y_trans)
+        self.voxel_centers = self.voxel_data[:, :3]
+        self.voxel_indices = self.voxel_data[:, 3:]
+        self.voxel_centers_orig = np.copy(self.voxel_centers)
 
         self.get_logger().info('Coordinate to trajectory service up and running')
-
-    def load_voxel_data(self, y_translation):
-        self.voxel_centers = self.voxel_data[:, :3]
-        # self.voxel_indices = self.voxel_data[:, 3:]
-
-        # Translate voxels in front of robot
-        voxel_centers_shifted = np.copy(self.voxel_centers)
-        voxel_centers_shifted[:, 1] += y_translation
-        self.voxel_centers = voxel_centers_shifted
-        self.voxel_centers_orig = np.copy(self.voxel_centers)
 
     def load_tree_wire_filter_ranges(self, filename):
         # Load JSON data from the file
@@ -77,8 +75,8 @@ class CoordinateToTrajectoryService(Node):
         self.z_filter_ranges = np.array([(entry['min'], entry['max']) for entry in data['z_wire_heights']])
 
     def publish_markers(self):
-        # apple_loc = [[0.3, 0.4, 0.4], [0.2, 0.2, 0.8], [0.0, 0.3, 0.8], [-0.2, 0.3, 1.0], [0.3, 0.2, 1.2], [-0.2, 0.3, 0.5]]
-        apple_loc = [[-0.2, 0.3, 0.5], [0, 0.3, 0.6], [0.2, 0.4, 0.7], [0.05, 0.3, 0.8], [0, 0.4, 0.9], [-0.1, 0.3, 0.9]]
+        apple_loc = [[-0.25, 0.6, 0.5], [0, 0.5, 0.6], [0.15, 0.5, 0.7], [0.15, 0.5, 0.8], [0, 0.4, 0.9], [-0.15, 0.4, 0.9]]
+        # apple_loc = [[0, 0.5, 0.8]]
 
         apple_voxel_idxs = []
         for i, apple_pos in enumerate(apple_loc):
@@ -167,17 +165,58 @@ class CoordinateToTrajectoryService(Node):
 
         if response.success:
             self.waypoint_msg = float32_array
-            self.trigger_arm_mover()
+
+            # Reverse the path and save it
+            self.reverse_path(path)
+
+            # Send trajectory to MoveIt
+            self.trigger_arm_mover(self.waypoint_msg)
 
         return response
+    
+    def return_home_traj_callback(self, request, response):
+        if self.reversed_path == None:
+            self.get_logger().warn('No current return path. Not moving the arm')
+        else:
+            self.get_logger().info('Returning home by reversing previous trajectory')
+            self.trigger_arm_mover(self.reversed_path)
 
-    def trigger_arm_mover(self):
+            # Reset the reversed path
+            self.reversed_path = None
+
+        return response
+    
+    def reverse_path(self, path):
+        # Reverse the path
+        reversed_path = np.flip(path, axis=0)
+
+        # Convert the reversed path to Float32MultiArray format
+        float32_array = Float32MultiArray()
+
+        # Set the layout (same as in coord_to_traj_callback)
+        float32_array.layout.dim.append(MultiArrayDimension())
+        float32_array.layout.dim[0].label = "rows"
+        float32_array.layout.dim[0].size = reversed_path.shape[0]
+        float32_array.layout.dim[0].stride = reversed_path.size
+
+        float32_array.layout.dim.append(MultiArrayDimension())
+        float32_array.layout.dim[1].label = "columns"
+        float32_array.layout.dim[1].size = reversed_path.shape[1]
+        float32_array.layout.dim[1].stride = reversed_path.shape[1]
+
+        # Flatten the reversed path and assign it to the data field
+        float32_array.data = reversed_path.flatten().tolist()
+
+        # Save the reversed path as self.reversed_path
+        self.reversed_path = float32_array
+
+    def trigger_arm_mover(self, trajectory):
         if not self.client.service_is_ready():
             self.get_logger().info('Waiting for execute_arm_trajectory service to be available...')
             self.client.wait_for_service()
 
         request = SendTrajectory.Request()
-        request.waypoints = self.waypoint_msg  # Pass the entire Float32MultiArray message
+        request.waypoints = trajectory  # Pass the entire Float32MultiArray message
 
         # Use async call
         future = self.client.call_async(request)
@@ -225,10 +264,10 @@ class CoordinateToTrajectoryService(Node):
             self.get_logger().info(f'Voxel mask set to tree position {tree_pos} and wire locations')
 
             # Retrieve x-ranges
-            min_x, max_x = self.x_filter_ranges[tree_pos]
+            x_min, x_max = self.x_filter_ranges[tree_pos]
 
             # Create a mask where x-values are *not* between the x-ranges and z-ranges
-            x_mask = (voxel_centers_copy[:, 0] < min_x) | (voxel_centers_copy[:, 0] > max_x)
+            x_mask = (voxel_centers_copy[:, 0] < x_min) | (voxel_centers_copy[:, 0] > x_max)
 
             # Get a mask of the z coords
             combined_z_mask = self.mask_z(voxel_centers_copy)
@@ -278,6 +317,15 @@ class CoordinateToTrajectoryService(Node):
         # Get the associated path to closest voxel
         return self.paths[:, :, closest_voxel_index], distance_error, closest_voxel_index
         
+    def sort_nearest_coords(self, current_position, coordinates):
+        # Calculate distances from current position to each apple location
+        distances = np.linalg.norm(coordinates - current_position, axis=1)
+
+        # Sort coordinates by distance
+        sorted_indices = np.argsort(distances)
+        sorted_coordinates = coordinates[sorted_indices]
+
+        return sorted_coordinates
 
 def main():
     rclpy.init()

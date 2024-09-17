@@ -19,7 +19,8 @@
 #include <fstream>
 #include <vector>
 #include <stdexcept>
-#include <cmath> // For M_PI
+#include <cmath>               // For M_PI
+#include <jsoncpp/json/json.h> // JSON library to save configurations
 
 using std::placeholders::_1;
 using std::placeholders::_2;
@@ -29,25 +30,24 @@ class MoveArmNode : public rclcpp::Node
 {
 public:
     MoveArmNode();
-    std::vector<std::vector<std::vector<double>>> read_data(const std::string &filename, int dim1, int dim2, int dim3);
-    void set_to_home();
     void printToolExtensionLocation();
 
 private:
     rclcpp::Service<harvest_interfaces::srv::SendTrajectory>::SharedPtr arm_trajectory_service_;
     rclcpp::Service<harvest_interfaces::srv::MoveToPose>::SharedPtr arm_to_pose_service_;
     rclcpp::Service<std_srvs::srv::Empty>::SharedPtr arm_to_home_service_;
+    rclcpp::Service<std_srvs::srv::Empty>::SharedPtr arm_to_config_service_;
 
     std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
     std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
 
     moveit::planning_interface::MoveGroupInterface move_group_;
-
+// np.pi/2, 5*np.pi/4, np.pi/2, -3*np.pi/4, -np.pi/2, 0
     std::vector<double> home_joint_positions = {
         M_PI / 2,
-        -2 * M_PI / 3,
-        2 * M_PI / 3,
-        -M_PI,
+        - 3 * M_PI / 4,
+        M_PI / 2,
+        -3 * M_PI / 4,
         -M_PI / 2,
         0};
 
@@ -57,6 +57,10 @@ private:
                       std::shared_ptr<harvest_interfaces::srv::MoveToPose::Response> response);
     void move_to_home(const std::shared_ptr<std_srvs::srv::Empty::Request> request,
                       std::shared_ptr<std_srvs::srv::Empty::Response> response);
+    void move_to_config(const std::shared_ptr<std_srvs::srv::Empty::Request> request,
+                      std::shared_ptr<std_srvs::srv::Empty::Response> response);
+
+    void save_joint_configuration_to_json(const std::vector<double>& joint_config, const std::string& filename);
 };
 
 MoveArmNode::MoveArmNode()
@@ -75,35 +79,15 @@ MoveArmNode::MoveArmNode()
     arm_to_home_service_ = this->create_service<std_srvs::srv::Empty>(
         "move_arm_to_home", std::bind(&MoveArmNode::move_to_home, this, _1, _2));
 
+    arm_to_config_service_ = this->create_service<std_srvs::srv::Empty>(
+        "move_arm_to_config", std::bind(&MoveArmNode::move_to_config, this, _1, _2));
+
     // Set velocity and acceleration limits
     // NEED TO RESET TO 0.1 FOR HARDWARE!!!
-    this->move_group_.setMaxAccelerationScalingFactor(0.1);
-    this->move_group_.setMaxVelocityScalingFactor(0.1);
-
-    // // Set the arm to the home position
-    // set_to_home();
+    this->move_group_.setMaxAccelerationScalingFactor(1);
+    this->move_group_.setMaxVelocityScalingFactor(1);
 
     RCLCPP_INFO(this->get_logger(), "Move arm server ready");
-}
-
-void MoveArmNode::set_to_home()
-{
-    // Set the home configuration as the target for the MoveGroup
-    move_group_.setJointValueTarget(home_joint_positions);
-
-    // Plan and execute to move to the home position
-    moveit::planning_interface::MoveGroupInterface::Plan plan;
-    bool success = static_cast<bool>(move_group_.plan(plan));
-
-    if (success)
-    {
-        move_group_.execute(plan);
-        RCLCPP_INFO(this->get_logger(), "Moved to home configuration.");
-    }
-    else
-    {
-        RCLCPP_ERROR(this->get_logger(), "Failed to move to home configuration.");
-    }
 }
 
 void MoveArmNode::move_to_home(const std::shared_ptr<std_srvs::srv::Empty::Request> request,
@@ -129,6 +113,93 @@ void MoveArmNode::move_to_home(const std::shared_ptr<std_srvs::srv::Empty::Reque
     }
 }
 
+void MoveArmNode::move_to_config(const std::shared_ptr<std_srvs::srv::Empty::Request> request,
+                                 const std::shared_ptr<std_srvs::srv::Empty::Response> response)
+{
+    std::vector<double> target_config = {
+        -2.35,
+        4.88,
+        -0.89,
+        -3.65,
+        3.75,
+        1.62};
+
+    // Set the target configuration as the target for the MoveGroup
+    move_group_.setJointValueTarget(target_config);
+
+    // Plan and execute to move to the target position
+    moveit::planning_interface::MoveGroupInterface::Plan plan;
+    bool success = static_cast<bool>(move_group_.plan(plan));
+
+    if (success)
+    {
+        move_group_.execute(plan);
+        RCLCPP_INFO(this->get_logger(), "Moved to target configuration.");
+
+        // Save joint configurations to JSON
+        std::ofstream file("joint_trajectory.json");
+        if (!file.is_open())
+        {
+            RCLCPP_ERROR(this->get_logger(), "Failed to open file for writing");
+            // response->success = false;
+            return;
+        }
+
+        // Create JSON array
+        Json::Value json_root(Json::arrayValue);
+
+        // Add configurations to JSON array
+        for (const auto& point : plan.trajectory_.joint_trajectory.points)
+        {
+            Json::Value json_point(Json::arrayValue);
+            for (const auto& position : point.positions)
+            {
+                json_point.append(position);
+            }
+            json_root.append(json_point);
+        }
+
+        // Write JSON data to file
+        Json::StreamWriterBuilder writer;
+        std::string json_string = Json::writeString(writer, json_root);
+        file << json_string;
+        file.close();
+
+        RCLCPP_INFO(this->get_logger(), "Saved joint configurations to joint_trajectory.json");
+        // response->success = true;
+    }
+    else
+    {
+        RCLCPP_ERROR(this->get_logger(), "Failed to move to target configuration.");
+        // response->success = false;
+    }
+}
+
+void MoveArmNode::save_joint_configuration_to_json(const std::vector<double>& joint_config, const std::string& filename)
+{
+    Json::Value root;
+    Json::Value joint_positions(Json::arrayValue);
+
+    for (const auto& pos : joint_config)
+    {
+        joint_positions.append(pos);
+    }
+
+    root["joint_positions"] = joint_positions;
+
+    std::ofstream file(filename);
+    if (!file.is_open())
+    {
+        RCLCPP_ERROR(this->get_logger(), "Failed to open file for writing: %s", filename.c_str());
+        return;
+    }
+
+    file << root;
+    file.close();
+
+    RCLCPP_INFO(this->get_logger(), "Joint configuration saved to %s", filename.c_str());
+}
+
 void MoveArmNode::move_to_pose(const std::shared_ptr<harvest_interfaces::srv::MoveToPose::Request> request,
                                const std::shared_ptr<harvest_interfaces::srv::MoveToPose::Response> response)
 {
@@ -140,10 +211,11 @@ void MoveArmNode::move_to_pose(const std::shared_ptr<harvest_interfaces::srv::Mo
     msg.pose.position.z = request->position.z;
 
     tf2::Quaternion orientation;
-    // orientation = 
+    // orientation =
 
-    orientation.setRPY(3.14/2, 0, 0);
-    msg.pose.orientation = tf2::toMsg(orientation);;
+    orientation.setRPY(3.14 / 2, 0, 0);
+    msg.pose.orientation = tf2::toMsg(orientation);
+    ;
 
     // msg.pose.orientation.x = request->orientation.x;
     // msg.pose.orientation.y = request->orientation.y;
@@ -200,12 +272,6 @@ void MoveArmNode::printToolExtensionLocation()
 void MoveArmNode::execute_trajectory(const std::shared_ptr<harvest_interfaces::srv::SendTrajectory::Request> request,
                                      std::shared_ptr<harvest_interfaces::srv::SendTrajectory::Response> response)
 {
-    // // Set the robot to home configuration
-    // set_to_home();
-
-    // Add a delay after setting to home
-    std::this_thread::sleep_for(std::chrono::milliseconds(250));
-
     // Extract the layout dimensions from the Float32MultiArray message
     const auto &layout = request->waypoints.layout;
     if (layout.dim.size() < 2)
@@ -264,7 +330,7 @@ void MoveArmNode::execute_trajectory(const std::shared_ptr<harvest_interfaces::s
     point.time_from_start.nanosec = 0;
 
     double current_time = 0.0; // Start time
-    double time_step = 0.02;   // Time step between waypoints
+    double time_step = 0.02;   // Time step between waypoints (seconds)
 
     for (int i = 0; i < num_waypoints; ++i)
     {
@@ -294,8 +360,8 @@ void MoveArmNode::execute_trajectory(const std::shared_ptr<harvest_interfaces::s
     plan.trajectory_ = robot_trajectory;
 
     // Plan and execute the trajectory
-    bool success = static_cast<bool>(move_group_.execute(plan));
-    if (success)
+    bool plan_success = static_cast<bool>(move_group_.execute(plan));
+    if (plan_success)
     {
         response->success = true;
     }

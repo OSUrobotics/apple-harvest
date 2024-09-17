@@ -18,6 +18,7 @@ find_package(moveit_ros_planning_interface REQUIRED)
 find_package(controller_manager_msgs REQUIRED)
 find_package(trajectory_msgs REQUIRED)
 find_package(harvest_interfaces)
+find_package(jsoncpp REQUIRED)
 
 
 ### C++ ###
@@ -37,6 +38,14 @@ ament_target_dependencies(
   "trajectory_msgs"
   "std_srvs"
 )
+
+# Link jsoncpp manually
+find_library(JSONCPP_LIBRARIES NAMES jsoncpp PATHS /usr/lib /usr/local/lib)
+if (JSONCPP_LIBRARIES)
+  target_link_libraries(move_arm ${JSONCPP_LIBRARIES})
+else()
+  message(FATAL_ERROR "Could not find jsoncpp library")
+endif()
 
 ### PYTHON ###
 # Install Python modules
