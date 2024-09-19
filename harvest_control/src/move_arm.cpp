@@ -305,20 +305,20 @@ void MoveArmNode::execute_trajectory(const std::shared_ptr<harvest_interfaces::s
         }
     }
 
-    for (int row = 0; row < num_waypoints; ++row)
-    {
-        std::stringstream ss;
-        ss << "Waypoint " << row << ": ";
-        for (int col = 0; col < num_joints; ++col)
-        {
-            ss << path[row][col];
-            if (col < num_joints - 1)
-            {
-                ss << ", ";
-            }
-        }
-        RCLCPP_INFO(this->get_logger(), ss.str().c_str());
-    }
+    // for (int row = 0; row < num_waypoints; ++row)
+    // {
+    //     std::stringstream ss;
+    //     ss << "Waypoint " << row << ": ";
+    //     for (int col = 0; col < num_joints; ++col)
+    //     {
+    //         ss << path[row][col];
+    //         if (col < num_joints - 1)
+    //         {
+    //             ss << ", ";
+    //         }
+    //     }
+    //     RCLCPP_INFO(this->get_logger(), ss.str().c_str());
+    // }
 
     // Prepare the JointTrajectory message
     trajectory_msgs::msg::JointTrajectory joint_trajectory;

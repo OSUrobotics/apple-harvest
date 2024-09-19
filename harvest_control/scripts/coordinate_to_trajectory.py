@@ -19,7 +19,7 @@ from harvest_interfaces.srv import CoordinateToTrajectory, SendTrajectory, Voxel
 
 class CoordinateToTrajectoryService(Node):
     def __init__(self):
-        super().__init__('voxel_search_service')
+        super().__init__('trajectory_query_node')
         
         # Create the service
         self.coord_to_traj_srv = self.create_service(CoordinateToTrajectory, 'coordinate_to_trajectory', self.coord_to_traj_callback)
@@ -28,7 +28,6 @@ class CoordinateToTrajectoryService(Node):
 
         # Create the service client
         self.client = self.create_client(SendTrajectory, 'execute_arm_trajectory')
-        self.return_home_client = self.create_client(Empty, 'return_home_trajectory')
         self.apple_pred_client = self.create_client(ApplePrediction, 'sort_apple_predictions')
 
         # Create a publisher for MarkerArray
@@ -44,19 +43,17 @@ class CoordinateToTrajectoryService(Node):
         tree_wire_filter_file = os.path.join(package_share_directory, 'resource', 'tree_wire_mask.json')
         self.load_tree_wire_filter_ranges(tree_wire_filter_file)
 
-        self.reversed_path = None
+        self.traj_msg = None
 
         # Define maximum distance tolerance between target location and precomputed voxel
         self.distance_tol = 0.5
 
         # Load voxel data
-        # y_trans = 0
         self.voxel_data = np.loadtxt(os.path.join(package_share_directory, 'resource', 'reachable_voxel_centers.csv'))
-        self.paths = np.load(os.path.join(package_share_directory, 'resource', 'reachable_paths.npy'))
-        self.paths_orig = np.copy(self.paths)
+        self.trajectories = np.load(os.path.join(package_share_directory, 'resource', 'reachable_paths.npy'))
+        self.trajectories_orig = np.copy(self.trajectories)
 
         self.voxel_centers = self.voxel_data[:, :3]
-        self.voxel_indices = self.voxel_data[:, 3:]
         self.voxel_centers_orig = np.copy(self.voxel_centers)
 
         self.get_logger().info('Coordinate to trajectory service up and running')
@@ -80,7 +77,7 @@ class CoordinateToTrajectoryService(Node):
 
         apple_voxel_idxs = []
         for i, apple_pos in enumerate(apple_loc):
-            _, _, closest_voxel_idx = self.path_to_closest_voxel(apple_pos)
+            _, _, closest_voxel_idx = self.trajectory_to_closest_voxel(apple_pos)
             apple_voxel_idxs.append(closest_voxel_idx)
 
         marker_array = MarkerArray()
@@ -134,8 +131,8 @@ class CoordinateToTrajectoryService(Node):
         z = point_msg.z
         point = np.array([x, y, z])
 
-        # Find the closest path associated with the target point
-        path, distance_to_voxel, closest_voxel_index = self.path_to_closest_voxel(point)
+        # Find the trajectory to a voxel that the target point is closest to
+        traj, distance_to_voxel, _ = self.trajectory_to_closest_voxel(point)
         self.get_logger().info(f'Distance to nearest voxel: {distance_to_voxel}')
 
         if distance_to_voxel > self.distance_tol:
@@ -143,72 +140,57 @@ class CoordinateToTrajectoryService(Node):
             response.success = False
         
         else:
-            # Package path as a float multiarray
-            float32_array = Float32MultiArray()
+            # Package the trajectory as a message
+            self.package_traj_msg(traj)
 
-            # Set the layout (optional, but helps with multi-dimensional arrays)
-            float32_array.layout.dim.append(MultiArrayDimension())
-            float32_array.layout.dim[0].label = "rows"
-            float32_array.layout.dim[0].size = path.shape[0]
-            float32_array.layout.dim[0].stride = path.size
-
-            float32_array.layout.dim.append(MultiArrayDimension())
-            float32_array.layout.dim[1].label = "columns"
-            float32_array.layout.dim[1].size = path.shape[1]
-            float32_array.layout.dim[1].stride = path.shape[1]
-
-            # Flatten the NumPy array and assign it to the data field
-            float32_array.data = path.flatten().tolist()
-
-            # Assign to the response
+            # Assign the response
             response.success = True
 
         if response.success:
-            self.waypoint_msg = float32_array
+            # Send trajectory message to MoveIt
+            self.trigger_arm_mover(self.traj_msg)
 
-            # Reverse the path and save it
-            self.reverse_path(path)
-
-            # Send trajectory to MoveIt
-            self.trigger_arm_mover(self.waypoint_msg)
+            # Stage the reverse the traj
+            self.package_traj_msg(traj, reverse_traj=True)
 
         return response
     
     def return_home_traj_callback(self, request, response):
-        if self.reversed_path == None:
-            self.get_logger().warn('No current return path. Not moving the arm')
+        if self.traj_msg == None:
+            self.get_logger().warn('No current return trajectory. Not moving the arm')
         else:
             self.get_logger().info('Returning home by reversing previous trajectory')
-            self.trigger_arm_mover(self.reversed_path)
+            self.trigger_arm_mover(self.traj_msg)
 
-            # Reset the reversed path
-            self.reversed_path = None
+            # Reset the traj
+            self.traj_msg = None
 
         return response
     
-    def reverse_path(self, path):
-        # Reverse the path
-        reversed_path = np.flip(path, axis=0)
+    def package_traj_msg(self, traj, reverse_traj=False):
+        if reverse_traj:
+            # Reverse the traj
+            traj = np.flip(traj, axis=0)
 
-        # Convert the reversed path to Float32MultiArray format
+        # Convert traj Float32MultiArray format
         float32_array = Float32MultiArray()
 
-        # Set the layout (same as in coord_to_traj_callback)
+        # Set the layout
         float32_array.layout.dim.append(MultiArrayDimension())
         float32_array.layout.dim[0].label = "rows"
-        float32_array.layout.dim[0].size = reversed_path.shape[0]
-        float32_array.layout.dim[0].stride = reversed_path.size
+        float32_array.layout.dim[0].size = traj.shape[0]
+        float32_array.layout.dim[0].stride = traj.size
 
         float32_array.layout.dim.append(MultiArrayDimension())
         float32_array.layout.dim[1].label = "columns"
-        float32_array.layout.dim[1].size = reversed_path.shape[1]
-        float32_array.layout.dim[1].stride = reversed_path.shape[1]
+        float32_array.layout.dim[1].size = traj.shape[1]
+        float32_array.layout.dim[1].stride = traj.shape[1]
 
-        # Flatten the reversed path and assign it to the data field
-        float32_array.data = reversed_path.flatten().tolist()
+        # Flatten the traj and assign it to the data field
+        float32_array.data = traj.flatten().tolist()
 
-        # Save the reversed path as self.reversed_path
-        self.reversed_path = float32_array
+        # Save the traj message
+        self.traj_msg = float32_array
 
     def trigger_arm_mover(self, trajectory):
         if not self.client.service_is_ready():
@@ -226,22 +208,19 @@ class CoordinateToTrajectoryService(Node):
         try:
             response = future.result()
             if response is not None:
-                self.get_logger().info('Waypoint path service call succeeded')
+                self.get_logger().info('Send trajectory service call succeeded')
             else:
-                self.get_logger().error('Waypoint path service call failed')
+                self.get_logger().error('Send trajectory service call failed')
         except Exception as e:
             self.get_logger().error(f'Exception occurred: {e}')
-
-        # Reset state after the service call
-        self.waypoint_msg = None
 
     def voxel_mask_callback(self, request, response):
         tree_pos = request.tree_pos
         self.get_logger().info(f'Received voxel mask request: {tree_pos}')
         
-        # Reset voxel centers and paths to the originals
+        # Reset voxel centers and trajectories to the originals
         voxel_centers_copy = np.copy(self.voxel_centers_orig)
-        self.paths = np.copy(self.paths_orig)
+        self.trajectories = np.copy(self.trajectories_orig)
 
         if tree_pos not in range(len(self.x_filter_ranges)):
             self.get_logger().warn('Voxel mask positions out of range')
@@ -255,9 +234,9 @@ class CoordinateToTrajectoryService(Node):
             # Get a mask of the z coords
             combined_z_mask = self.mask_z(voxel_centers_copy)
 
-            # Apply the combined mask to filter out coordinates and paths
+            # Apply the combined mask to filter out coordinates and trajectories
             self.voxel_centers = voxel_centers_copy[combined_z_mask]
-            self.paths = self.paths[:, :, combined_z_mask]
+            self.trajectories = self.trajectories[:, :, combined_z_mask]
 
         # Set the mask of the tree pos and wires
         elif tree_pos in range(len(self.x_filter_ranges)):
@@ -275,9 +254,9 @@ class CoordinateToTrajectoryService(Node):
             # Combine the x mask with the z mask
             combined_mask = x_mask & combined_z_mask
 
-            # Apply the combined mask to filter out coordinates and paths
+            # Apply the combined mask to filter out coordinates and trajectories
             self.voxel_centers = voxel_centers_copy[combined_mask]
-            self.paths = self.paths[:, :, combined_mask]
+            self.trajectories = self.trajectories[:, :, combined_mask]
 
         self.get_logger().info(f'Length of voxel centers list: {len(self.voxel_centers)}')
 
@@ -296,14 +275,14 @@ class CoordinateToTrajectoryService(Node):
         
         return combined_z_mask
 
-    def path_to_closest_voxel(self, target_point):
-        """ Find the path to a voxel that the target point is closest to 
+    def trajectory_to_closest_voxel(self, target_point):
+        """ Find the trajectory to a voxel that the target point is closest to 
 
         Args:
             target_point (float list): target 3D coordinate
 
         Returns:
-            path: the path to the voxel the target point is closest to
+            trajectory: the trajectory to the voxel the target point is closest to
             distance_error: error between target point and closest voxel center
         """
         # Calculate distances
@@ -314,18 +293,8 @@ class CoordinateToTrajectoryService(Node):
 
         distance_error = distances[closest_voxel_index]
 
-        # Get the associated path to closest voxel
-        return self.paths[:, :, closest_voxel_index], distance_error, closest_voxel_index
-        
-    def sort_nearest_coords(self, current_position, coordinates):
-        # Calculate distances from current position to each apple location
-        distances = np.linalg.norm(coordinates - current_position, axis=1)
-
-        # Sort coordinates by distance
-        sorted_indices = np.argsort(distances)
-        sorted_coordinates = coordinates[sorted_indices]
-
-        return sorted_coordinates
+        # Get the associated trajectory to closest voxel
+        return self.trajectories[:, :, closest_voxel_index], distance_error, closest_voxel_index
 
 def main():
     rclpy.init()

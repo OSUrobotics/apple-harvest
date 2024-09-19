@@ -54,6 +54,7 @@ ament_python_install_package(${PROJECT_NAME})
 # Install Python executables
 install(PROGRAMS
   scripts/coordinate_to_trajectory.py
+  scripts/coordinate_to_trajectory_client.py
   scripts/visual_servo.py
   DESTINATION lib/${PROJECT_NAME}
 )
@@ -63,9 +64,8 @@ install(TARGETS move_arm
 
 ### LAUNCH ###
 # Install launch files.
-install(DIRECTORY
-  launch
-  DESTINATION share/${PROJECT_NAME}/
+install(DIRECTORY launch/
+  DESTINATION share/${PROJECT_NAME}/launch
 )
 
 # Install resources files.
