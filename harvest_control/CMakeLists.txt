@@ -56,6 +56,9 @@ install(PROGRAMS
   scripts/coordinate_to_trajectory.py
   scripts/coordinate_to_trajectory_client.py
   scripts/visual_servo.py
+  scripts/pyb_scripts/load_objects.py
+  scripts/pyb_scripts/load_robot.py
+  scripts/pyb_scripts/pyb_utils.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

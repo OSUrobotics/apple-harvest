@@ -44,7 +44,7 @@ private:
     moveit::planning_interface::MoveGroupInterface move_group_;
 // np.pi/2, 5*np.pi/4, np.pi/2, -3*np.pi/4, -np.pi/2, 0
     std::vector<double> home_joint_positions = {
-        M_PI / 2,
+        - 3 * M_PI / 2,
         - 3 * M_PI / 4,
         M_PI / 2,
         -3 * M_PI / 4,
@@ -305,20 +305,20 @@ void MoveArmNode::execute_trajectory(const std::shared_ptr<harvest_interfaces::s
         }
     }
 
-    // for (int row = 0; row < num_waypoints; ++row)
-    // {
-    //     std::stringstream ss;
-    //     ss << "Waypoint " << row << ": ";
-    //     for (int col = 0; col < num_joints; ++col)
-    //     {
-    //         ss << path[row][col];
-    //         if (col < num_joints - 1)
-    //         {
-    //             ss << ", ";
-    //         }
-    //     }
-    //     RCLCPP_INFO(this->get_logger(), ss.str().c_str());
-    // }
+    for (int row = 0; row < num_waypoints; ++row)
+    {
+        std::stringstream ss;
+        ss << "Waypoint " << row << ": ";
+        for (int col = 0; col < num_joints; ++col)
+        {
+            ss << path[row][col];
+            if (col < num_joints - 1)
+            {
+                ss << ", ";
+            }
+        }
+        RCLCPP_INFO(this->get_logger(), ss.str().c_str());
+    }
 
     // Prepare the JointTrajectory message
     trajectory_msgs::msg::JointTrajectory joint_trajectory;

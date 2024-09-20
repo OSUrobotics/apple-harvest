@@ -20,6 +20,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/CoordinateToTrajectory.srv"
   "srv/VoxelMask.srv"
   "srv/MoveToPose.srv"
+  "srv/TrajectoryBetweenPoints.srv"
   DEPENDENCIES 
   std_msgs
   geometry_msgs
