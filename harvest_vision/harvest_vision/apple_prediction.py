@@ -34,8 +34,20 @@ class ApplePredictionRS(Node):
         ### PUBLISHER
         self.marker_pub = self.create_publisher(MarkerArray, "apple_markers", 10)
 
+        ### PARAMETERS
+        self.declare_parameter("prediction_model_path", "NA")
+        self.declare_parameter("prediction_yolo_conf", 0.85)
+        self.declare_parameter("prediction_radius_min", 0.03)
+        self.declare_parameter("prediction_radius_max", 0.06)
+        self.declare_parameter("prediction_distance_max", 1.0)
+        self.confidence_thresh = self.get_parameter("prediction_yolo_conf").get_parameter_value().double_value
+        self.lower_rad_bound = self.get_parameter("prediction_radius_min").get_parameter_value().double_value
+        self.upper_rad_bound = self.get_parameter("prediction_radius_max").get_parameter_value().double_value
+        self.distance_thresh = self.get_parameter("prediction_distance_max").get_parameter_value().double_value
+        self.model_path = self.get_parameter("prediction_model_path").get_parameter_value().string_value
+
         ### YOLO SETUP
-        self.model = YOLO("/home/keegan/rtest/harvest_reconstruction/train6/weights/best.pt")  # pretrained YOLOv8n model
+        self.model = YOLO(self.model_path)  # pretrained YOLOv8n model
         if self.model: 
             self.get_logger().info("Succesfully loaded YOLO model.") 
         else:
@@ -68,14 +80,10 @@ class ApplePredictionRS(Node):
         ### vARS
         self.debug_flag = False
         self.marker_counter = 0
-        self.confidence_thresh = 0.7
-        self.lower_rad_bound = 0.03 
-        self.upper_rad_bound = 0.06
         self.ransac_thresh = .0001
         self.ransac_iters = 10000
         self.apple_centers = None
         self.apple_radii = None
-        # self.timer = self.create_timer(1, self.callback)
         self.c2 = 0
 
 
@@ -160,11 +168,18 @@ class ApplePredictionRS(Node):
         # creates a mask for each apple detected over the original image
         for i in results:
             # create empty mask
-            img_h, img_w = results.masks.orig_shape
-            mask = np.zeros((img_h, img_w), dtype=np.uint8)
-            # fill in mask with white where predicted apple segmentation is
-            cv2.fillPoly(mask, np.int32([i.masks.xy]), (255, 255, 255))
-            apple_masks.append(mask)
+            if len(results.masks) > 0: 
+                img_h, img_w = results.masks.orig_shape
+                mask = np.zeros((img_h, img_w), dtype=np.uint8)
+                # fill in mask with white where predicted apple segmentation is
+                cv2.fillPoly(mask, np.int32([i.masks.xy]), (255, 255, 255))
+                apple_masks.append(mask)
+            else:
+                img_h, img_w = results.orig_shape
+                mask = np.zeros((img_h, img_w), dtype=np.uint8)
+                x,y,w,h = i.boxes.xyxy.cpu().numpy()[0]
+                cv2.rectangle(mask, (int(x), int(y)), (int(w), int(h)), (255,255,255), -1)
+                apple_masks.append(mask)
 
         # Optional visualization for debugging
         if self.debug_flag: 
@@ -228,7 +243,7 @@ class ApplePredictionRS(Node):
             # segment only the apple portions
             depth_segmented = np.where(mask, depth, 0)
             print(depth_segmented[depth_segmented>0])
-            if np.median(depth_segmented[depth_segmented>0] > 1000):
+            if np.median(depth_segmented[depth_segmented>0] > self.distance_thresh * 1000):
                 continue
             # create RGBD image (NEEDS TO BE IN RGB FORMAT NOT BGR TO LOOK RIGHT, doesnt super matter for anything other than visualization)
             rgb_pc = o3d.geometry.Image(rgb)
@@ -238,9 +253,6 @@ class ApplePredictionRS(Node):
             pcd = o3d.geometry.PointCloud.create_from_rgbd_image(
                 rgbd_image,
                 o3d.camera.PinholeCameraIntrinsic(width=848, height=480, fx=609.6989, fy=609.8549, cx=420.2079, cy=235.2782))
-            # Transforms pointcloud to be facing the correct direction.
-            # pcd.transform([[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]])
-            # o3d.visualization.draw_geometries([pcd])
             center, radius = self.ransac_apple_estimation(np.array(pcd.points))
 
             if center and radius: 

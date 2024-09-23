@@ -14,6 +14,7 @@ find_package(std_msgs REQUIRED)
 find_package(std_srvs REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(geometry_msgs REQUIRED)
+find_package(harvest_interfaces REQUIRED)
 find_package(moveit_ros_planning_interface REQUIRED)
 
 ### PYTHON ###
@@ -23,6 +24,8 @@ ament_python_install_package(${PROJECT_NAME})
 # Install Python executables
 install(PROGRAMS
   scripts/visual_servo_test.py
+  scripts/launch_param_test.py
+  scripts/start_harvest.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
@@ -31,11 +34,6 @@ install(PROGRAMS
 install(DIRECTORY
   launch
   DESTINATION share/${PROJECT_NAME}/
-)
-
-# Install resources files.
-install(DIRECTORY resource/
-  DESTINATION share/${PROJECT_NAME}/resource
 )
 
 if(BUILD_TESTING)

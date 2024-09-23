@@ -80,8 +80,13 @@ class Sphere():
             M15 = np.linalg.det(d_matrix)
 
             # Now we calculate the center and radius
+            if M11 == 0: 
+                M11 = 0.00000001
             center = [0.5 * (M12 / M11), -0.5 * (M13 / M11), 0.5 * (M14 / M11)]
-            radius = np.sqrt(np.dot(center, center) - (M15 / M11))
+            r_calc = np.dot(center, center) - (M15 / M11)
+            if r_calc < 0: 
+                continue
+            radius = np.sqrt(r_calc)
 
             # Limiting radius to set upper and lower bound based on apple 
             radius = min(radius, upper_rad_bound)

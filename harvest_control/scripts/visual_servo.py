@@ -8,12 +8,9 @@ from rclpy.executors import MultiThreadedExecutor
 from rclpy.callback_groups import ReentrantCallbackGroup
 # Interfaces
 from sensor_msgs.msg import Image
-from std_msgs.msg import Float64
 from std_srvs.srv import Trigger
 from geometry_msgs.msg import PoseStamped, TwistStamped
-from arm_control_interfaces.srv import MoveNamedTarget, ServoSetDistance
-from arm_control_interfaces.msg import GripperTofDistance
-from controller_manager_msgs.srv import SwitchController
+
 # Image processing
 from cv_bridge import CvBridge
 import cv2
@@ -26,7 +23,7 @@ from tf2_ros import TransformException
 import tf2_geometry_msgs
 #Kalman
 from filterpy.kalman import KalmanFilter
-from filterpy.common import Q_discrete_white_noise
+
 # YOLO model
 from ultralytics import YOLO
 import torch
@@ -51,19 +48,28 @@ class LocalPlanner(Node):
         self.start_service = self.create_service(Trigger, "start_visual_servo", self.start_sequence_srv_callback, callback_group=r_callback_group)
         
         ### Servo controller params
-        self.max_vel = 0.6
-        self.smoothing_factor = 6
-        self.z_speed = 0.0
+        self.declare_parameter("vservo_model_path", "NA")
+        self.declare_parameter("vservo_yolo_conf", 0.85)
+        self.declare_parameter("vservo_accuracy_px", 10)
+        self.declare_parameter("vservo_smoothing_factor", 6.0)
+        self.declare_parameter("vservo_max_vel", 0.6)
+        self.yolo_conf = self.get_parameter("vservo_yolo_conf").get_parameter_value().double_value
+        self.target_pixel_accuracy = self.get_parameter("vservo_accuracy_px").get_parameter_value().integer_value
+        self.smoothing_factor = self.get_parameter("vservo_smoothing_factor").get_parameter_value().double_value
+        self.max_vel = self.get_parameter("vservo_max_vel").get_parameter_value().double_value
+        self.model_path = self.get_parameter("vservo_model_path").get_parameter_value().string_value
+
+        ### Vars
         self.start_flag = False
         self.rate = self.create_rate(1)
         self.stall_count = 0
-        self.target_pixel_accuracy = 10
         self.first_servo = True
+        ### MUST BE 0.0 unless moving forward and using TOF distance as a stopping condition.
+        self.z_speed = 0.0
 
         ### Image Processing
         self.br = CvBridge()
-        # TODO: Make this dynamic based on network in package.
-        self.model = YOLO("/home/keegan/rtest/harvest_reconstruction/train6/weights/best.pt")  # pretrained YOLOv8n model
+        self.model = YOLO(self.model_path)  # pretrained YOLOv8n model
         self.model.model = torch.compile(self.model.model)
 
         ### Tf2
@@ -73,33 +79,14 @@ class LocalPlanner(Node):
         ### Kalman
         self.prev_vel = [0,0]
         self.kf_pos = KalmanFilter (dim_x=6, dim_z=4)
-        # Depth not in use
-        # self.kf_depth = KalmanFilter(dim_x=2, dim_z=2)
 
 
     def init_kalman(self):
-        # self.kf_pos.x = np.array([[300],
-        #                 [0],
-        #                 [300],
-        #                 [0]])
-        # self.kf_pos.F = np.array([[1,.14,0,0],
-        #                 [0,1,0,0],
-        #                 [0,0,1,.14],
-        #                 [0,0,0,1]])
-        # self.kf_pos.H = np.array([[1,0,0,0],
-        #                 [0,0,1,0],
-        #                 [0,1,0,0],
-        #                 [0,0,0,1]])
-        # self.kf_pos.P *= 1
-        # self.kf_pos.R = np.array([[10, 0,0,0],
-        #                 [0, 10,0,0],
-        #                 [0, 0,10,0],
-        #                 [0, 0,0,10]]) * 10
-        # self.kf_pos.Q = Q_discrete_white_noise(dim=4, dt=.14, var=50000)
-        self.kf_pos.x = np.array([[400],
+        # Kalman filter setup, takes in a measured x,y position and velocity and estimates position, velocity and acceleration
+        self.kf_pos.x = np.array([[0],
                         [0],
                         [0],
-                        [300],
+                        [0],
                         [0],
                         [0]])
         self.kf_pos.F = np.array([[1,.14,.0098,0,0,0],
@@ -118,31 +105,6 @@ class LocalPlanner(Node):
                                   [0, 0,10,0],
                                   [0, 0,0,10]]) * 2
         self.kf_pos.Q = np.eye(6) * 1
-        # self.kf_pos.Q = Q_discrete_white_noise(dim=6, dt=.14, var=50000)
-
-        # self.kf_depth = KalmanFilter (dim_x=2, dim_z=1)
-        # self.kf_depth.x = np.array([[1.5], 
-        #                 [0]])
-        # self.kf_depth.F = np.array([[1, .14], 
-        #                 [0, 1]])
-        # self.kf_depth.H = np.array([[1, 0]])
-        # self.kf_depth.P *= 1
-        # self.kf_depth.R = 100
-        # # kf.Q = np.array([[1]])
-        # self.kf_pos.Q = np.eye(2) * 1
-        # self.kf_depth = KalmanFilter (dim_x=2, dim_z=2)
-        # self.kf_depth.x = np.array([[1.5], 
-        #                 [0]])
-        # self.kf_depth.F = np.array([[1, .14], 
-        #                 [0, 1]])
-        # self.kf_depth.H = np.array([[1, 0],
-        #                             [0, 1]])
-        # self.kf_depth.P *= 1000
-        # self.kf_depth.R = np.eye(2) * 1
-        # kf.Q = np.array([[1]])
-        # self.kf_depth.Q = np.eye(2) * 1
-
-
 
     def start_sequence_srv_callback(self, request, response):
         # Starts servo node it it hasnt been started already
@@ -203,6 +165,7 @@ class LocalPlanner(Node):
         else:
             new_y = -self.exponential_vel(1 - self.normalize(apple_y, 0, center_y))
 
+        # save previous velocities to feed into Kalman filter
         self.prev_vel[0] = new_x
         self.prev_vel[1] = new_y
         # Transform from optical frame to end effector frame
@@ -215,7 +178,7 @@ class LocalPlanner(Node):
         vel_vec.twist.linear.x = transformed_vector.pose.position.x
         vel_vec.twist.linear.y = transformed_vector.pose.position.y
 
-        # If we are within picking distance then stop, otherwise move forward
+        # If we are within picking distance then stop, otherwise move forward 
         if distance < .1:
             vel_vec.twist.linear.z = 0.0
             vel_vec.twist.linear.x = 0.0
@@ -232,33 +195,40 @@ class LocalPlanner(Node):
         if self.start_flag:
             # Convert to opencv format from msg
             image = self.br.imgmsg_to_cv2(rgb, "bgr8")
-            depth = 10
+            width = rgb.width
+            height = rgb.height
 
-            results = self.model(image, conf=.75, device='cuda', verbose=False)[0]
+            # Get apple bounding boxes from yolo model
+            results = self.model(image, conf=self.yolo_conf, device='cuda', verbose=False)[0]
             apple_centers = []
             z_dist = []
             for i in results:
+                # find center of each bounding box and calculate distance to center of image
                 x,y,w,h = i.boxes.xyxy.cpu().numpy()[0]
                 apple_centers.append([(x + w)/2, (y+h)/2])
-                dist_to_apple = self.calculate_euclidean([320,180], apple_centers[-1])
+                dist_to_apple = self.calculate_euclidean([width//2,height//2], apple_centers[-1])
                 z_dist.append(dist_to_apple)
 
             if apple_centers:
+                # reset stall counter if we saw apples
                 self.stall_count = 0
+                # get closest apple center
                 closest_apple_raw = apple_centers[np.argmin(z_dist)]
+
+                # If this is the first iteration, set our initial estimate of the apple location in the kalman filter to the apple center measured
                 if self.first_servo:
                     self.kf_pos.x = np.array([[closest_apple_raw[0]],[0],[0],[closest_apple_raw[1]],[0],[0]])
                     self.first_servo = False
-                # Get closest apple to center of camera (z distance), create a servo vector, then publish
+                
+                # update Kalman filter with the measuered position, and previous measured velocities
                 self.kf_pos.predict()
                 self.kf_pos.update(np.array([[closest_apple_raw[0]],[-self.prev_vel[0]], [closest_apple_raw[1]], [-self.prev_vel[1]]]))
+                # get estimate from Kalman filter for closest apple location
                 state = self.kf_pos.x
-                # print(closest_apple_raw)
-                # print(state)
                 closest_apple = [float(state[0][0]), float(state[3][0])]
-                # print(closest_apple)
-                # print(self.calculate_euclidean([320,180], closest_apple))
-                if self.calculate_euclidean([320,180], closest_apple) < self.target_pixel_accuracy:
+
+                # check if camera is centered on apple or not within our pixel target accuracy threshold, if it is then publish a 0 velocity and exit loop
+                if self.calculate_euclidean([width//2, height//2], closest_apple) < self.target_pixel_accuracy:
                     vel_vec = TwistStamped()
                     vel_vec.header.stamp = self.get_clock().now().to_msg()
                     vel_vec.header.frame_id = "tool0"
@@ -268,12 +238,17 @@ class LocalPlanner(Node):
                     self.servo_publisher.publish(vel_vec)
                     self.start_flag = False
                 else:
+                    # makes sure that transforms are not failing
                     try:
-                        vec = self.create_servo_vector(closest_apple, image, depth)
+                        # Creates servo vector which servos the arm towards the closest apple
+                        ## THE 10 IS A CONSTANT DISTANCE VALUE BECAUSE WE ARE SERVOING IN PLACE ON A PLANE
+                        ## IF NEEDED YOU CAN PASS IN A MEASURED DISTANCE AS A STOPPING CONDITION FOR THE SERVOING
+                        vec = self.create_servo_vector(closest_apple, image, 10)
                         self.servo_publisher.publish(vec)
                     except TransformException as e:
                         self.get_logger().info(f'Transform failed: {e}')
             else:
+                # if we dont detect any apples then stay in place with 0 velocity
                 vel_vec = TwistStamped()
                 vel_vec.header.stamp = self.get_clock().now().to_msg()
                 vel_vec.header.frame_id = "tool0"
@@ -284,70 +259,8 @@ class LocalPlanner(Node):
                 self.stall_count += 1
             
             if self.stall_count > 10:
-                print("HEREwwww")
+                self.get_logger().error("STALLED after 10 attempts to servo, could not locate any apples in FOV.")
                 self.start_flag = False
-
-
-
-#    def rgbd_servoing_callback(self, rgb):
-#         if self.start_flag:
-#             print("HERE1")
-#             # Convert to opencv format from msg
-#             image = self.br.imgmsg_to_cv2(rgb, "bgr8")
-#             depth = 10
-            
-#             hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
-#             # Define the range of red color in HSV
-#             lower_red = np.array([0, 100, 100])
-#             upper_red = np.array([10, 255, 255])
-#             # Threshold the HSV image to get only red colors
-#             mask = cv2.inRange(hsv, lower_red, upper_red)
-#             # Find contours that match criteria
-#             contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-#             apple_centers = []
-#             z_dist = []
-#             for contour in contours:
-#                                 # for contour in contours:
-#                 #     if cv2.contourArea(contour) > 500:  # Filter out small areas
-#                 #         x, y, w, h = cv2.boundingRect(contour)
-#                 #         cv2.rectangle(image, (x, y), (x+w, y+h), (0, 255, 0), 2)
-#                 # cv2.imshow("SD",image)
-#                 # if cv2.waitKey(1) & 0xFF == ord("q"):
-#                 #     break
-#                 # Get center of apple contour
-#                 if cv2.contourArea(contour) > 500:  # Filter out small areas
-#                     print("HERE")
-#                     x, y, w, h = cv2.boundingRect(contour)
-#                     cv2.rectangle(image, (x, y), (x + w, y + h), (0, 255, 0), 2)
-#                     apple_centers.append([x+w//2, y+h//2])
-#                     dist_to_apple = self.calculate_euclidean([0,0], apple_centers[-1])
-#                     z_dist.append(dist_to_apple)
-#             # cv2.imshow("SD",image)
-#             # cv2.waitKey(1) & 0xFF == ord("q"):
-            
-
-#             if apple_centers:
-#                 # Get closest apple to center of camera (z distance), create a servo vector, then publish
-#                 closest_apple = apple_centers[np.argmin(z_dist)]
-#                 self.kf.predict()
-#                 self.kf.update(np.array([[closest_apple[0]],[closest_apple[1]]]))
-#                 closest_apple = [float(self.kf.x[0]), float(self.kf.x[1])]
-#                 # cv2.circle(image, (closest_apple[0], closest_apple[1]), 5, (0, 255, 0), 2)
-#                 try:
-#                     vec = self.create_servo_vector(closest_apple, image, depth)
-#                     self.servo_publisher.publish(vec)
-#                 except TransformException as e:
-#                     self.get_logger().info(f'Transform failed: {e}')
-#             else:
-#                 vel_vec = TwistStamped()
-#                 vel_vec.header.stamp = self.get_clock().now().to_msg()
-#                 vel_vec.header.frame_id = "tool0"
-#                 vel_vec.twist.linear.z = 0.0
-#                 vel_vec.twist.linear.x = 0.0
-#                 vel_vec.twist.linear.y = 0.0
-#                 self.servo_publisher.publish(vel_vec)
-
 
 
 

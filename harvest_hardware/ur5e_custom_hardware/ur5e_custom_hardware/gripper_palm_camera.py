@@ -11,7 +11,7 @@ import cv2
 import numpy as np
 
 class GripperPalmCamera(Node):
-    def __init__(self, device=2, resolution=(800,600), target_fr=30):
+    def __init__(self, resolution=(800,600), target_fr=30):
         super().__init__("gripper_palm_camera_publisher")
 
         # image publisher
@@ -21,8 +21,9 @@ class GripperPalmCamera(Node):
         self.bridge = CvBridge()
 
         # camera vars 
+        self.declare_parameter("palm_camera_device_num", 2)
+        self.device = self.get_parameter("palm_camera_device_num").get_parameter_value().integer_value
         self.resolution = resolution
-        self.device = device
         self.target_fr = target_fr
         self.camera = None
 

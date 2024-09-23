@@ -13,7 +13,7 @@ setup(
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
         (os.path.join('share', package_name, 'launch'), glob(os.path.join('launch', '*launch.[pxy][yma]*'))),
-        (os.path.join('share', package_name, 'yolo_networks'), glob(os.path.join('yolo_network', '*'))),
+        (os.path.join('share', package_name, 'yolo_networks'), glob(os.path.join('yolo_networks', '*'))),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
