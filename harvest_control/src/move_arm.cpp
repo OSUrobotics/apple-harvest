@@ -42,12 +42,19 @@ private:
     std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
 
     moveit::planning_interface::MoveGroupInterface move_group_;
-// np.pi/2, 5*np.pi/4, np.pi/2, -3*np.pi/4, -np.pi/2, 0
+    // std::vector<double> home_joint_positions = {
+    //     M_PI / 2,
+    //     - 3 * M_PI / 4,
+    //     M_PI / 2,
+    //     -3 * M_PI / 4,
+    //     -M_PI / 2,
+    //     0};
+
     std::vector<double> home_joint_positions = {
-        - 3 * M_PI / 2,
-        - 3 * M_PI / 4,
         M_PI / 2,
-        -3 * M_PI / 4,
+        - M_PI,
+        M_PI / 2,
+        -M_PI / 2,
         -M_PI / 2,
         0};
 
@@ -84,8 +91,8 @@ MoveArmNode::MoveArmNode()
 
     // Set velocity and acceleration limits
     // NEED TO RESET TO 0.1 FOR HARDWARE!!!
-    this->move_group_.setMaxAccelerationScalingFactor(1);
-    this->move_group_.setMaxVelocityScalingFactor(1);
+    this->move_group_.setMaxAccelerationScalingFactor(0.1);
+    this->move_group_.setMaxVelocityScalingFactor(0.1);
 
     RCLCPP_INFO(this->get_logger(), "Move arm server ready");
 }
