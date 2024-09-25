@@ -18,6 +18,7 @@ find_package(moveit_ros_planning_interface REQUIRED)
 find_package(controller_manager_msgs REQUIRED)
 find_package(trajectory_msgs REQUIRED)
 find_package(harvest_interfaces)
+find_package(jsoncpp REQUIRED)
 
 
 ### C++ ###
@@ -38,6 +39,14 @@ ament_target_dependencies(
   "std_srvs"
 )
 
+# Link jsoncpp manually
+find_library(JSONCPP_LIBRARIES NAMES jsoncpp PATHS /usr/lib /usr/local/lib)
+if (JSONCPP_LIBRARIES)
+  target_link_libraries(move_arm ${JSONCPP_LIBRARIES})
+else()
+  message(FATAL_ERROR "Could not find jsoncpp library")
+endif()
+
 ### PYTHON ###
 # Install Python modules
 ament_python_install_package(${PROJECT_NAME})
@@ -45,7 +54,11 @@ ament_python_install_package(${PROJECT_NAME})
 # Install Python executables
 install(PROGRAMS
   scripts/coordinate_to_trajectory.py
+  scripts/coordinate_to_trajectory_client.py
   scripts/visual_servo.py
+  scripts/pyb_scripts/load_objects.py
+  scripts/pyb_scripts/load_robot.py
+  scripts/pyb_scripts/pyb_utils.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
@@ -54,9 +67,8 @@ install(TARGETS move_arm
 
 ### LAUNCH ###
 # Install launch files.
-install(DIRECTORY
-  launch
-  DESTINATION share/${PROJECT_NAME}/
+install(DIRECTORY launch/
+  DESTINATION share/${PROJECT_NAME}/launch
 )
 
 # Install resources files.

@@ -1,20 +1,49 @@
 To run Marcus Path-Query:
 
-In the first terminal: (sim vs. real)
+1. In the first terminal: (sim vs. real):
+
+```bash
 ros2 launch ur_robot_driver ur_control_custom_hw.launch.py ur_type:=ur5e robot_ip:=yyy.yyy.yyy.yyy use_fake_hardware:=true launch_rviz:=true
+```
+
+OR
+
+```bash
 ros2 launch ur_robot_driver ur_control_custom_hw.launch.py ur_type:=ur5e robot_ip:=169.254.174.50 launch_rviz:=true
+```
 
-In the second terminal:
+2. In the second terminal:
+```bash
 ros2 launch ur_moveit_config ur_moveit_custom_hw.launch.py ur_type:=ur5e launch_rviz:=true
+```
 
-In a third terminal:
+3. In a third terminal:
+```bash
 ros2 run harvest_control move_arm
+```
 
-In a fourth terminal:
+4. In a fourth terminal:
+```bash
 ros2 run harvest_control coordinate_to_trajectory.py
-    
-In a fifth terminal: (set desired x,y,z coorinates)
-ros2 service call /coordinate_to_trajectory harvest_interfaces/srv/CoordinateToTrajectory "{coordinate: {x: 0.2, y: 0.5, z: 0.8}}"
+```
 
-To send the robot to home configuration:
+5. In a fifth terminal: (set desired x,y,z coorinates):
+```bash
+ros2 service call /coordinate_to_trajectory harvest_interfaces/srv/CoordinateToTrajectory "{coordinate: {x: 0.2, y: 0.5, z: 0.8}}"
+```
+
+6. To send the robot to home configuration by reversing the approach trajectory:
+```bash
+ros2 service call /return_home_trajectory std_srvs/srv/Empty 
+```
+
+7. To send the robot to home configuration:
+```bash
 ros2 service call /move_arm_to_home std_srvs/srv/Empty 
+```
+
+8. To set a voxel mask for tree and wire locations: Valid inputs are tree_pos 1-5, each shifting the tree location from left to right. If 0 is entered, it will remove the tree mask and maintain the wire mask. Any values outside of this range, it will default to no voxel mask.
+```bash
+ros2 service call /voxel_mask harvest_interfaces/srv/VoxelMask "{tree_pos: 1}"
+```
+
