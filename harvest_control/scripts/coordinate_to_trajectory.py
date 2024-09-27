@@ -49,7 +49,7 @@ class CoordinateToTrajectoryService(Node):
 
         # Create a publisher for MarkerArray
         self.voxel_marker_publisher = self.create_publisher(MarkerArray, 'voxel_markers', 10)
-        self.apple_marker_publisher = self.create_publisher(MarkerArray, 'apple_markers', 10)
+        self.apple_marker_publisher = self.create_publisher(MarkerArray, 'apple_markers_OLD', 10)
 
         # Set the timer to publish markers periodically
         self.voxel_timer = self.create_timer(1.0, self.publish_voxel_markers)
@@ -181,10 +181,11 @@ class CoordinateToTrajectoryService(Node):
 
             # Assign the response
             response.success = True
+            response.waypoints = self.traj_msg
 
         if response.success:
             # Send trajectory message to MoveIt
-            self.trigger_arm_mover(self.traj_msg)
+            # self.trigger_arm_mover(self.traj_msg)
 
             self.current_joint_config = traj[-1]
 
@@ -237,7 +238,7 @@ class CoordinateToTrajectoryService(Node):
 
         if response.success:
             # Send trajectory message to MoveIt
-            self.trigger_arm_mover(self.traj_msg)
+            # self.trigger_arm_mover(self.traj_msg)
 
             self.current_joint_config = traj[-1]
 
@@ -296,7 +297,9 @@ class CoordinateToTrajectoryService(Node):
 
         # Use async call
         future = self.client.call_async(request)
+        # rclpy.spin_until_future_complete(self, future) 
         future.add_done_callback(self.handle_trajectory_response)
+        # return future.result()
 
     def handle_trajectory_response(self, future):
         try:

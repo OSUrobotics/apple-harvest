@@ -168,7 +168,7 @@ class ApplePredictionRS(Node):
         # creates a mask for each apple detected over the original image
         for i in results:
             # create empty mask
-            if len(results.masks) > 0: 
+            if results.masks != None: 
                 img_h, img_w = results.masks.orig_shape
                 mask = np.zeros((img_h, img_w), dtype=np.uint8)
                 # fill in mask with white where predicted apple segmentation is

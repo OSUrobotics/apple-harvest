@@ -6,8 +6,9 @@ from rclpy.node import Node
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 # Interfaces
-from std_srvs.srv import Trigger
-from harvest_interfaces.srv import ApplePrediction
+from std_srvs.srv import Trigger, Empty
+from geometry_msgs.msg import Point
+from harvest_interfaces.srv import ApplePrediction, CoordinateToTrajectory, SendTrajectory
 from controller_manager_msgs.srv import SwitchController
 # Python 
 import numpy as np
@@ -39,6 +40,18 @@ class StartHarvest(Node):
             self.get_logger().info("Start visual servo service not available, waiting...")
 
         # TODO: ADD MARCUS AND ALEJO SERVICE CLIENTS
+        # Service to move arm to home
+        self.start_move_arm_to_home_client = self.create_client(Empty, "/move_arm_to_home", callback_group=m_callback_group)
+        while not self.start_move_arm_to_home_client.wait_for_service(timeout_sec=1.0):
+            self.get_logger().info("Start move arm to home service not available, waiting...")
+
+        self.coord_to_traj_client = self.create_client(CoordinateToTrajectory, 'coordinate_to_trajectory', callback_group=m_callback_group)
+        while not self.coord_to_traj_client.wait_for_service(timeout_sec=1.0):
+            self.get_logger().info('Waiting for coordinate_to_trajectory to be available...')
+
+        self.trigger_arm_mover_client = self.create_client(SendTrajectory, 'execute_arm_trajectory', callback_group=m_callback_group)
+        while not self.trigger_arm_mover_client.wait_for_service(timeout_sec=1.0):
+            self.get_logger().info('Waiting for execute_arm_trajectory to be available...')
 
 
     def start_visual_servo(self):
@@ -82,18 +95,54 @@ class StartHarvest(Node):
         self.request = ApplePrediction.Request()
         self.future = self.start_apple_prediction_client.call_async(self.request)
         rclpy.spin_until_future_complete(self, self.future) 
+        return self.future.result().apple_poses
+    
+    def go_to_home(self):
+        # Starts go to home
+        self.request = Empty.Request()
+        self.future = self.start_move_arm_to_home_client.call_async(self.request)
+        rclpy.spin_until_future_complete(self, self.future) 
         return self.future.result()
+    
+    def call_coord_to_traj(self, apple_pose):
+        x = apple_pose.position.x
+        y = apple_pose.position.y
+        z = apple_pose.position.z
+
+        # Create a Point message
+        coord = Point()
+        coord.x = x
+        coord.y = y
+        coord.z = z
+
+        self.request = CoordinateToTrajectory.Request()
+        self.request.coordinate = coord        
+
+        self.future = self.coord_to_traj_client.call_async(self.request)
+        rclpy.spin_until_future_complete(self, self.future) 
+        return self.future.result().waypoints
+
+    def trigger_arm_mover(self, trajectory):
+        request = SendTrajectory.Request()
+        request.waypoints = trajectory  # Pass the entire Float32MultiArray message
+
+        # Use async call
+        future = self.trigger_arm_mover_client.call_async(request)
+        rclpy.spin_until_future_complete(self, future) 
+        return future.result()
     
     def start(self): 
         # TODO: CENTER ARM IN HOME POSITION
         self.get_logger().info(f'Resetting arm to home position')
+        self.go_to_home()
         self.get_logger().info(f'Sending request to predict apple centerpoint locations in scene.')
         apple_poses = self.start_apple_prediction()
-        for i in apple_poses:
+        for i in apple_poses.poses:
             # TODO: CENTER ARM IN HOME POSITION
-            self.get_logger().info(f'Resetting arm to home position')
             self.get_logger().info(f'Starting initial apple approach.')
             # TODO: MARCUS SERVICE CALL
+            waypoints = self.call_coord_to_traj(i)
+            self.trigger_arm_mover(waypoints)
             # TODO: APPROACH
             self.get_logger().info(f'Apple approach complete')
             self.get_logger().info(f'Switching controller to forward_position_controller.')
@@ -109,6 +158,8 @@ class StartHarvest(Node):
             # TODO: FINAL APPROACH
             # TODO: FINAL RETREAT AND PLACEMENt OF APPLE
             self.get_logger().info(f'Starting retreat sequence')
+            self.get_logger().info(f'Resetting arm to home position')
+            self.go_to_home()
         self.get_logger().info(f'Test Complete.')
 
 def main(args=None):

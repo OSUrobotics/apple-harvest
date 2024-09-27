@@ -42,20 +42,12 @@ private:
     std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
 
     moveit::planning_interface::MoveGroupInterface move_group_;
-    // std::vector<double> home_joint_positions = {
-    //     M_PI / 2,
-    //     - 3 * M_PI / 4,
-    //     M_PI / 2,
-    //     -3 * M_PI / 4,
-    //     -M_PI / 2,
-    //     0};
-
     std::vector<double> home_joint_positions = {
         M_PI / 2,
-        - M_PI,
-        M_PI / 2,
-        -M_PI / 2,
-        -M_PI / 2,
+        - M_PI / 2, 
+        2 * M_PI / 3,
+        5 * M_PI / 6,
+        - M_PI / 2,
         0};
 
     void execute_trajectory(const std::shared_ptr<harvest_interfaces::srv::SendTrajectory::Request> request,
@@ -90,9 +82,9 @@ MoveArmNode::MoveArmNode()
         "move_arm_to_config", std::bind(&MoveArmNode::move_to_config, this, _1, _2));
 
     // Set velocity and acceleration limits
-    // NEED TO RESET TO 0.1 FOR HARDWARE!!!
-    this->move_group_.setMaxAccelerationScalingFactor(0.1);
-    this->move_group_.setMaxVelocityScalingFactor(0.1);
+    // NEED TO RESET TO 0.05 FOR HARDWARE!!!
+    this->move_group_.setMaxAccelerationScalingFactor(0.05);
+    this->move_group_.setMaxVelocityScalingFactor(0.05);
 
     RCLCPP_INFO(this->get_logger(), "Move arm server ready");
 }
@@ -337,7 +329,7 @@ void MoveArmNode::execute_trajectory(const std::shared_ptr<harvest_interfaces::s
     point.time_from_start.nanosec = 0;
 
     double current_time = 0.0; // Start time
-    double time_step = 0.02;   // Time step between waypoints (seconds)
+    double time_step = 0.05;   // Time step between waypoints (seconds)
 
     for (int i = 0; i < num_waypoints; ++i)
     {
