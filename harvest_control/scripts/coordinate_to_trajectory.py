@@ -17,7 +17,7 @@ from ament_index_python.packages import get_package_share_directory
 from geometry_msgs.msg import Point
 from visualization_msgs.msg import Marker, MarkerArray
 from std_msgs.msg import Float32MultiArray, MultiArrayDimension
-from std_srvs.srv import Empty
+from std_srvs.srv import Empty, Trigger
 from harvest_interfaces.srv import CoordinateToTrajectory, SendTrajectory, VoxelMask, ApplePrediction, TrajectoryBetweenPoints
 
 
@@ -40,7 +40,7 @@ class CoordinateToTrajectoryService(Node):
         # Create the service
         self.coord_to_traj_srv = self.create_service(CoordinateToTrajectory, 'coordinate_to_trajectory', self.coord_to_traj_callback)
         self.traj_between_points_srv = self.create_service(TrajectoryBetweenPoints, 'trajectory_between_points', self.traj_between_points_callback)
-        self.return_home_traj_srv = self.create_service(Empty, 'return_home_trajectory', self.return_home_traj_callback)
+        self.return_home_traj_srv = self.create_service(Trigger, 'return_home_trajectory', self.return_home_traj_callback)
         self.voxel_mask = self.create_service(VoxelMask, 'voxel_mask', self.voxel_mask_callback)
 
         # Create the service client
@@ -185,7 +185,7 @@ class CoordinateToTrajectoryService(Node):
 
         if response.success:
             # Send trajectory message to MoveIt
-            # self.trigger_arm_mover(self.traj_msg)
+            self.trigger_arm_mover(self.traj_msg)
 
             self.current_joint_config = traj[-1]
 
@@ -253,8 +253,10 @@ class CoordinateToTrajectoryService(Node):
     def return_home_traj_callback(self, request, response):
         if self.traj_msg == None:
             self.get_logger().warn('No current return trajectory. Not moving the arm')
+            response.success = False
         else:
             self.get_logger().info('Returning home by reversing previous trajectory')
+            response.success = True
             self.trigger_arm_mover(self.traj_msg)
 
             # Reset the traj
