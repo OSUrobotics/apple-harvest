@@ -4,9 +4,9 @@ import numpy as np
 import os
 import json
 
-from pyb_scripts.pyb_utils import PybUtils
-from pyb_scripts.load_objects import LoadObjects
-from pyb_scripts.load_robot import LoadRobot
+# from pyb_scripts.pyb_utils import PybUtils
+# from pyb_scripts.load_objects import LoadObjects
+# from pyb_scripts.load_robot import LoadRobot
 
 import rclpy
 import rclpy.logging
@@ -25,17 +25,17 @@ class CoordinateToTrajectoryService(Node):
     def __init__(self):
         super().__init__('trajectory_query_node')
 
-        # Start pybullet env
-        self.pyb = PybUtils(self, renders=False)
-        self.object_loader = LoadObjects(self.pyb.con)
+        # # Start pybullet env
+        # self.pyb = PybUtils(self, renders=False)
+        # self.object_loader = LoadObjects(self.pyb.con)
 
-        self.robot_home_pos = [np.pi/2, -3*np.pi/4, np.pi/2, -3*np.pi/4, -np.pi/2, 0]
-        self.robot = LoadRobot(self.pyb.con, 
-                               '/home/marcus/IMML/manipulator_codesign/urdf/ur5e/ur5e.urdf', 
-                               [0, 0, 0], 
-                               self.pyb.con.getQuaternionFromEuler([0, 0, 0]), 
-                               self.robot_home_pos, 
-                               collision_objects=self.object_loader.collision_objects)
+        # self.robot_home_pos = [np.pi/2, -3*np.pi/4, np.pi/2, -3*np.pi/4, -np.pi/2, 0]
+        # self.robot = LoadRobot(self.pyb.con, 
+        #                        '/home/marcus/IMML/manipulator_codesign/urdf/ur5e/ur5e.urdf', 
+        #                        [0, 0, 0], 
+        #                        self.pyb.con.getQuaternionFromEuler([0, 0, 0]), 
+        #                        self.robot_home_pos, 
+        #                        collision_objects=self.object_loader.collision_objects)
         
         # Create the service
         self.coord_to_traj_srv = self.create_service(CoordinateToTrajectory, 'coordinate_to_trajectory', self.coord_to_traj_callback)
@@ -185,7 +185,7 @@ class CoordinateToTrajectoryService(Node):
 
         if response.success:
             # Send trajectory message to MoveIt
-            # self.trigger_arm_mover(self.traj_msg)
+            self.trigger_arm_mover(self.traj_msg)
 
             self.current_joint_config = traj[-1]
 
