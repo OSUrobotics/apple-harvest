@@ -2,6 +2,7 @@ import numpy as np
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Vector3, TwistStamped, TransformStamped
+from std_msgs.msg import Bool
 from std_srvs.srv import Empty
 from scipy.spatial.transform import Rotation
 from rcl_interfaces.msg import Parameter, ParameterValue, ParameterType
@@ -18,6 +19,7 @@ class PTController(Node):
 
         self.pose_subscription = self.create_subscription(TransformStamped,'/tool_pose', self.configure_self, 10)
         self.publisher = self.create_publisher(TwistStamped, '/servo_node/delta_twist_cmds', 10)
+        self.status_publisher = self.create_publisher(Bool, '/pull_twist/status', 10)
 
         self.timer = self.create_timer(0.01, self.timer_callback)
         
