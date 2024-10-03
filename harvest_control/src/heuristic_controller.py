@@ -72,11 +72,6 @@ class PickController(Node):
         self.running = False
         self.get_logger().info("finished")
         return response
-
-    def configure_servo(self):
-        new_param_value = ParameterValue(type=ParameterType.PARAMETER_STRING, string_value="base_link")
-        self.req.parameters = [Parameter(name='moveit_servo.robot_link_command_frame', value=new_param_value)]
-        self.future = self.cli.call_async(self.req)
      
     ## SUBSCRIBERS & PUBLISHERS
 
