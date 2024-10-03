@@ -18,9 +18,14 @@ class EventDetector(Node):
         self.subscriber = self.create_subscription(WrenchStamped, '/force_torque_sensor_broadcaster/wrench', self.wrench_callback, 10)
         self.pressure_subscriber = self.create_subscription(UInt16, '/pressure', self.pressure_callback, 10)
 
+        self.start_service = self.create_service(Empty, 'start_detection', self.start) #MARCUS: the event detection can be stopped and not turned on if you want to not have it
+        self.stop_service = self.create_service(Empty, 'stop_detection', self.stop)
+
         self.force_memory = []
         self.pressure_memory = []
         self.window = 10
+
+        self.running = False
         
         self.timer = self.create_timer(0.01, self.timer_callback)
         
@@ -36,8 +41,21 @@ class EventDetector(Node):
         
         #optionally change this (should work well for UR5)
         self.force_change_threshold = -1.0
+
+    
         
-        
+    def start(self, request, response):
+
+        self.get_logger().info("starting event detection...")
+        self.running = True
+        return response
+
+    def stop(self, request, response):
+
+        self.running = False
+        self.get_logger().info("event detection is offline")
+        return response
+
     def clear_trial(self):
         
         self.force_memory = []
@@ -86,49 +104,49 @@ class EventDetector(Node):
             
     def timer_callback(self):
         
-        
-        #if for some reason the engaged pressure is higher, flip > and < for pressure
-        
-        if len(self.force_memory) < self.window or len(self.pressure_memory) < self.window:
-            return
-        
-
-        filtered_force = self.moving_average(self.force_memory)
-        avg_pressure = np.average(self.pressure_memory)
-    
-        backwards_diff = []
-        h = 2
-        for j in range(2*h, (len(filtered_force))):
-            diff = ((3 * filtered_force[j]) - (4 * filtered_force[j - h]) + filtered_force[j - (2*h)]) / (2 * h)
-            backwards_diff.append(diff)
-            j += 1
-    
-        cropped_backward_diff = np.average(np.array(backwards_diff))
-           
-        #if the suction cups are disengaged, the pick failed
-        if avg_pressure >= self.pressure_threshold:
-            print("Apple was failed to be picked :( Force: {np.round(filtered_force[0])} Max Force: {np.max(force)}  Bdiff: {cropped_backward_diff}  Pressure: {avg_pressure}")
-            self.stop_controller()
-        
-        #if there is a reasonable force 
-        elif filtered_force[0] >= 5:
+        if self.running:
+            #if for some reason the engaged pressure is higher, flip > and < for pressure
             
-            self.flag = True #force was achieved
+            if len(self.force_memory) < self.window or len(self.pressure_memory) < self.window:
+                return
             
-            #check for big force drop
-            if float(cropped_backward_diff) <= self.force_change_threshold and avg_pressure < self.pressure_threshold: 
-                print("Apple has been picked! Bdiff: {cropped_backward_diff}   Pressure: {avg_pressure}.\
-                        #Force: {filtered_force[0]} vs. Max Force: {np.max(force)}")
-                self.stop_controller() 
     
-            elif float(cropped_backward_diff) <= self.force_change_threshold and avg_pressure >= self.pressure_threshold:
+            filtered_force = self.moving_average(self.force_memory)
+            avg_pressure = np.average(self.pressure_memory)
+        
+            backwards_diff = []
+            h = 2
+            for j in range(2*h, (len(filtered_force))):
+                diff = ((3 * filtered_force[j]) - (4 * filtered_force[j - h]) + filtered_force[j - (2*h)]) / (2 * h)
+                backwards_diff.append(diff)
+                j += 1
+        
+            cropped_backward_diff = np.average(np.array(backwards_diff))
+               
+            #if the suction cups are disengaged, the pick failed
+            if avg_pressure >= self.pressure_threshold:
                 print("Apple was failed to be picked :( Force: {np.round(filtered_force[0])} Max Force: {np.max(force)}  Bdiff: {cropped_backward_diff}  Pressure: {avg_pressure}")
                 self.stop_controller()
-                    
-        #if force is low, but was high, that's a failure too    
-        elif self.flag and filtered_force[0] < 4.5:
-            print("Apple was failed to be picked :( Force: {np.round(filtered_force[0])} Max Force: {np.max(force)}  Bdiff: {cropped_backward_diff}  Pressure: {avg_pressure}")
-            self.stop_controller()
+            
+            #if there is a reasonable force 
+            elif filtered_force[0] >= 5:
+                
+                self.flag = True #force was achieved
+                
+                #check for big force drop
+                if float(cropped_backward_diff) <= self.force_change_threshold and avg_pressure < self.pressure_threshold: 
+                    print("Apple has been picked! Bdiff: {cropped_backward_diff}   Pressure: {avg_pressure}.\
+                            #Force: {filtered_force[0]} vs. Max Force: {np.max(force)}")
+                    self.stop_controller() 
+        
+                elif float(cropped_backward_diff) <= self.force_change_threshold and avg_pressure >= self.pressure_threshold:
+                    print("Apple was failed to be picked :( Force: {np.round(filtered_force[0])} Max Force: {np.max(force)}  Bdiff: {cropped_backward_diff}  Pressure: {avg_pressure}")
+                    self.stop_controller()
+                        
+            #if force is low, but was high, that's a failure too    
+            elif self.flag and filtered_force[0] < 4.5:
+                print("Apple was failed to be picked :( Force: {np.round(filtered_force[0])} Max Force: {np.max(force)}  Bdiff: {cropped_backward_diff}  Pressure: {avg_pressure}")
+                self.stop_controller()
 
     def wait_for_srv(self, srv):
         while not srv.wait_for_service(timeout_sec=1.0):
