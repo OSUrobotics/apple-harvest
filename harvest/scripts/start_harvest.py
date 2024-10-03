@@ -33,7 +33,6 @@ class StartHarvest(Node):
         self.configure_servo_cli = self.create_client(SetParameters, '/servo_node/set_parameters')
         while not self.configure_servo_cli.wait_for_service(timeout_sec=1.0):
             self.get_logger().info('service not available, waiting again...')
-        self.req = SetParameters.Request()
 
         # Service to start visual servo
         self.start_vservo_client = self.create_client(Trigger, "/start_visual_servo", callback_group=m_callback_group)
@@ -59,7 +58,34 @@ class StartHarvest(Node):
         while not self.trigger_arm_mover_client.wait_for_service(timeout_sec=1.0):
             self.get_logger().info('Waiting for execute_arm_trajectory to be available...')
 
+        #Services for Miranda's pick controllers 
 
+        self.start_controller_cli = self.create_client(Empty, 'start_controller')
+        self.wait_for_srv(self.set_ee_z_cli)
+
+        self.stop_controller_cli = self.create_client(Empty, 'stop_controller')
+        self.wait_for_srv(self.stop_controller_cli)
+
+        self.pull_twist_start_cli = self.create_client(Empty, 'pull_twist/start_controller')
+        self.wait_for_srv(self.pull_twist_start_cli)
+
+        self.pull_twist_stop_cli = self.create_client(Empty, 'pull_twist/stop_controller')
+        self.wait_for_srv(self.pull_twist_stop_cli)
+
+        self.event_detection_start_cli = self.create_client(Empty, 'start_detection')
+        self.wait_for_srv(self.event_detection_start_cli)
+
+        self.event_detection_stop_cli = self.create_client(Empty, 'stop_detection')
+        self.wait_for_srv(self.event_detection_stop_cli)
+
+        #Parameters
+        PICK_PATTERN = 'force-heuristic' 
+
+    def wait_for_srv(self, srv):
+        #service waiter because Miranda is lazy :3
+        while not srv.wait_for_service(timeout_sec=1.0):
+            self.get_logger().info('service not available, waiting again...')
+            
     def start_visual_servo(self):
         # Starts global planning sequence
         self.request = Trigger.Request()
@@ -171,8 +197,27 @@ class StartHarvest(Node):
             # TODO: FINAL APPROACH
             # TODO: FINAL RETREAT AND PLACEMENt OF APPLE
             self.get_logger().info(f'Starting retreat sequence')
+
+            #start event detection
+            req = Empty.Request()
+            self.future = self.event_detection_start_cli.call_async(req)
+            rclpy.spin_until_future_complete(self, self.future)
+
+            #activate pick controller
+            if PICK_PATTERN == 'force-heuristic':
+                pass
+            elif PICK_PATTERN == 'pull-twist':
+                pass
+            elif PICK_PATTERN == 'linear-pull':
+                pass
+            else:
+                self.get_logger().info(f'No valid control scheme set')
+
+            #todo: restart when event is detected
+            
             self.get_logger().info(f'Resetting arm to home position')
             self.go_to_home()
+            
         self.get_logger().info(f'Test Complete.')
 
 def main(args=None):
