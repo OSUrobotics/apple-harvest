@@ -11,9 +11,21 @@ class EventDetector(Node):
 
         super().__init__('event_detector')
 
+        self.start_controller_cli = self.create_client(Empty, 'start_controller')
+        self.wait_for_srv(self.start_controller_cli)
+        self.start_controller_req = Empty.Request()
+
         self.stop_controller_cli = self.create_client(Empty, 'stop_controller')
         self.wait_for_srv(self.stop_controller_cli)
         self.stop_controller_req = Empty.Request()
+
+        self.pull_twist_start_cli = self.create_client(Empty, 'pull_twist/start_controller')
+        self.wait_for_srv(self.pull_twist_start_cli)
+        self.pull_twist_start_req = Empty.Request()
+
+        self.pull_twist_stop_cli = self.create_client(Empty, 'pull_twist/stop_controller')
+        self.wait_for_srv(self.pull_twist_stop_cli)
+        self.pull_twist_stop_req = Empty.Request()
         
         self.subscriber = self.create_subscription(WrenchStamped, '/force_torque_sensor_broadcaster/wrench', self.wrench_callback, 10)
         self.pressure_subscriber = self.create_subscription(UInt16, '/pressure', self.pressure_callback, 10)
@@ -66,11 +78,14 @@ class EventDetector(Node):
 
         self.future = self.stop_controller_cli.call_async(self.stop_controller_req)
         rclpy.spin_until_future_complete(self, self.future)
+
+        self.future = self.pull_twist_stop_cli.call_async(self.pull_twist_stop_req)
+        rclpy.spin_until_future_complete(self, self.future)
         
         self.clear_trial()
-        
     
     def wrench_callback(self,msg):
+        
         wrench = msg.wrench 
 
         current_force = np.array([wrench.force.x, wrench.force.y,
