@@ -29,6 +29,12 @@ class StartHarvest(Node):
         while not self.start_servo_client.wait_for_service(timeout_sec=1.0):
             self.get_logger().info("Start moveit servo service not available, waiting...")
 
+        # Service to change planning frame of servo mode
+        self.configure_servo_cli = self.create_client(SetParameters, '/servo_node/set_parameters')
+        while not self.configure_servo_cli.wait_for_service(timeout_sec=1.0):
+            self.get_logger().info('service not available, waiting again...')
+        self.req = SetParameters.Request()
+
         # Service to start visual servo
         self.start_vservo_client = self.create_client(Trigger, "/start_visual_servo", callback_group=m_callback_group)
         while not self.start_vservo_client.wait_for_service(timeout_sec=1.0):
@@ -37,7 +43,7 @@ class StartHarvest(Node):
         # Service to start visual servo
         self.start_apple_prediction_client = self.create_client(ApplePrediction, "/apple_prediction", callback_group=m_callback_group)
         while not self.start_apple_prediction_client.wait_for_service(timeout_sec=1.0):
-            self.get_logger().info("Start visual servo service not available, waiting...")
+            self.get_logger().info("Start visual servo service not available, waiting...")        
 
         # TODO: ADD MARCUS AND ALEJO SERVICE CLIENTS
         # Service to move arm to home
@@ -89,6 +95,13 @@ class StartHarvest(Node):
         self.future = self.start_servo_client.call_async(self.request)
         rclpy.spin_until_future_complete(self, self.future) 
         return self.future.result()
+
+    def configure_servo(self, frame):
+        # Changes planning frame of the servo node
+        #arguments: "base_link" for base frame, "tool0" for tool frame
+        new_param_value = ParameterValue(type=ParameterType.PARAMETER_STRING, string_value=frame)
+        self.req.parameters = [Parameter(name='moveit_servo.robot_link_command_frame', value=new_param_value)]
+        self.future = self.configure_servo_cli.call_async(self.req)
     
     def start_apple_prediction(self):
         # Starts servo node
