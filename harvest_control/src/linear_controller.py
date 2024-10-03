@@ -2,6 +2,7 @@ import numpy as np
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Vector3, TwistStamped
+from std_msgs.msg import Bool
 from std_srvs.srv import Empty
 
 
@@ -15,6 +16,7 @@ class LinController(Node):
         self.vel_cmd = Vector3() # * 0.6 m/s
 
         self.publisher = self.create_publisher(TwistStamped, '/servo_node/delta_twist_cmds', 10)
+        self.status_publisher = self.create_publisher(Bool, '/linear/status', 10)
 
         self.timer = self.create_timer(0.01, self.timer_callback)
         
