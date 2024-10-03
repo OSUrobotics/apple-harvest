@@ -2,7 +2,7 @@ import numpy as np
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Vector3, WrenchStamped, TwistStamped, TransformStamped
-from std_msgs.msg import Float64
+from std_msgs.msg import Float64, Bool
 from apple_msgs.srv import SetValue
 from std_srvs.srv import Empty
 from scipy.spatial.transform import Rotation
@@ -29,6 +29,7 @@ class PickController(Node):
         self.cmd_publisher = self.create_publisher(TwistStamped, '/servo_node/delta_twist_cmds', 10)
         self.goal_publisher = self.create_publisher(Float64, '/hc_force_goal', 10)
         self.tangent_publisher = self.create_publisher(Vector3, '/hc_tangent', 10)
+        self.status_publisher = self.create_publisher(Bool, '/force_heuristic/status', 10)
 
         self.timer = self.create_timer(0.01, self.timer_callback)
         
@@ -112,6 +113,10 @@ class PickController(Node):
             msg3.y = self.last_t[1]
             msg3.z = self.last_t[2]
             self.tangent_publisher.publish(msg3)
+
+        msg4 = Bool()
+        msg4.data = self.running
+        self.status_publisher.publish(msg4)
 
     ## HELPERS
 
