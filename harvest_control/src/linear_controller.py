@@ -23,7 +23,7 @@ class LinController(Node):
         self.max_iter = 1500
 
         self.approach_service = self.create_service(Empty, 'linear/approach', self.approach)
-        self.pull_service = self.create_service(Empty, 'linear/pull', self.pull)
+        self.pull_service = self.create_service(Empty, 'linear/start_controller', self.pull)
         self.stop_service = self.create_service(Empty, 'linear/stop_controller', self.stop)
 
         self.dir = -1.0 #negative = pull, positive = approach
