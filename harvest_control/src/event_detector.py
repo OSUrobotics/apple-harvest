@@ -67,7 +67,7 @@ class EventDetector(Node):
         #expects a scalar as a message
         pressure = msg.data 
 
-        self.pressure_memory.append(pressure)
+        self.pressure_memory.insert(0,pressure)
         if len(self.pressure_memory) > self.window:
             self.pressure_memory = self.pressure_memory[0:self.window]
             
