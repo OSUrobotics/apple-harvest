@@ -12,6 +12,7 @@ from harvest_interfaces.srv import ApplePrediction, CoordinateToTrajectory, Send
 from controller_manager_msgs.srv import SwitchController
 # Python 
 import numpy as np
+import time
 
 class StartHarvest(Node):
 
@@ -71,6 +72,12 @@ class StartHarvest(Node):
 
         self.pull_twist_stop_cli = self.create_client(Empty, 'pull_twist/stop_controller')
         self.wait_for_srv(self.pull_twist_stop_cli)
+
+        self.linear_pull_start_cli = self.create_client(Empty, 'linear/start_controller')
+        self.wait_for_srv(self.linear_pull_start_cli)
+
+        self.linear_pull_stop_cli = self.create_client(Empty, 'linear/stop_controller')
+        self.wait_for_srv(self.linear_pull_stop_cli)
 
         self.event_detection_start_cli = self.create_client(Empty, 'start_detection')
         self.wait_for_srv(self.event_detection_start_cli)
@@ -205,15 +212,35 @@ class StartHarvest(Node):
 
             #activate pick controller
             if PICK_PATTERN == 'force-heuristic':
-                pass
+                
+                self.future = self.start_controller_cli.call_async(req)
+                rclpy.spin_until_future_complete(self, self.future)
+                time.sleep(5)
+                self.future = self.stop_controller_cli.call_async(req)
+                rclpy.spin_until_future_complete(self, self.future)
+                
             elif PICK_PATTERN == 'pull-twist':
-                pass
+                
+                self.future = self.pull_twist_start_cli.call_async(req)
+                rclpy.spin_until_future_complete(self, self.future)
+                time.sleep(5)
+                self.future = self.pull_twist_stop_cli.call_async(req)
+                rclpy.spin_until_future_complete(self, self.future)
+                
+                
             elif PICK_PATTERN == 'linear-pull':
-                pass
+                
+                self.future = self.linear_pull_start_cli.call_async(req)
+                rclpy.spin_until_future_complete(self, self.future)
+                time.sleep(5)
+                self.future = self.linear_pull_stop_cli.call_async(req)
+                rclpy.spin_until_future_complete(self, self.future)
+                
+                
             else:
                 self.get_logger().info(f'No valid control scheme set')
 
-            #todo: restart when event is detected
+            #todo: restart when event is detected (currently is on a timer)
             
             self.get_logger().info(f'Resetting arm to home position')
             self.go_to_home()
