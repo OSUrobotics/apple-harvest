@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 import numpy as np
 import rclpy
 from rclpy.node import Node
@@ -57,15 +59,18 @@ class PTController(Node):
 
         msg = TwistStamped()
         msg.header.stamp = self.get_clock().now().to_msg()
-        msg.header.frame_id = "tool0"
+        msg.header.frame_id = "base_link"
 
         if self.running:
 
             msg.twist.linear.x = self.max_velocity * self.preferred_pull[0]
             msg.twist.linear.y = self.max_velocity * self.preferred_pull[1]
             msg.twist.linear.z = self.max_velocity * self.preferred_pull[2]
-            msg.twist.angular.z = 1.0
             
+            msg.twist.angular.x = self.preffered_twist[0]
+            msg.twist.angular.y = self.preffered_twist[1]
+            msg.twist.angular.z = self.preffered_twist[2]
+
             self.publisher.publish(msg)
 
        
@@ -80,6 +85,10 @@ class PTController(Node):
         r = Rotation.from_quat(quat_vec)
         self.R = r.as_matrix()
 
+        self.preffered_twist = -1 * self.R[0:3, 2] 
+
+        # self.preffered_twist = -1 * quat_vec
+
         self.preferred_pull = -1 * np.array(position_vec) / np.linalg.norm(position_vec)
 
     
@@ -89,7 +98,6 @@ def main():
     rclpy.init()
 
     node = PTController()
-    node.configure_servo()
 
     rclpy.spin(node)
 

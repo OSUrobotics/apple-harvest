@@ -1,9 +1,11 @@
+#!/usr/bin/env python3
+
 import numpy as np
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Vector3, WrenchStamped, TwistStamped, TransformStamped
 from std_msgs.msg import Float64, Bool
-from apple_msgs.srv import SetValue
+from harvest_interfaces.srv import SetValue
 from std_srvs.srv import Empty
 from scipy.spatial.transform import Rotation
 from rcl_interfaces.msg import Parameter, ParameterValue, ParameterType
@@ -95,7 +97,7 @@ class PickController(Node):
 
         msg = TwistStamped()
         msg.header.stamp = self.get_clock().now().to_msg()
-        msg.header.frame_id = "tool0"
+        msg.header.frame_id = "base_link"
 
         if self.running:
 
@@ -136,7 +138,7 @@ class PickController(Node):
                 if (np.abs(e_f) <= 1): #np.abs(e_f) <= 0.02 * self.goal) or 
                     u = 0.0
             else:
-                u = e_f + 0.5* (e_f - e_f_prev)
+                u = e_f + 0.5* (e_f - self.e_f_prev)
 
             new_dir = np.tanh(u) * n_hat + (1-np.tanh(np.abs(u))) * t_hat
             new = self.max_velocity * new_dir / np.linalg.norm(new_dir)
@@ -184,7 +186,6 @@ def main():
     rclpy.init()
 
     node = PickController()
-    node.configure_servo()
 
     rclpy.spin(node)
 

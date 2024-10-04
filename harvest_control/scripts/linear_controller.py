@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 import numpy as np
 import rclpy
 from rclpy.node import Node
@@ -10,7 +12,7 @@ class LinController(Node):
     
     def __init__(self):
         
-        super().__init__('pull_twist_controller')
+        super().__init__('linear_controller')
         
         self.max_velocity = 0.1 # * 0.6 m/s
         self.vel_cmd = Vector3() # * 0.6 m/s

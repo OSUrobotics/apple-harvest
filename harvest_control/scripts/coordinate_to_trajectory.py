@@ -185,7 +185,7 @@ class CoordinateToTrajectoryService(Node):
 
         if response.success:
             # Send trajectory message to MoveIt
-            self.trigger_arm_mover(self.traj_msg)
+            # self.trigger_arm_mover(self.traj_msg)
 
             self.current_joint_config = traj[-1]
 

@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 import numpy as np
 import rclpy
 from rclpy.node import Node
@@ -31,7 +33,7 @@ class PressureAverager(Node):
     def timer_callback(self):
         out_pressure = UInt16()
         out = int(np.round(np.linalg.norm(self.pressures)))
-        self.get_logger().info("{}".format(out))
+        # self.get_logger().info("{}".format(out))
         out_pressure.data = out
         self.publisher.publish(out_pressure)
 

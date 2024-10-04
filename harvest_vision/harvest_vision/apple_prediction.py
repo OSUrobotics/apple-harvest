@@ -81,7 +81,7 @@ class ApplePredictionRS(Node):
         self.debug_flag = False
         self.marker_counter = 0
         self.ransac_thresh = .0001
-        self.ransac_iters = 10000
+        self.ransac_iters = 1000
         self.apple_centers = None
         self.apple_radii = None
         self.c2 = 0
