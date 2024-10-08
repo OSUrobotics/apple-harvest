@@ -49,7 +49,7 @@ class StartHarvest(Node):
 
         # TODO: ADD MARCUS AND ALEJO SERVICE CLIENTS
         # Service to move arm to home
-        self.start_move_arm_to_home_client = self.create_client(Empty, "/move_arm_to_home", callback_group=m_callback_group)
+        self.start_move_arm_to_home_client = self.create_client(Trigger, "/move_arm_to_home", callback_group=m_callback_group)
         while not self.start_move_arm_to_home_client.wait_for_service(timeout_sec=1.0):
             self.get_logger().info("Start move arm to home service not available, waiting...")
 
@@ -149,7 +149,8 @@ class StartHarvest(Node):
     
     def go_to_home(self):
         # Starts go to home
-        self.request = Empty.Request()
+        # self.request = Empty.Request()
+        self.request = Trigger.Request()
         self.future = self.start_move_arm_to_home_client.call_async(self.request)
         rclpy.spin_until_future_complete(self, self.future) 
         return self.future.result()
