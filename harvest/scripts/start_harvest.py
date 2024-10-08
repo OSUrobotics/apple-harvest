@@ -6,12 +6,15 @@ from rclpy.node import Node
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 # Interfaces
+from rcl_interfaces.msg import Parameter, ParameterValue, ParameterType
+from rcl_interfaces.srv import SetParameters, GetParameters, ListParameters
 from std_srvs.srv import Trigger, Empty
 from geometry_msgs.msg import Point
 from harvest_interfaces.srv import ApplePrediction, CoordinateToTrajectory, SendTrajectory
 from controller_manager_msgs.srv import SwitchController
 # Python 
 import numpy as np
+import time
 
 class StartHarvest(Node):
 
@@ -29,6 +32,11 @@ class StartHarvest(Node):
         while not self.start_servo_client.wait_for_service(timeout_sec=1.0):
             self.get_logger().info("Start moveit servo service not available, waiting...")
 
+        # Service to change planning frame of servo mode
+        self.configure_servo_cli = self.create_client(SetParameters, '/servo_node/set_parameters')
+        while not self.configure_servo_cli.wait_for_service(timeout_sec=1.0):
+            self.get_logger().info('service not available, waiting again...')
+
         # Service to start visual servo
         self.start_vservo_client = self.create_client(Trigger, "/start_visual_servo", callback_group=m_callback_group)
         while not self.start_vservo_client.wait_for_service(timeout_sec=1.0):
@@ -37,7 +45,7 @@ class StartHarvest(Node):
         # Service to start visual servo
         self.start_apple_prediction_client = self.create_client(ApplePrediction, "/apple_prediction", callback_group=m_callback_group)
         while not self.start_apple_prediction_client.wait_for_service(timeout_sec=1.0):
-            self.get_logger().info("Start visual servo service not available, waiting...")
+            self.get_logger().info("Start visual servo service not available, waiting...")        
 
         # TODO: ADD MARCUS AND ALEJO SERVICE CLIENTS
         # Service to move arm to home
@@ -53,7 +61,40 @@ class StartHarvest(Node):
         while not self.trigger_arm_mover_client.wait_for_service(timeout_sec=1.0):
             self.get_logger().info('Waiting for execute_arm_trajectory to be available...')
 
+        #Services for Miranda's pick controllers 
 
+        self.start_controller_cli = self.create_client(Empty, 'start_controller')
+        self.wait_for_srv(self.start_controller_cli)
+
+        self.stop_controller_cli = self.create_client(Empty, 'stop_controller')
+        self.wait_for_srv(self.stop_controller_cli)
+
+        self.pull_twist_start_cli = self.create_client(Empty, 'pull_twist/start_controller')
+        self.wait_for_srv(self.pull_twist_start_cli)
+
+        self.pull_twist_stop_cli = self.create_client(Empty, 'pull_twist/stop_controller')
+        self.wait_for_srv(self.pull_twist_stop_cli)
+
+        self.linear_pull_start_cli = self.create_client(Empty, 'linear/start_controller')
+        self.wait_for_srv(self.linear_pull_start_cli)
+
+        self.linear_pull_stop_cli = self.create_client(Empty, 'linear/stop_controller')
+        self.wait_for_srv(self.linear_pull_stop_cli)
+
+        self.event_detection_start_cli = self.create_client(Empty, 'start_detection')
+        self.wait_for_srv(self.event_detection_start_cli)
+
+        self.event_detection_stop_cli = self.create_client(Empty, 'stop_detection')
+        self.wait_for_srv(self.event_detection_stop_cli)
+
+        #Parameters
+        self.PICK_PATTERN = 'pull-twist' 
+
+    def wait_for_srv(self, srv):
+        #service waiter because Miranda is lazy :3
+        while not srv.wait_for_service(timeout_sec=1.0):
+            self.get_logger().info('service not available, waiting again...')
+            
     def start_visual_servo(self):
         # Starts global planning sequence
         self.request = Trigger.Request()
@@ -89,6 +130,15 @@ class StartHarvest(Node):
         self.future = self.start_servo_client.call_async(self.request)
         rclpy.spin_until_future_complete(self, self.future) 
         return self.future.result()
+
+    def configure_servo(self, frame):
+        # Changes planning frame of the servo node
+        #arguments: "base_link" for base frame, "tool0" for tool frame
+        req = SetParameters.Request()
+
+        new_param_value = ParameterValue(type=ParameterType.PARAMETER_STRING, string_value=frame)
+        req.parameters = [Parameter(name='moveit_servo.robot_link_command_frame', value=new_param_value)]
+        self.future = self.configure_servo_cli.call_async(req)
     
     def start_apple_prediction(self):
         # Starts servo node
@@ -158,9 +208,63 @@ class StartHarvest(Node):
             # TODO: ALEJO SERVICE CALL
             # TODO: FINAL APPROACH
             # TODO: FINAL RETREAT AND PLACEMENt OF APPLE
-            self.get_logger().info(f'Starting retreat sequence')
+            # self.get_logger().info(f'Starting retreat sequence')
+
+            #start event detection
+            req = Empty.Request()
+            # self.future = self.event_detection_start_cli.call_async(req)
+            # rclpy.spin_until_future_complete(self, self.future)
+
+            self.get_logger().info(f'Starting pick controller')
+            self.get_logger().info(f'Switching controller to forward_position_controller.')
+            self.switch_controller(servo=True, sim=False)
+            self.get_logger().info(f'Starting servo node.')
+            self.start_servo()
+            self.get_logger().info(f'Activating {self.PICK_PATTERN} controller')
+            self.get_logger().info(f'Configuring servo planning in base_link frame')
+            self.configure_servo('base_link')
+
+            # Pick Controller
+            if self.PICK_PATTERN == 'force-heuristic':
+                
+                self.future = self.start_controller_cli.call_async(req)
+                rclpy.spin_until_future_complete(self, self.future)
+                time.sleep(5)
+                self.future = self.stop_controller_cli.call_async(req)
+                rclpy.spin_until_future_complete(self, self.future)
+                
+            elif self.PICK_PATTERN == 'pull-twist':
+                
+                self.future = self.pull_twist_start_cli.call_async(req)
+                rclpy.spin_until_future_complete(self, self.future)
+                time.sleep(5)
+                self.future = self.pull_twist_stop_cli.call_async(req)
+                rclpy.spin_until_future_complete(self, self.future)
+                
+                
+            elif self.PICK_PATTERN == 'linear-pull':
+                
+                self.future = self.linear_pull_start_cli.call_async(req)
+                rclpy.spin_until_future_complete(self, self.future)
+                time.sleep(5)
+                self.future = self.linear_pull_stop_cli.call_async(req)
+                rclpy.spin_until_future_complete(self, self.future)
+                
+            else:
+                self.get_logger().info(f'No valid control scheme set')
+
+            self.get_logger().info(f'Configuring servo planning in base_link frame')
+            self.configure_servo('tool0')
+            self.get_logger().info(f'Switching controller back to scaled_joint_trajectory_controller.')
+            self.switch_controller(servo=False, sim=False)
+
+
+
+            #todo: restart when event is detected (currently is on a timer)
+            
             self.get_logger().info(f'Resetting arm to home position')
             self.go_to_home()
+            
         self.get_logger().info(f'Test Complete.')
 
 def main(args=None):
