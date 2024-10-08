@@ -13,6 +13,7 @@
 #include <geometry_msgs/msg/transform_stamped.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include "std_srvs/srv/empty.hpp"
+#include <std_srvs/srv/trigger.hpp>
 
 // Read data packages
 #include <iostream>
@@ -20,7 +21,6 @@
 #include <vector>
 #include <stdexcept>
 #include <cmath>               // For M_PI
-#include <jsoncpp/json/json.h> // JSON library to save configurations
 
 using std::placeholders::_1;
 using std::placeholders::_2;
@@ -30,13 +30,12 @@ class MoveArmNode : public rclcpp::Node
 {
 public:
     MoveArmNode();
-    void printToolExtensionLocation();
 
 private:
     rclcpp::Service<harvest_interfaces::srv::SendTrajectory>::SharedPtr arm_trajectory_service_;
     rclcpp::Service<harvest_interfaces::srv::MoveToPose>::SharedPtr arm_to_pose_service_;
-    rclcpp::Service<std_srvs::srv::Empty>::SharedPtr arm_to_home_service_;
-    rclcpp::Service<std_srvs::srv::Empty>::SharedPtr arm_to_config_service_;
+    rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr arm_to_home_service_;
+    rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr arm_to_config_service_;
 
     std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
     std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
@@ -54,12 +53,10 @@ private:
                             std::shared_ptr<harvest_interfaces::srv::SendTrajectory::Response> response);
     void move_to_pose(const std::shared_ptr<harvest_interfaces::srv::MoveToPose::Request> request,
                       std::shared_ptr<harvest_interfaces::srv::MoveToPose::Response> response);
-    void move_to_home(const std::shared_ptr<std_srvs::srv::Empty::Request> request,
-                      std::shared_ptr<std_srvs::srv::Empty::Response> response);
-    void move_to_config(const std::shared_ptr<std_srvs::srv::Empty::Request> request,
-                      std::shared_ptr<std_srvs::srv::Empty::Response> response);
-
-    void save_joint_configuration_to_json(const std::vector<double>& joint_config, const std::string& filename);
+    void move_to_home(const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
+                      std::shared_ptr<std_srvs::srv::Trigger::Response> response);
+    void move_to_config(const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
+                      std::shared_ptr<std_srvs::srv::Trigger::Response> response);
 };
 
 MoveArmNode::MoveArmNode()
@@ -75,10 +72,10 @@ MoveArmNode::MoveArmNode()
     arm_to_pose_service_ = this->create_service<harvest_interfaces::srv::MoveToPose>(
         "move_arm_to_pose", std::bind(&MoveArmNode::move_to_pose, this, _1, _2));
 
-    arm_to_home_service_ = this->create_service<std_srvs::srv::Empty>(
+    arm_to_home_service_ = this->create_service<std_srvs::srv::Trigger>(
         "move_arm_to_home", std::bind(&MoveArmNode::move_to_home, this, _1, _2));
 
-    arm_to_config_service_ = this->create_service<std_srvs::srv::Empty>(
+    arm_to_config_service_ = this->create_service<std_srvs::srv::Trigger>(
         "move_arm_to_config", std::bind(&MoveArmNode::move_to_config, this, _1, _2));
 
     // Set velocity and acceleration limits
@@ -89,9 +86,11 @@ MoveArmNode::MoveArmNode()
     RCLCPP_INFO(this->get_logger(), "Move arm server ready");
 }
 
-void MoveArmNode::move_to_home(const std::shared_ptr<std_srvs::srv::Empty::Request> request,
-                               const std::shared_ptr<std_srvs::srv::Empty::Response> response)
+void MoveArmNode::move_to_home(const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
+                               const std::shared_ptr<std_srvs::srv::Trigger::Response> response)
 {
+    (void)request; // Suppress unused parameter warning
+
     // Set the home configuration as the target for the MoveGroup
     move_group_.setJointValueTarget(home_joint_positions);
 
@@ -103,18 +102,22 @@ void MoveArmNode::move_to_home(const std::shared_ptr<std_srvs::srv::Empty::Reque
     {
         move_group_.execute(plan);
         RCLCPP_INFO(this->get_logger(), "Moved to home configuration.");
-        // response->result = true;
+        response->success = true;
+        response->message = "Successfully moved to home configuration.";
     }
     else
     {
         RCLCPP_ERROR(this->get_logger(), "Failed to move to home configuration.");
-        // response->result = false;
+        response->success = false;
+        response->message = "Failed to move to home configuration.";
     }
 }
 
-void MoveArmNode::move_to_config(const std::shared_ptr<std_srvs::srv::Empty::Request> request,
-                                 const std::shared_ptr<std_srvs::srv::Empty::Response> response)
+void MoveArmNode::move_to_config(const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
+                                 const std::shared_ptr<std_srvs::srv::Trigger::Response> response)
 {
+    (void)request; // Suppress unused parameter warning
+
     std::vector<double> target_config = {
         -2.35,
         4.88,
@@ -134,69 +137,13 @@ void MoveArmNode::move_to_config(const std::shared_ptr<std_srvs::srv::Empty::Req
     {
         move_group_.execute(plan);
         RCLCPP_INFO(this->get_logger(), "Moved to target configuration.");
-
-        // Save joint configurations to JSON
-        std::ofstream file("joint_trajectory.json");
-        if (!file.is_open())
-        {
-            RCLCPP_ERROR(this->get_logger(), "Failed to open file for writing");
-            // response->success = false;
-            return;
-        }
-
-        // Create JSON array
-        Json::Value json_root(Json::arrayValue);
-
-        // Add configurations to JSON array
-        for (const auto& point : plan.trajectory_.joint_trajectory.points)
-        {
-            Json::Value json_point(Json::arrayValue);
-            for (const auto& position : point.positions)
-            {
-                json_point.append(position);
-            }
-            json_root.append(json_point);
-        }
-
-        // Write JSON data to file
-        Json::StreamWriterBuilder writer;
-        std::string json_string = Json::writeString(writer, json_root);
-        file << json_string;
-        file.close();
-
-        RCLCPP_INFO(this->get_logger(), "Saved joint configurations to joint_trajectory.json");
-        // response->success = true;
+        response->success = true;
     }
     else
     {
         RCLCPP_ERROR(this->get_logger(), "Failed to move to target configuration.");
-        // response->success = false;
+        response->success = false;
     }
-}
-
-void MoveArmNode::save_joint_configuration_to_json(const std::vector<double>& joint_config, const std::string& filename)
-{
-    Json::Value root;
-    Json::Value joint_positions(Json::arrayValue);
-
-    for (const auto& pos : joint_config)
-    {
-        joint_positions.append(pos);
-    }
-
-    root["joint_positions"] = joint_positions;
-
-    std::ofstream file(filename);
-    if (!file.is_open())
-    {
-        RCLCPP_ERROR(this->get_logger(), "Failed to open file for writing: %s", filename.c_str());
-        return;
-    }
-
-    file << root;
-    file.close();
-
-    RCLCPP_INFO(this->get_logger(), "Joint configuration saved to %s", filename.c_str());
 }
 
 void MoveArmNode::move_to_pose(const std::shared_ptr<harvest_interfaces::srv::MoveToPose::Request> request,
@@ -232,39 +179,11 @@ void MoveArmNode::move_to_pose(const std::shared_ptr<harvest_interfaces::srv::Mo
     {
         this->move_group_.execute(goal);
 
-        // Now print the current location of the tool_extension frame
-        printToolExtensionLocation();
     }
     else
     {
         RCLCPP_ERROR(this->get_logger(), "Planing failed!");
         response->result = false;
-    }
-}
-
-void MoveArmNode::printToolExtensionLocation()
-{
-    try
-    {
-        // Get the transform from base_link to tool_extension
-        geometry_msgs::msg::TransformStamped transform_stamped;
-        transform_stamped = tf_buffer_->lookupTransform("base_link", "tool0", tf2::TimePointZero);
-
-        // Print the current position and orientation of tool_extension
-        RCLCPP_INFO(this->get_logger(), "Tool Extension Position: (x: %f, y: %f, z: %f)",
-                    transform_stamped.transform.translation.x,
-                    transform_stamped.transform.translation.y,
-                    transform_stamped.transform.translation.z);
-
-        RCLCPP_INFO(this->get_logger(), "Tool Extension Orientation: (x: %f, y: %f, z: %f, w: %f)",
-                    transform_stamped.transform.rotation.x,
-                    transform_stamped.transform.rotation.y,
-                    transform_stamped.transform.rotation.z,
-                    transform_stamped.transform.rotation.w);
-    }
-    catch (tf2::TransformException &ex)
-    {
-        RCLCPP_ERROR(this->get_logger(), "Could not transform: %s", ex.what());
     }
 }
 

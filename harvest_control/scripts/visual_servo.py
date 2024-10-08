@@ -66,6 +66,7 @@ class LocalPlanner(Node):
         self.first_servo = True
         ### MUST BE 0.0 unless moving forward and using TOF distance as a stopping condition.
         self.z_speed = 0.0
+        self.prev_pos = []
 
         ### Image Processing
         self.br = CvBridge()
@@ -206,7 +207,12 @@ class LocalPlanner(Node):
                 # find center of each bounding box and calculate distance to center of image
                 x,y,w,h = i.boxes.xyxy.cpu().numpy()[0]
                 apple_centers.append([(x + w)/2, (y+h)/2])
-                dist_to_apple = self.calculate_euclidean([width//2,height//2], apple_centers[-1])
+
+                if self.first_servo:
+                    dist_to_apple = self.calculate_euclidean([width//2,height//2], apple_centers[-1])
+                else: 
+                    dist_to_apple = self.calculate_euclidean(self.prev_pos, apple_centers[-1])
+
                 z_dist.append(dist_to_apple)
 
             if apple_centers:
@@ -226,6 +232,8 @@ class LocalPlanner(Node):
                 # get estimate from Kalman filter for closest apple location
                 state = self.kf_pos.x
                 closest_apple = [float(state[0][0]), float(state[3][0])]
+
+                self.prev_pos = closest_apple
 
                 # check if camera is centered on apple or not within our pixel target accuracy threshold, if it is then publish a 0 velocity and exit loop
                 if self.calculate_euclidean([width//2, height//2], closest_apple) < self.target_pixel_accuracy:
