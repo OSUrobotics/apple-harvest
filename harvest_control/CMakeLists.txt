@@ -7,6 +7,8 @@ endif()
 
 # find dependencies
 find_package(ament_cmake REQUIRED)
+find_package(ament_cmake_python REQUIRED)
+find_package(rclcpp REQUIRED)
 find_package(rclpy REQUIRED)
 find_package(moveit_servo REQUIRED)
 find_package(moveit REQUIRED)

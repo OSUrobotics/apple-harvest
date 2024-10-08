@@ -71,13 +71,17 @@ class CoordinateToTrajectoryService(Node):
         self.voxel_centers_orig = np.copy(self.voxel_centers)
         self.target_configurations = self.ik_data[:, :6]
 
-        # Define maximum distance tolerance between target location and precomputed voxel
-        self.distance_tol = 0.5
-
+        # Parameters
         # self.num_configs_in_traj = len(self.trajectories)
         self.num_configs_in_traj = 100
         self.y_peck_distance = 0.3
         self.traj_msg = None
+
+        self.declare_parameter("sim", False)
+        self.sim = self.get_parameter("sim").get_parameter_value().bool_value
+        self.get_logger().info(f'Simulation mode: {self.sim}')
+        self.declare_parameter("voxel_distance_tol", 0.5)
+        self.voxel_distance_tol = self.get_parameter("voxel_distance_tol").get_parameter_value().double_value
 
         self.get_logger().info('Coordinate to trajectory service up and running')
 
@@ -171,8 +175,8 @@ class CoordinateToTrajectoryService(Node):
         traj, distance_to_voxel, _ = self.trajectory_to_closest_voxel(point)
         self.get_logger().info(f'Distance to nearest voxel: {distance_to_voxel}')
 
-        if distance_to_voxel > self.distance_tol:
-            self.get_logger().error("Distance to nearest voxel exceeded the distance threshold. Cancelling trajectory execution...")
+        if distance_to_voxel > self.voxel_distance_tol:
+            self.get_logger().error(f"Distance to nearest voxel exceeded the distance threshold: {self.voxel_distance_tol}m. Cancelling trajectory execution...")
             response.success = False
         
         else:
@@ -184,8 +188,9 @@ class CoordinateToTrajectoryService(Node):
             response.waypoints = self.traj_msg
 
         if response.success:
-            # Send trajectory message to MoveIt
-            # self.trigger_arm_mover(self.traj_msg)
+            if self.sim:
+                # Send trajectory message to MoveIt
+                self.trigger_arm_mover(self.traj_msg)
 
             self.current_joint_config = traj[-1]
 
