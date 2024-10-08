@@ -53,6 +53,7 @@ ament_python_install_package(${PROJECT_NAME})
 
 # Install Python executables
 install(PROGRAMS
+  scripts/alejo_file_test.py
   scripts/coordinate_to_trajectory.py
   scripts/coordinate_to_trajectory_client.py
   scripts/visual_servo.py
