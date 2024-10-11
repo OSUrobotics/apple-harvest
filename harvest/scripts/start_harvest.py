@@ -53,6 +53,13 @@ class StartHarvest(Node):
         while not self.trigger_arm_mover_client.wait_for_service(timeout_sec=1.0):
             self.get_logger().info('Waiting for execute_arm_trajectory to be available...')
 
+        # Service client to Grasp Apple
+        self.grasp_apple_client = self.create_client(GraspApple, 'grasp_apple', callback_group=m_callback_group)
+        while not self.grasp_apple_client.wait_for_service(timeout_sec=1.0):
+            self.get_logger().info('Waiting for grasp_apple service to be available...')
+
+        
+
 
     def start_visual_servo(self):
         # Starts global planning sequence
@@ -131,6 +138,15 @@ class StartHarvest(Node):
         rclpy.spin_until_future_complete(self, future) 
         return future.result()
     
+    def grasp_apple(self):
+        request = Empty.Request()
+        
+        # Use async call
+        future = self.grasp_apple_client.call_async(request)
+        rclpy.spin_until_future_complete(self, future)
+        return future.result()        
+
+
     def start(self): 
         # TODO: CENTER ARM IN HOME POSITION
         self.get_logger().info(f'Resetting arm to home position')
@@ -153,11 +169,14 @@ class StartHarvest(Node):
             self.start_visual_servo()
             self.get_logger().info(f'Switching controller back to scaled_joint_trajectory_controller.')
             self.switch_controller(servo=False, sim=False)
-            self.get_logger().info(f'Starting final apple approach and suction cup servoing.')
-            # TODO: ALEJO SERVICE CALL
-            # TODO: FINAL APPROACH
-            # TODO: FINAL RETREAT AND PLACEMENt OF APPLE
-            self.get_logger().info(f'Starting retreat sequence')
+
+            self.get_logger().info(f'Starting final apple approach and suction cup servoing.')            
+            self.grasp_apple()
+            # TODO: ALEJO - SWITH CONTROLLERS?
+
+            self.get_logger().info(f'Starting retreat sequence')            
+            # TODO: MIRANDA - FINAL RETREAT AND PLACEMENt OF APPLE
+
             self.get_logger().info(f'Resetting arm to home position')
             self.go_to_home()
         self.get_logger().info(f'Test Complete.')
