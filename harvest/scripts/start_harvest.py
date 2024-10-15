@@ -13,7 +13,8 @@ from geometry_msgs.msg import Point
 from harvest_interfaces.srv import ApplePrediction, CoordinateToTrajectory, SendTrajectory
 from controller_manager_msgs.srv import SwitchController
 from rclpy.action import ActionClient
-from harvest_interfaces.action import EventDetector
+from action_msgs.msg import GoalStatus
+from harvest_interfaces.action import EventDetection
 
 # Python 
 import numpy as np
@@ -78,7 +79,7 @@ class StartHarvest(Node):
         self.linear_pull_stop_cli = self.create_client(Empty, 'linear/stop_controller')
         self.wait_for_srv(self.linear_pull_stop_cli)
 
-        self._event_client = ActionClient(self, EventDetector, 'event_detection')
+        self._event_client = ActionClient(self, EventDetection, 'event_detection')
 
         # Parameters
         self.PICK_PATTERN = 'pull-twist' 
@@ -90,14 +91,12 @@ class StartHarvest(Node):
         #service waiter because Miranda is lazy :3
         while not srv.wait_for_service(timeout_sec=1.0):
             self.get_logger().info('service not available, waiting again...')
-
-    # Event detection client!
     
     def start_detection(self):
 
         self.status = GoalStatus.STATUS_EXECUTING
 
-        goal_msg = EventDetector.Goal()
+        goal_msg = EventDetection.Goal()
         goal_msg.failure_ratio = (1.0 - self.EVENT_SENSITIVITY)
 
         self._event_client.wait_for_server()
@@ -110,9 +109,11 @@ class StartHarvest(Node):
         goal_handle = future.result()
         if not goal_handle.accepted:
             self.get_logger().info('Goal rejected :(')
+            self.status = GoalStatus.STATUS_ABORTED
             return
 
         self.get_logger().info('Goal accepted :)')
+        self.status = GoalStatus.STATUS_EXECUTING 
 
         self._get_result_future = goal_handle.get_result_async()
         self._get_result_future.add_done_callback(self.get_result_callback)
@@ -120,13 +121,15 @@ class StartHarvest(Node):
     def get_result_callback(self, future):
         result = future.result().result
         self.get_logger().info('Result: {0}'.format(result.finished))
-        self.status = GoalStatus.STATUS_SUCCEEDED
+
+        if result.finished:
+            self.status = GoalStatus.STATUS_SUCCEEDED 
+        else:
+            self.status = GoalStatus.STATUS_ABORTED
 
     def feedback_callback(self, feedback_msg):
         feedback = feedback_msg.feedback
         self.get_logger().info('Received feedback: {0}'.format(feedback.listening))
-            
-    # End client functions.
 
     def start_visual_servo(self):
         # Starts global planning sequence
@@ -226,7 +229,7 @@ class StartHarvest(Node):
         if self.PICK_PATTERN == 'force-heuristic':
             self.future = self.start_controller_cli.call_async(req)
             rclpy.spin_until_future_complete(self, self.future)
-            while !self.status == GoalStatus.STATUS_SUCCEEDED: #full disclosure, no idea if this works or if it gums up ROS
+            while self.status != GoalStatus.STATUS_SUCCEEDED: #full disclosure, no idea if this works or if it gums up ROS
                 pass
             self.future = self.stop_controller_cli.call_async(req)
             rclpy.spin_until_future_complete(self, self.future)
@@ -234,7 +237,7 @@ class StartHarvest(Node):
         elif self.PICK_PATTERN == 'pull-twist':
             self.future = self.pull_twist_start_cli.call_async(req)
             rclpy.spin_until_future_complete(self, self.future)
-            while !self.status == GoalStatus.STATUS_SUCCEEDED:
+            while self.status != GoalStatus.STATUS_SUCCEEDED:
                 pass
             self.future = self.pull_twist_stop_cli.call_async(req)
             rclpy.spin_until_future_complete(self, self.future)
@@ -242,7 +245,7 @@ class StartHarvest(Node):
         elif self.PICK_PATTERN == 'linear-pull':
             self.future = self.linear_pull_start_cli.call_async(req)
             rclpy.spin_until_future_complete(self, self.future)
-            while !self.status == GoalStatus.STATUS_SUCCEEDED:
+            while self.status != GoalStatus.STATUS_SUCCEEDED:
                 pass
             self.future = self.linear_pull_stop_cli.call_async(req)
             rclpy.spin_until_future_complete(self, self.future)
