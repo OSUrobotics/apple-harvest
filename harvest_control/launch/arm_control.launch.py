@@ -24,10 +24,10 @@ def generate_launch_description():
                                   description="Maximum distance tolerance between target coordinate and precomputed voxel coordinate."))
 
     ### move_arm node parameters
-    declared_arguments.append(DeclareLaunchArgument('max_vel', default_value="0.05", 
-                                  description="Set the max velocity of the UR5."))
     declared_arguments.append(DeclareLaunchArgument('max_accel', default_value="0.05", 
                                   description="Set the max accelleration of the UR5."))
+    declared_arguments.append(DeclareLaunchArgument('max_vel', default_value="0.05", 
+                                  description="Set the max velocity of the UR5."))
     declared_arguments.append(DeclareLaunchArgument('traj_time_step', default_value="0.05", 
                                   description="Time step (in seconds) between UR5 joint trajectory waypoints."))
 
@@ -91,5 +91,11 @@ def generate_launch_description():
             package='harvest_control',
             executable='move_arm',
             name='move_arm_node',
+            parameters=[
+                    {"max_accel": LaunchConfiguration("max_accel"),
+                     "max_vel": LaunchConfiguration("max_vel"),
+                     "traj_time_step": LaunchConfiguration("traj_time_step"),
+                      }
+                    ]
         ),
     ])

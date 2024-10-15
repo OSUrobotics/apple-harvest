@@ -7,7 +7,7 @@ from std_srvs.srv import Empty
 from std_msgs.msg import UInt16
 from geometry_msgs.msg import WrenchStamped
 import numpy as np
-from harvest_interfaces.action import EventDetector
+from harvest_interfaces.action import EventDetection
 import time
 
 class EventDetector(Node):
@@ -40,7 +40,7 @@ class EventDetector(Node):
         self.window = 10
         self.time_limit = 5.0 #MARCUS: change this if it's not pulling enough, or change the speed in the controller nodes
         
-        self.timer = self.create_timer(0.01, self.timer_callback)
+        # self.timer = self.create_timer(0.01, self.timer_callback)
         
         self.flag = False
         
@@ -57,7 +57,7 @@ class EventDetector(Node):
 
         self._action_server = ActionServer(
             self,
-            EventDetector,
+            EventDetection,
             'event_detector',
             self.execute_callback)
 
@@ -172,7 +172,7 @@ class EventDetector(Node):
 
         self.failure_ratio = goal_handle.request.failure_ratio
 
-        feedback_msg = EventDetector.Feedback()
+        feedback_msg = EventDetection.Feedback()
         feedback_msg.listening = True
 
         running = True
@@ -190,8 +190,8 @@ class EventDetector(Node):
 
         goal_handle.succeed()
 
-        result = EventDetector.Result()
-        result.finished = !running
+        result = EventDetection.Result()
+        result.finished != running
 
         return result
 

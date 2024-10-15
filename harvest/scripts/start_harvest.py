@@ -14,7 +14,7 @@ from harvest_interfaces.srv import ApplePrediction, CoordinateToTrajectory, Send
 from controller_manager_msgs.srv import SwitchController
 from rclpy.action import ActionClient
 from action_msgs.msg import GoalStatus
-from harvest_interfaces.action import EventDetector
+from harvest_interfaces.action import EventDetection
 
 # Python 
 import numpy as np
@@ -79,7 +79,7 @@ class StartHarvest(Node):
         self.linear_pull_stop_cli = self.create_client(Empty, 'linear/stop_controller')
         self.wait_for_srv(self.linear_pull_stop_cli)
 
-        self._event_client = ActionClient(self, EventDetector, 'event_detection')
+        self._event_client = ActionClient(self, EventDetection, 'event_detection')
 
         # Parameters
         self.PICK_PATTERN = 'pull-twist' 
@@ -96,7 +96,7 @@ class StartHarvest(Node):
 
         self.status = GoalStatus.STATUS_EXECUTING
 
-        goal_msg = EventDetector.Goal()
+        goal_msg = EventDetection.Goal()
         goal_msg.failure_ratio = (1.0 - self.EVENT_SENSITIVITY)
 
         self._event_client.wait_for_server()
