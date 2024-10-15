@@ -81,10 +81,18 @@ MoveArmNode::MoveArmNode()
     arm_to_config_service_ = this->create_service<std_srvs::srv::Empty>(
         "move_arm_to_config", std::bind(&MoveArmNode::move_to_config, this, _1, _2));
 
+    // // Set up parameters
+    // this->declare_parameter("max_accel", 0.05);
+    // this->declare_parameter("max_vel", 0.05);
+    // this->declare_parameter("traj_time_step", 0.05);
+
+    double max_accel = this->get_parameter("max_accel").as_double();
+    double max_vel = this->get_parameter("max_vel").as_double();
+
     // Set velocity and acceleration limits
     // NEED TO RESET TO 0.05 FOR HARDWARE!!!
-    this->move_group_.setMaxAccelerationScalingFactor(0.05);
-    this->move_group_.setMaxVelocityScalingFactor(0.05);
+    this->move_group_.setMaxAccelerationScalingFactor(max_accel);
+    this->move_group_.setMaxVelocityScalingFactor(max_vel);
 
     RCLCPP_INFO(this->get_logger(), "Move arm server ready");
 }
@@ -329,7 +337,8 @@ void MoveArmNode::execute_trajectory(const std::shared_ptr<harvest_interfaces::s
     point.time_from_start.nanosec = 0;
 
     double current_time = 0.0; // Start time
-    double time_step = 0.05;   // Time step between waypoints (seconds)
+    // double time_step = 0.05;   // Time step between waypoints (seconds)
+    double traj_time_step = this->get_parameter("traj_time_step").as_double();
 
     for (int i = 0; i < num_waypoints; ++i)
     {
@@ -348,7 +357,7 @@ void MoveArmNode::execute_trajectory(const std::shared_ptr<harvest_interfaces::s
 
         joint_trajectory.points.push_back(point);
 
-        current_time += time_step; // Increment time for the next waypoint
+        current_time += traj_time_step; // Increment time for the next waypoint
     }
 
     // Convert JointTrajectory to RobotTrajectory

@@ -15,8 +15,7 @@ find_package(geometry_msgs REQUIRED)
 
 
 rosidl_generate_interfaces(${PROJECT_NAME}
-  "srv/TextInRviz.srv"
-  "srv/GraspApple.srv"
+  "action/EventDetection.action"
   "srv/ApplePrediction.srv"
   "srv/SendTrajectory.srv"
   "srv/CoordinateToTrajectory.srv"

@@ -10,6 +10,10 @@ from std_srvs.srv import Trigger, Empty
 from geometry_msgs.msg import Point
 from harvest_interfaces.srv import ApplePrediction, CoordinateToTrajectory, SendTrajectory
 from controller_manager_msgs.srv import SwitchController
+from rclpy.action import ActionClient
+from action_msgs.msg import GoalStatus
+from harvest_interfaces.action import EventDetection
+
 # Python 
 import numpy as np
 
@@ -53,13 +57,72 @@ class StartHarvest(Node):
         while not self.trigger_arm_mover_client.wait_for_service(timeout_sec=1.0):
             self.get_logger().info('Waiting for execute_arm_trajectory to be available...')
 
-        # Service client to Grasp Apple
-        self.grasp_apple_client = self.create_client(GraspApple, 'grasp_apple', callback_group=m_callback_group)
-        while not self.grasp_apple_client.wait_for_service(timeout_sec=1.0):
-            self.get_logger().info('Waiting for grasp_apple service to be available...')
-
+        # TODO: ADD ALEJO SERVICE CLIENTS
         
+        # Interfaces for Miranda's pick controllers 
+        self.start_controller_cli = self.create_client(Empty, 'start_controller')
+        self.wait_for_srv(self.start_controller_cli)
 
+        self.pull_twist_start_cli = self.create_client(Empty, 'pull_twist/start_controller')
+        self.wait_for_srv(self.pull_twist_start_cli)
+
+        self.linear_pull_start_cli = self.create_client(Empty, 'linear/start_controller')
+        self.wait_for_srv(self.linear_pull_start_cli)
+
+        self.linear_pull_stop_cli = self.create_client(Empty, 'linear/stop_controller')
+        self.wait_for_srv(self.linear_pull_stop_cli)
+
+        self._event_client = ActionClient(self, EventDetection, 'event_detection')
+
+        # Parameters
+        self.PICK_PATTERN = 'pull-twist' 
+        self.EVENT_SENSITIVITY = 0.43 # a sensitivity of 1.0 will detect any deviation from perfection as failure
+
+        self.status = GoalStatus.STATUS_EXECUTING
+
+    def wait_for_srv(self, srv):
+        #service waiter because Miranda is lazy :3
+        while not srv.wait_for_service(timeout_sec=1.0):
+            self.get_logger().info('service not available, waiting again...')
+    
+    def start_detection(self):
+
+        self.status = GoalStatus.STATUS_EXECUTING
+
+        goal_msg = EventDetection.Goal()
+        goal_msg.failure_ratio = (1.0 - self.EVENT_SENSITIVITY)
+
+        self._event_client.wait_for_server()
+
+        self._send_goal_future = self._event_client.send_goal_async(goal_msg)
+
+        self._send_goal_future.add_done_callback(self.goal_response_callback)
+
+    def goal_response_callback(self, future):
+        goal_handle = future.result()
+        if not goal_handle.accepted:
+            self.get_logger().info('Goal rejected :(')
+            self.status = GoalStatus.STATUS_ABORTED
+            return
+
+        self.get_logger().info('Goal accepted :)')
+        self.status = GoalStatus.STATUS_EXECUTING 
+
+        self._get_result_future = goal_handle.get_result_async()
+        self._get_result_future.add_done_callback(self.get_result_callback)
+
+    def get_result_callback(self, future):
+        result = future.result().result
+        self.get_logger().info('Result: {0}'.format(result.finished))
+
+        if result.finished:
+            self.status = GoalStatus.STATUS_SUCCEEDED 
+        else:
+            self.status = GoalStatus.STATUS_ABORTED
+
+    def feedback_callback(self, feedback_msg):
+        feedback = feedback_msg.feedback
+        self.get_logger().info('Received feedback: {0}'.format(feedback.listening))
 
     def start_visual_servo(self):
         # Starts global planning sequence
@@ -138,15 +201,42 @@ class StartHarvest(Node):
         rclpy.spin_until_future_complete(self, future) 
         return future.result()
     
-    def grasp_apple(self):
-        request = Empty.Request()
+    def event_detection(self):
+        # Start event detection
+        req = Empty.Request()
+        self.future = self.event_detection_start_cli.call_async(req)
+        rclpy.spin_until_future_complete(self, self.future)
+    
+    def pick_controller(self):
+        req = Empty.Request()
         
-        # Use async call
-        future = self.grasp_apple_client.call_async(request)
-        rclpy.spin_until_future_complete(self, future)
-        return future.result()        
-
-
+        if self.PICK_PATTERN == 'force-heuristic':
+            self.future = self.start_controller_cli.call_async(req)
+            rclpy.spin_until_future_complete(self, self.future)
+            while self.status != GoalStatus.STATUS_SUCCEEDED: #full disclosure, no idea if this works or if it gums up ROS
+                pass
+            self.future = self.stop_controller_cli.call_async(req)
+            rclpy.spin_until_future_complete(self, self.future)
+            
+        elif self.PICK_PATTERN == 'pull-twist':
+            self.future = self.pull_twist_start_cli.call_async(req)
+            rclpy.spin_until_future_complete(self, self.future)
+            while self.status != GoalStatus.STATUS_SUCCEEDED:
+                pass
+            self.future = self.pull_twist_stop_cli.call_async(req)
+            rclpy.spin_until_future_complete(self, self.future)
+            
+        elif self.PICK_PATTERN == 'linear-pull':
+            self.future = self.linear_pull_start_cli.call_async(req)
+            rclpy.spin_until_future_complete(self, self.future)
+            while self.status != GoalStatus.STATUS_SUCCEEDED:
+                pass
+            self.future = self.linear_pull_stop_cli.call_async(req)
+            rclpy.spin_until_future_complete(self, self.future)
+            
+        else:
+            self.get_logger().info(f'No valid control scheme set')
+    
     def start(self): 
         # TODO: CENTER ARM IN HOME POSITION
         self.get_logger().info(f'Resetting arm to home position')
@@ -170,13 +260,30 @@ class StartHarvest(Node):
             self.get_logger().info(f'Switching controller back to scaled_joint_trajectory_controller.')
             self.switch_controller(servo=False, sim=False)
 
-            self.get_logger().info(f'Starting final apple approach and suction cup servoing.')            
-            self.grasp_apple()
-            # TODO: ALEJO - SWITH CONTROLLERS?
+            # TODO: ALEJO SERVICE CALL
+            self.get_logger().info(f'Starting final apple approach and suction cup servoing.')
+            # TODO: FINAL APPROACH
 
-            self.get_logger().info(f'Starting retreat sequence')            
-            # TODO: MIRANDA - FINAL RETREAT AND PLACEMENt OF APPLE
+            self.get_logger().info('Starting event detection.')
+            self.start_detection()
 
+            self.get_logger().info(f'Starting pick controller')
+            self.get_logger().info(f'Switching controller to forward_position_controller.')
+            self.switch_controller(servo=True, sim=False)
+            self.get_logger().info(f'Starting servo node.')
+            self.start_servo()
+            self.get_logger().info(f'Configuring servo planning in base_link frame')
+            self.configure_servo('base_link')
+            self.get_logger().info(f'Activating {self.PICK_PATTERN} controller')
+            self.pick_controller()
+
+            self.get_logger().info(f'Configuring servo planning in tool0 frame')
+            self.configure_servo('tool0')
+            self.get_logger().info(f'Switching controller back to scaled_joint_trajectory_controller.')
+            self.switch_controller(servo=False, sim=False)
+
+            #todo: restart when event is detected (currently is on a timer)
+            
             self.get_logger().info(f'Resetting arm to home position')
             self.go_to_home()
         self.get_logger().info(f'Test Complete.')
