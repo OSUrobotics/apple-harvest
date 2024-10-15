@@ -12,6 +12,9 @@ from std_srvs.srv import Trigger, Empty
 from geometry_msgs.msg import Point
 from harvest_interfaces.srv import ApplePrediction, CoordinateToTrajectory, SendTrajectory
 from controller_manager_msgs.srv import SwitchController
+from rclpy.action import ActionClient
+from harvest_interfaces.action import EventDetector
+
 # Python 
 import numpy as np
 import time
@@ -62,18 +65,12 @@ class StartHarvest(Node):
 
         # TODO: ADD ALEJO SERVICE CLIENTS
         
-        # Services for Miranda's pick controllers 
+        # Interfaces for Miranda's pick controllers 
         self.start_controller_cli = self.create_client(Empty, 'start_controller')
         self.wait_for_srv(self.start_controller_cli)
 
-        self.stop_controller_cli = self.create_client(Empty, 'stop_controller')
-        self.wait_for_srv(self.stop_controller_cli)
-
         self.pull_twist_start_cli = self.create_client(Empty, 'pull_twist/start_controller')
         self.wait_for_srv(self.pull_twist_start_cli)
-
-        self.pull_twist_stop_cli = self.create_client(Empty, 'pull_twist/stop_controller')
-        self.wait_for_srv(self.pull_twist_stop_cli)
 
         self.linear_pull_start_cli = self.create_client(Empty, 'linear/start_controller')
         self.wait_for_srv(self.linear_pull_start_cli)
@@ -81,20 +78,56 @@ class StartHarvest(Node):
         self.linear_pull_stop_cli = self.create_client(Empty, 'linear/stop_controller')
         self.wait_for_srv(self.linear_pull_stop_cli)
 
-        self.event_detection_start_cli = self.create_client(Empty, 'start_detection')
-        self.wait_for_srv(self.event_detection_start_cli)
-
-        self.event_detection_stop_cli = self.create_client(Empty, 'stop_detection')
-        self.wait_for_srv(self.event_detection_stop_cli)
+        self._event_client = ActionClient(self, EventDetector, 'event_detection')
 
         # Parameters
         self.PICK_PATTERN = 'pull-twist' 
+        self.EVENT_SENSITIVITY = 0.43 # a sensitivity of 1.0 will detect any deviation from perfection as failure
+
+        self.status = GoalStatus.STATUS_EXECUTING
 
     def wait_for_srv(self, srv):
         #service waiter because Miranda is lazy :3
         while not srv.wait_for_service(timeout_sec=1.0):
             self.get_logger().info('service not available, waiting again...')
+
+    # Event detection client!
+    
+    def start_detection(self):
+
+        self.status = GoalStatus.STATUS_EXECUTING
+
+        goal_msg = EventDetector.Goal()
+        goal_msg.failure_ratio = (1.0 - self.EVENT_SENSITIVITY)
+
+        self._event_client.wait_for_server()
+
+        self._send_goal_future = self._event_client.send_goal_async(goal_msg)
+
+        self._send_goal_future.add_done_callback(self.goal_response_callback)
+
+    def goal_response_callback(self, future):
+        goal_handle = future.result()
+        if not goal_handle.accepted:
+            self.get_logger().info('Goal rejected :(')
+            return
+
+        self.get_logger().info('Goal accepted :)')
+
+        self._get_result_future = goal_handle.get_result_async()
+        self._get_result_future.add_done_callback(self.get_result_callback)
+
+    def get_result_callback(self, future):
+        result = future.result().result
+        self.get_logger().info('Result: {0}'.format(result.finished))
+        self.status = GoalStatus.STATUS_SUCCEEDED
+
+    def feedback_callback(self, feedback_msg):
+        feedback = feedback_msg.feedback
+        self.get_logger().info('Received feedback: {0}'.format(feedback.listening))
             
+    # End client functions.
+
     def start_visual_servo(self):
         # Starts global planning sequence
         self.request = Trigger.Request()
@@ -193,21 +226,24 @@ class StartHarvest(Node):
         if self.PICK_PATTERN == 'force-heuristic':
             self.future = self.start_controller_cli.call_async(req)
             rclpy.spin_until_future_complete(self, self.future)
-            time.sleep(5)
+            while !self.status == GoalStatus.STATUS_SUCCEEDED: #full disclosure, no idea if this works or if it gums up ROS
+                pass
             self.future = self.stop_controller_cli.call_async(req)
             rclpy.spin_until_future_complete(self, self.future)
             
         elif self.PICK_PATTERN == 'pull-twist':
             self.future = self.pull_twist_start_cli.call_async(req)
             rclpy.spin_until_future_complete(self, self.future)
-            time.sleep(5)
+            while !self.status == GoalStatus.STATUS_SUCCEEDED:
+                pass
             self.future = self.pull_twist_stop_cli.call_async(req)
             rclpy.spin_until_future_complete(self, self.future)
             
         elif self.PICK_PATTERN == 'linear-pull':
             self.future = self.linear_pull_start_cli.call_async(req)
             rclpy.spin_until_future_complete(self, self.future)
-            time.sleep(5)
+            while !self.status == GoalStatus.STATUS_SUCCEEDED:
+                pass
             self.future = self.linear_pull_stop_cli.call_async(req)
             rclpy.spin_until_future_complete(self, self.future)
             
@@ -240,7 +276,7 @@ class StartHarvest(Node):
             # TODO: FINAL APPROACH
 
             self.get_logger().info('Starting event detection.')
-            # self.event_detection()
+            self.start_detection()
 
             self.get_logger().info(f'Starting pick controller')
             self.get_logger().info(f'Switching controller to forward_position_controller.')
@@ -252,7 +288,7 @@ class StartHarvest(Node):
             self.get_logger().info(f'Activating {self.PICK_PATTERN} controller')
             self.pick_controller()
 
-            self.get_logger().info(f'Configuring servo planning in base_link frame')
+            self.get_logger().info(f'Configuring servo planning in tool0 frame')
             self.configure_servo('tool0')
             self.get_logger().info(f'Switching controller back to scaled_joint_trajectory_controller.')
             self.switch_controller(servo=False, sim=False)
