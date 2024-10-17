@@ -1,5 +1,7 @@
 To run Marcus Path-Query:
 
+With UR5e plugged into computer, ensure the pendant is set to *remote* mode!
+
 1. In the first terminal: (sim vs. real):
 
 ```bash

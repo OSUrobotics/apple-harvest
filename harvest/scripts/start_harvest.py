@@ -61,7 +61,7 @@ class StartHarvest(Node):
             self.get_logger().info('Waiting for execute_arm_trajectory to be available...')
 
         # Service provided by "grasp_controller.py"
-        self.grasp_controller_client = self.create_client(Empty, 'grasp_apple', callback_group=m_callback_group)
+        self.grasp_controller_client = self.create_client(Trigger, 'grasp_apple', callback_group=m_callback_group)
         while not self.grasp_controller_client.wait_for_service(timeout_sec=1.0):
             self.get_logger().info('Waiting for grasp_apple service to be available...')
         
@@ -219,7 +219,7 @@ class StartHarvest(Node):
     
     def grasp_controller(self):
         # build request
-        request = Empty.Request()
+        request = Trigger.Request()
         self.future = self.grasp_controller_client.call_async(request)
         rclpy.spin_until_future_complete(self, self.future)
         return self.future.result()
@@ -252,6 +252,8 @@ class StartHarvest(Node):
             self.switch_controller(servo=True, sim=False)
             self.get_logger().info(f'Starting servo node.')
             self.start_servo()
+            self.get_logger().info(f'Configuring servo planning in base_link frame')
+            self.configure_servo('base_link')
             self.get_logger().info(f'Starting apple grasp.')
             self.grasp_controller()
             self.get_logger().info(f'Switching controller back to scaled_joint_trajectory_controller.')
@@ -261,7 +263,7 @@ class StartHarvest(Node):
             # TODO: FINAL APPROACH
 
             self.get_logger().info('Starting event detection.')
-            # self.event_detection()
+            self.event_detection()
 
             self.get_logger().info(f'Starting pick controller')
             self.get_logger().info(f'Switching controller to forward_position_controller.')
