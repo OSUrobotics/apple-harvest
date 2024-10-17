@@ -1,5 +1,7 @@
 To run Marcus Path-Query:
 
+With UR5e plugged into computer, ensure the pendant is set to *remote* mode!
+
 1. In the first terminal: (sim vs. real):
 
 ```bash
@@ -41,4 +43,3 @@ ros2 service call /return_home_trajectory std_srvs/srv/Trigger
 ```bash
 ros2 service call /voxel_mask harvest_interfaces/srv/VoxelMask "{tree_pos: 1}"
 ```
-
