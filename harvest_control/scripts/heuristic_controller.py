@@ -35,7 +35,7 @@ class PickController(Node):
 
         self.timer = self.create_timer(0.01, self.timer_callback)
         
-        self.ee_weight = 0.737 # WUR to set (or can uncomment and use set_ee_weight)
+        self.ee_weight = 2.09 # WUR to set (or can uncomment and use set_ee_weight)
         self.force_from_gravity = np.array([0.0, 0.0, 0.0])
         self.preferred_pull = np.array([0.0, 0.0, -1.0])
         self.last_t = np.array([0.0,0.0,0.0])
