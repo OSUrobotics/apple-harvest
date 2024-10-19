@@ -91,7 +91,7 @@ class StartHarvest(Node):
         self.set_goal_cli = self.create_client(SetValue, 'set_goal')
         self.wait_for_srv(self.set_goal_cli)
 
-        # self._event_client = ActionClient(self, EventDetection, 'event_detection')
+        self._event_client = ActionClient(self, EventDetection, 'event_detection')
 
         # Parameters
         self.PICK_PATTERN = 'force-heuristic' 
@@ -107,15 +107,19 @@ class StartHarvest(Node):
     def start_detection(self):
 
         self.status = GoalStatus.STATUS_EXECUTING
+        self.get_logger().info(f'Event Detection status {self.status}')
 
         goal_msg = EventDetection.Goal()
         goal_msg.failure_ratio = (1.0 - self.EVENT_SENSITIVITY)
 
         self._event_client.wait_for_server()
+        self.get_logger().info(f'Server started')
 
         self._send_goal_future = self._event_client.send_goal_async(goal_msg)
 
-        self._send_goal_future.add_done_callback(self.goal_response_callback)
+        return self._send_goal_future.add_done_callback(self.goal_response_callback)
+
+        # return self._send_goal_future
 
     def goal_response_callback(self, future):
         goal_handle = future.result()
@@ -247,36 +251,31 @@ class StartHarvest(Node):
     
     def pick_controller(self):
         req = Empty.Request()
-        stop_time = 5
+        stop_time = 15
         if self.PICK_PATTERN == 'force-heuristic':
             self.configure_controller()
             self.future = self.start_controller_cli.call_async(req)
             rclpy.spin_until_future_complete(self, self.future)
-            time.sleep(stop_time)
-            #while self.status != GoalStatus.STATUS_SUCCEEDED: #full disclosure, no idea if this works or if it gums up ROS
-            #    pass
+            while self.status != GoalStatus.STATUS_SUCCEEDED: #full disclosure, no idea if this works or if it gums up ROS
+               pass
             self.future = self.stop_controller_cli.call_async(req)
             rclpy.spin_until_future_complete(self, self.future)
             
         elif self.PICK_PATTERN == 'pull-twist':
             self.future = self.pull_twist_start_cli.call_async(req)
             rclpy.spin_until_future_complete(self, self.future)
-            self.get_logger().info('SLEEPING ZZZZZZZZZZZZZZZZZZZZZZZ')
-            time.sleep(stop_time)
-            self.get_logger().info('6AM COFFEE --- AWAKE')
-            #while self.status != GoalStatus.STATUS_SUCCEEDED:
-            #    pass
-            self.future = self.pull_twist_stop_cli.call_async(req)
-            rclpy.spin_until_future_complete(self, self.future)
+            while self.status != GoalStatus.STATUS_SUCCEEDED:
+               pass
+            #self.future = self.pull_twist_stop_cli.call_async(req)
+            #rclpy.spin_until_future_complete(self, self.future)
             
         elif self.PICK_PATTERN == 'linear-pull':
             self.future = self.linear_pull_start_cli.call_async(req)
             rclpy.spin_until_future_complete(self, self.future)
-            time.sleep(stop_time)
-            #while self.status != GoalStatus.STATUS_SUCCEEDED:
-            #    pass
-            self.future = self.linear_pull_stop_cli.call_async(req)
-            rclpy.spin_until_future_complete(self, self.future)
+            while self.status != GoalStatus.STATUS_SUCCEEDED:
+               pass
+            #self.future = self.linear_pull_stop_cli.call_async(req)
+            #rclpy.spin_until_future_complete(self, self.future)
             
         else:
             self.get_logger().info(f'No valid control scheme set')
@@ -304,14 +303,14 @@ class StartHarvest(Node):
             self.trigger_arm_mover(waypoints)
             self.get_logger().info(f'Initial apple approach complete')
 
-            self.get_logger().info(f'Switching controller to forward_position_controller.')
-            self.switch_controller(servo=True, sim=False)
-            self.get_logger().info(f'Starting servo node.')
-            self.start_servo()
-            self.get_logger().info(f'Starting visual servoing to center of apple')
-            self.start_visual_servo()
-            self.get_logger().info(f'Switching controller back to scaled_joint_trajectory_controller.')
-            self.switch_controller(servo=False, sim=False)
+            # self.get_logger().info(f'Switching controller to forward_position_controller.')
+            # self.switch_controller(servo=True, sim=False)
+            # self.get_logger().info(f'Starting servo node.')
+            # self.start_servo()
+            # self.get_logger().info(f'Starting visual servoing to center of apple')
+            # self.start_visual_servo()
+            # self.get_logger().info(f'Switching controller back to scaled_joint_trajectory_controller.')
+            # self.switch_controller(servo=False, sim=False)
 
             # for i in range(6):
             #     # TODO: ALEJO SERVICE CALL            
@@ -328,9 +327,6 @@ class StartHarvest(Node):
 
             time.sleep(1.5)
 
-            # self.get_logger().info('Starting event detection.')
-            #self.start_detection()
-
             self.get_logger().info(f'Starting pick controller')
             self.get_logger().info(f'Switching controller to forward_position_controller.')
             self.switch_controller(servo=True, sim=False)
@@ -340,6 +336,11 @@ class StartHarvest(Node):
             self.configure_servo('base_link')
             self.get_logger().info(f'Activating {self.PICK_PATTERN} controller')
             self.pick_controller()
+
+            time.sleep(0.25)
+
+            self.get_logger().info('Starting event detection.')
+            self.start_detection()
 
             self.get_logger().info(f'Configuring servo planning in tool0 frame')
             self.configure_servo('tool0')

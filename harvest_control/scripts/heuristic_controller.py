@@ -18,10 +18,10 @@ class PickController(Node):
         super().__init__('pick_controller')
 
         #set this manually
-        self.derivative_control = False
+        self.derivative_control = True
         
         self.goal= 0.0 #N
-        self.max_velocity = 0.1 # * 0.6 m/s
+        self.max_velocity = 0.2 # * 0.6 m/s
         self.vel_cmd = Vector3() # * 0.6 m/s
         self.min_tension = 5.0
 
@@ -35,7 +35,8 @@ class PickController(Node):
 
         self.timer = self.create_timer(0.01, self.timer_callback)
         
-        self.ee_weight = 2.09 # WUR to set (or can uncomment and use set_ee_weight)
+        # self.ee_weight = 2.09 # WUR to set (or can uncomment and use set_ee_weight)
+        self.ee_weight = 0.0
         self.force_from_gravity = np.array([0.0, 0.0, 0.0])
         self.preferred_pull = np.array([0.0, 0.0, -1.0])
         self.last_t = np.array([0.0,0.0,0.0])
@@ -86,6 +87,8 @@ class PickController(Node):
                                   wrench.force.z]) - self.force_from_gravity
 
         rotated_force = np.transpose(np.matmul(self.R, np.transpose(current_force)))
+
+        # self.get_logger().info("I think the base frame force is {}".format(rotated_force))
         
         if self.running:
             self.update_velocity(rotated_force)
@@ -132,6 +135,8 @@ class PickController(Node):
         t = self.choose_tangent(n_hat)
         t_hat = t/np.linalg.norm(t)
         
+        # self.get_logger().info("I think the force is {} N".format(f))
+        
         if f >= self.min_tension:
             if not self.derivative_control:
                 u = e_f
@@ -140,9 +145,11 @@ class PickController(Node):
             else:
                 u = e_f + 0.5* (e_f - self.e_f_prev)
 
+            # self.get_logger().info("I think the force error is {}".format(u))
             new_dir = np.tanh(u) * n_hat + (1-np.tanh(np.abs(u))) * t_hat
             new = self.max_velocity * new_dir / np.linalg.norm(new_dir)
         else:
+            # self.get_logger().info("Trying to tension...")
             new = self.max_velocity*self.preferred_pull 
                 
         self.vel_cmd.x = new[0]
