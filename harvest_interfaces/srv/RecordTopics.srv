@@ -1,0 +1,5 @@
+# RecordTopics.srv
+string[] topics
+string data_directory
+---
+bool success

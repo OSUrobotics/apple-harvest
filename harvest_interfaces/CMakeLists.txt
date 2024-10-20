@@ -23,6 +23,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/MoveToPose.srv"
   "srv/TrajectoryBetweenPoints.srv"
   "srv/SetValue.srv"
+  "srv/RecordTopics.srv"
   DEPENDENCIES 
   std_msgs
   geometry_msgs

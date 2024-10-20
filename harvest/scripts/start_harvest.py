@@ -10,7 +10,7 @@ from rcl_interfaces.msg import Parameter, ParameterValue, ParameterType
 from rcl_interfaces.srv import SetParameters, GetParameters, ListParameters
 from std_srvs.srv import Trigger, Empty
 from geometry_msgs.msg import Point
-from harvest_interfaces.srv import ApplePrediction, CoordinateToTrajectory, SendTrajectory
+from harvest_interfaces.srv import ApplePrediction, CoordinateToTrajectory, SendTrajectory, RecordTopics
 from controller_manager_msgs.srv import SwitchController
 from rclpy.action import ActionClient
 from action_msgs.msg import GoalStatus
@@ -25,6 +25,53 @@ class StartHarvest(Node):
     def __init__(self):
         super().__init__("start_harvest_node")
         m_callback_group = MutuallyExclusiveCallbackGroup()
+        
+        self.recording_startup_delay = 0.5
+
+        # TODO: What sort of metadata do we want??? ##################################################
+        trellis_wire_coordinates_topic = ['trellis_wire_coordinates',]
+        
+        # TODO: Add in realsense recording capabilities
+        self.prediction_topics = ['/apple_markers',]
+        self.approach_trajectory_topics = ['/apple_markers',]
+        self.visual_servo_topics = ['/gripper/rgb_palm_camera/image_raw',
+                                    '/joint_states',
+                                    '/servo_node/delta_twist_cmds']
+        self.pressure_servo_topics = ['/gripper/pressure',
+                                    '/gripper/distance',
+                                    '/gripper/motor/current',
+                                    '/gripper/motor/position',
+                                    '/gripper/motor/velocity',
+                                    '/joint_states',
+                                    '/force_torque_sensor_broadcaster/wrench',
+                                    '/servo_node/delta_twist_cmds']
+        self.pick_controller_topics = ['/gripper/pressure',
+                                    '/gripper/distance',
+                                    '/joint_states',
+                                    '/tool_pose',
+                                    '/force_torque_sensor_broadcaster/wrench',
+                                    '/servo_node/delta_twist_cmds']
+        
+        # Base data save directory
+        self.base_data_dir = 'harvest_data_prosser_2024/'
+        self.batch_dir = 'batch2/'
+        self.data_save_dir = self.base_data_dir + self.batch_dir
+
+        # Individual stage directories
+        self.prediction_dir = 'prediction/'
+        self.approach_trajectory_dir = 'approach_trajectory/'
+        self.visual_servo_dir = 'visual_servo/'
+        self.pressure_servo_dir = 'pressure_servo/'
+        self.pick_controller_dir = 'pick_controller/'
+
+        # Client for recorded listed ros topics
+        self.start_record_client = self.create_client(RecordTopics, "record_topics", callback_group=m_callback_group)
+        while not self.start_record_client.wait_for_service(timeout_sec=1.0):
+            self.get_logger().info("Start recorder service not available, waiting...")
+
+        self.stop_record_client = self.create_client(Trigger, 'stop_recording', callback_group=m_callback_group)
+        while not self.stop_record_client.wait_for_service(timeout_sec=1.0):
+            self.get_logger().info("Stop recorder service not available, waiting...")
 
         # Client for switching controller to joint_trajcectory_controller
         self.switch_controller_client = self.create_client(SwitchController, "/controller_manager/switch_controller", callback_group=m_callback_group)
@@ -89,6 +136,37 @@ class StartHarvest(Node):
         self.EVENT_SENSITIVITY = 0.43 # a sensitivity of 1.0 will detect any deviation from perfection as failure
 
         self.status = GoalStatus.STATUS_EXECUTING
+
+    def start_recording(self, topics, data_directory):
+        # Prepare the request
+        request = RecordTopics.Request()
+        request.topics = topics
+        request.data_directory = data_directory
+        
+        # Call the service
+        self.get_logger().info(f'Calling /record_topics with topics: {topics}')
+        future = self.start_record_client.call_async(request)
+        
+        # Wait for the result
+        rclpy.spin_until_future_complete(self, future)
+        
+        if future.result() is not None:
+            self.get_logger().info(f'Recording started: {future.result().success}')
+        else:
+            self.get_logger().error('Failed to call /record_topics service.')
+
+    def stop_recording(self):
+        # Call the stop service
+        self.get_logger().info('Calling /stop_recording service...')
+        future = self.stop_record_client.call_async(Trigger.Request())
+        
+        # Wait for the result
+        rclpy.spin_until_future_complete(self, future)
+
+        if future.result() is not None:
+            self.get_logger().info(f'Recording stopped: {future.result().success}')
+        else:
+            self.get_logger().error('Failed to call /stop_recording service.')
 
     def wait_for_srv(self, srv):
         #service waiter because Miranda is lazy :3
@@ -263,20 +341,32 @@ class StartHarvest(Node):
         rclpy.spin_until_future_complete(self, self.future)
         return self.future.result()
 
-
-
     def start(self): 
+        # Stage 1: Reset arm to home position
         self.get_logger().info(f'Resetting arm to home position')
         self.go_to_home()
-        self.get_logger().info(f'Sending request to predict apple centerpoint locations in scene.')
 
+        # Stage 2: Request apple location prediction
+        self.get_logger().info(f'Sending request to predict apple centerpoint locations in scene.')
         apple_poses = self.start_apple_prediction()
+
+        # Loop over apple locations
         for i in apple_poses.poses:
+            # Update base directory for new apple location
+            base_dir = self.data_save_dir + f'apple_{i}/'
+
+            # Stage 3: Approach apple
+            self.start_recording(self.approach_trajectory_topics, base_dir + self.approach_trajectory_dir)
+            time.sleep(self.recording_startup_delay)
             self.get_logger().info(f'Starting initial apple approach.')
             waypoints = self.call_coord_to_traj(i)
             self.trigger_arm_mover(waypoints)
             self.get_logger().info(f'Initial apple approach complete')
+            self.stop_recording()
 
+            # Stage 4: Start visual servo
+            self.start_recording(self.visual_servo_topics, base_dir + self.visual_servo_dir)
+            time.sleep(self.recording_startup_delay)
             self.get_logger().info(f'Switching controller to forward_position_controller.')
             self.switch_controller(servo=True, sim=False)
             self.get_logger().info(f'Starting servo node.')
@@ -285,8 +375,11 @@ class StartHarvest(Node):
             self.start_visual_servo()
             self.get_logger().info(f'Switching controller back to scaled_joint_trajectory_controller.')
             self.switch_controller(servo=False, sim=False)
+            self.stop_recording()
 
-            # TODO: ALEJO SERVICE CALL            
+            # Stage 5: Start final approach and pressure servo
+            self.start_recording(self.pressure_servo_topics, base_dir + self.pressure_servo_dir)
+            time.sleep(self.recording_startup_delay)
             self.get_logger().info(f'Switching controller to forward_position_controller.')
             self.switch_controller(servo=True, sim=False)
             self.get_logger().info(f'Starting servo node.')
@@ -297,13 +390,13 @@ class StartHarvest(Node):
             self.grasp_controller()
             self.get_logger().info(f'Switching controller back to scaled_joint_trajectory_controller.')
             self.switch_controller(servo=False, sim=False)
+            self.stop_recording()            
 
-
-            # TODO: FINAL APPROACH
-
+            # Stage 6: Start event detection and pick controller
+            self.start_recording(self.pick_controller_topics, base_dir + self.pick_controller_dir)
+            time.sleep(self.recording_startup_delay)
             self.get_logger().info('Starting event detection.')
             self.start_detection()
-
             self.get_logger().info(f'Starting pick controller')
             self.get_logger().info(f'Switching controller to forward_position_controller.')
             self.switch_controller(servo=True, sim=False)
@@ -313,14 +406,13 @@ class StartHarvest(Node):
             self.configure_servo('base_link')
             self.get_logger().info(f'Activating {self.PICK_PATTERN} controller')
             self.pick_controller()
-
             self.get_logger().info(f'Configuring servo planning in tool0 frame')
             self.configure_servo('tool0')
             self.get_logger().info(f'Switching controller back to scaled_joint_trajectory_controller.')
             self.switch_controller(servo=False, sim=False)
+            self.stop_recording()
 
-            #todo: restart when event is detected (currently is on a timer)
-            
+            # Stage 7: Return arm to home position - final stage
             self.get_logger().info(f'Resetting arm to home position')
             self.go_to_home()
             
