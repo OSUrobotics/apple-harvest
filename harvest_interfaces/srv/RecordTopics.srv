@@ -1,5 +1,5 @@
 # RecordTopics.srv
 string[] topics
-string data_directory
+string file_name_prefix
 ---
 bool success

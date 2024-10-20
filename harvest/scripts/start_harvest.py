@@ -10,7 +10,7 @@ from rcl_interfaces.msg import Parameter, ParameterValue, ParameterType
 from rcl_interfaces.srv import SetParameters, GetParameters, ListParameters
 from std_srvs.srv import Trigger, Empty
 from geometry_msgs.msg import Point
-from harvest_interfaces.srv import ApplePrediction, CoordinateToTrajectory, SendTrajectory, RecordTopics
+from harvest_interfaces.srv import ApplePrediction, CoordinateToTrajectory, SendTrajectory, RecordTopics, GetGripperPose
 from controller_manager_msgs.srv import SwitchController
 from rclpy.action import ActionClient
 from action_msgs.msg import GoalStatus
@@ -19,6 +19,9 @@ from harvest_interfaces.action import EventDetection
 # Python 
 import numpy as np
 import time
+import os
+import yaml
+import copy
 
 class StartHarvest(Node):
 
@@ -26,10 +29,15 @@ class StartHarvest(Node):
         super().__init__("start_harvest_node")
         m_callback_group = MutuallyExclusiveCallbackGroup()
         
-        self.recording_startup_delay = 0.5
+        self.recording_startup_delay = 0.5 # Seconds
 
         # TODO: What sort of metadata do we want??? ##################################################
-        trellis_wire_coordinates_topic = ['trellis_wire_coordinates',]
+        self.trellis_wire_positions = {
+            "bottom_left_coord": None,
+            "bottom_right_coord": None,
+            "top_right_coord": None,
+            "top_left_coord": None
+        }
         
         # TODO: Add in realsense recording capabilities
         self.prediction_topics = ['/apple_markers',]
@@ -54,15 +62,14 @@ class StartHarvest(Node):
         
         # Base data save directory
         self.base_data_dir = 'harvest_data_prosser_2024/'
-        self.batch_dir = 'batch2/'
-        self.data_save_dir = self.base_data_dir + self.batch_dir
+        self.batch_dir, self.batch_number = self.create_new_batch_directory(self.base_data_dir)
 
         # Individual stage directories
-        self.prediction_dir = 'prediction/'
-        self.approach_trajectory_dir = 'approach_trajectory/'
-        self.visual_servo_dir = 'visual_servo/'
-        self.pressure_servo_dir = 'pressure_servo/'
-        self.pick_controller_dir = 'pick_controller/'
+        self.prediction_file_name_prefix = 'prediction'
+        self.approach_trajectory_file_name_prefix = 'approach_trajectory'
+        self.visual_servo_file_name_prefix = 'visual_servo'
+        self.pressure_servo_file_name_prefix = 'pressure_servo'
+        self.pick_controller_file_name_prefix = 'pick_controller'
 
         # Client for recorded listed ros topics
         self.start_record_client = self.create_client(RecordTopics, "record_topics", callback_group=m_callback_group)
@@ -72,6 +79,10 @@ class StartHarvest(Node):
         self.stop_record_client = self.create_client(Trigger, 'stop_recording', callback_group=m_callback_group)
         while not self.stop_record_client.wait_for_service(timeout_sec=1.0):
             self.get_logger().info("Stop recorder service not available, waiting...")
+
+        self.get_gripper_pose_client = self.create_client(GetGripperPose, 'get_gripper_pose', callback_group=m_callback_group)
+        while not self.get_gripper_pose_client.wait_for_service(timeout_sec=1.0):
+            self.get_logger().info('Get gripper pose service not available, waiting...')
 
         # Client for switching controller to joint_trajcectory_controller
         self.switch_controller_client = self.create_client(SwitchController, "/controller_manager/switch_controller", callback_group=m_callback_group)
@@ -137,11 +148,28 @@ class StartHarvest(Node):
 
         self.status = GoalStatus.STATUS_EXECUTING
 
-    def start_recording(self, topics, data_directory):
+    def create_new_batch_directory(self, base_directory):
+        # Ensure the base directory exists
+        if not os.path.exists(base_directory):
+            os.makedirs(base_directory)
+        
+        # Find the next available batch directory number
+        batch_number = 1
+        while True:
+            batch_directory = os.path.join(base_directory, f"batch_{batch_number}/")
+            if not os.path.exists(batch_directory):
+                os.makedirs(batch_directory)
+                print(f"Created new directory: {batch_directory}")
+                break
+            batch_number += 1
+        
+        return batch_directory, batch_number
+
+    def start_recording(self, topics, file_name_prefix):
         # Prepare the request
         request = RecordTopics.Request()
         request.topics = topics
-        request.data_directory = data_directory
+        request.file_name_prefix = file_name_prefix
         
         # Call the service
         self.get_logger().info(f'Calling /record_topics with topics: {topics}')
@@ -167,6 +195,23 @@ class StartHarvest(Node):
             self.get_logger().info(f'Recording stopped: {future.result().success}')
         else:
             self.get_logger().error('Failed to call /stop_recording service.')
+
+    def get_current_gripper_pose(self):
+        request = GetGripperPose.Request()
+
+        future = self.get_gripper_pose_client.call_async(request)
+        rclpy.spin_until_future_complete(self, future) 
+        return future.result().point
+    
+    def scan_trellis_pts(self):
+        for key in self.trellis_wire_positions:
+            input(f"--- Place probe at wire {key} location, hit ENTER when ready.")
+            point_msg = self.get_current_gripper_pose()
+            print(point_msg)
+            x = point_msg.x
+            y = point_msg.y
+            z = point_msg.z
+            self.trellis_wire_positions[key] = [x, y, z]
 
     def wait_for_srv(self, srv):
         #service waiter because Miranda is lazy :3
@@ -340,8 +385,25 @@ class StartHarvest(Node):
         self.future = self.grasp_controller_client.call_async(request)
         rclpy.spin_until_future_complete(self, self.future)
         return self.future.result()
+    
+    def save_metadata(self):
+        # Combine the dictionaries into a list or another structure if necessary
+        data = {
+            'fruit_1': copy.deepcopy(self.trellis_wire_positions),
+            'fruit_2': copy.deepcopy(self.trellis_wire_positions),
+            'fruit_3': copy.deepcopy(self.trellis_wire_positions)
+        }
+
+        # Save to a YAML file
+        with open(self.batch_dir + f'batch_{self.batch_number}_metadata.yaml', 'w') as file:
+            yaml.dump(data, file)
+
+        self.get_logger().info("YAML file saved successfully.")
 
     def start(self): 
+        # Stage 0: Scan trellis wire coordinates by freedriving UR5 to four locations
+        self.scan_trellis_pts()
+
         # Stage 1: Reset arm to home position
         self.get_logger().info(f'Resetting arm to home position')
         self.go_to_home()
@@ -353,10 +415,10 @@ class StartHarvest(Node):
         # Loop over apple locations
         for i in apple_poses.poses:
             # Update base directory for new apple location
-            base_dir = self.data_save_dir + f'apple_{i}/'
+            base_dir = self.batch_dir + f'apple_{i}/'
 
             # Stage 3: Approach apple
-            self.start_recording(self.approach_trajectory_topics, base_dir + self.approach_trajectory_dir)
+            self.start_recording(self.approach_trajectory_topics, base_dir + self.approach_trajectory_file_name_prefix)
             time.sleep(self.recording_startup_delay)
             self.get_logger().info(f'Starting initial apple approach.')
             waypoints = self.call_coord_to_traj(i)
@@ -365,7 +427,7 @@ class StartHarvest(Node):
             self.stop_recording()
 
             # Stage 4: Start visual servo
-            self.start_recording(self.visual_servo_topics, base_dir + self.visual_servo_dir)
+            self.start_recording(self.visual_servo_topics, base_dir + self.visual_servo_file_name_prefix)
             time.sleep(self.recording_startup_delay)
             self.get_logger().info(f'Switching controller to forward_position_controller.')
             self.switch_controller(servo=True, sim=False)
@@ -378,7 +440,7 @@ class StartHarvest(Node):
             self.stop_recording()
 
             # Stage 5: Start final approach and pressure servo
-            self.start_recording(self.pressure_servo_topics, base_dir + self.pressure_servo_dir)
+            self.start_recording(self.pressure_servo_topics, base_dir + self.pressure_servo_file_name_prefix)
             time.sleep(self.recording_startup_delay)
             self.get_logger().info(f'Switching controller to forward_position_controller.')
             self.switch_controller(servo=True, sim=False)
@@ -393,7 +455,7 @@ class StartHarvest(Node):
             self.stop_recording()            
 
             # Stage 6: Start event detection and pick controller
-            self.start_recording(self.pick_controller_topics, base_dir + self.pick_controller_dir)
+            self.start_recording(self.pick_controller_topics, base_dir + self.pick_controller_file_name_prefix)
             time.sleep(self.recording_startup_delay)
             self.get_logger().info('Starting event detection.')
             self.start_detection()
@@ -412,11 +474,14 @@ class StartHarvest(Node):
             self.switch_controller(servo=False, sim=False)
             self.stop_recording()
 
-            # Stage 7: Return arm to home position - final stage
+            # Stage 7: Return arm to home position
             self.get_logger().info(f'Resetting arm to home position')
             self.go_to_home()
+
+            # Stage 8: Save batch metadata - final stage
+            self.save_metadata()
             
-        self.get_logger().info(f'Test Complete.')
+        self.get_logger().info(f'Batch Complete.')
 
 def main(args=None):
     rclpy.init(args=args)

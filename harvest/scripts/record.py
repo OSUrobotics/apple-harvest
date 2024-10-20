@@ -17,21 +17,17 @@ class RecordTopicsNode(Node):
         self.record_service = self.create_service(RecordTopics, 'record_topics', self.start_recording_callback)
         self.stop_service = self.create_service(Trigger, 'stop_recording', self.stop_recording_callback)
 
-        # # Parameters
-        # self.declare_parameter("save_data_dir", 'trial_data/')
-        # self.save_data_dir = self.get_parameter("save_data_dir").get_parameter_value().string_value
-
         self.get_logger().info('Recording services are ready.')
 
     def start_recording_callback(self, request, response):
         topics = request.topics
-        data_dir = request.data_directory
+        file_name_prefix = request.file_name_prefix
         if not topics:
             response.success = False
             self.get_logger().warn('No topics provided for recording.')
             return response
 
-        self.bag_path = self.create_bag_file_path(data_dir)
+        self.bag_path = self.create_bag_file_path(file_name_prefix)
         command = f"ros2 bag record {' '.join(topics)} --output {self.bag_path}"
 
         # Start the recording process
@@ -57,12 +53,10 @@ class RecordTopicsNode(Node):
             self.get_logger().warn('No recording in progress.')
         return response
 
-    def create_bag_file_path(self, data_directory):
+    def create_bag_file_path(self, file_name_prefix):
         # Generate a timestamped bag file name
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        # bag_file_name = self.save_data_dir + f"recorded_bag_{timestamp}.db3"
-        bag_file_name = data_directory + f"{timestamp}.db3"
-        # return os.path.join(os.getcwd(), bag_file_name)
+        bag_file_name = file_name_prefix + f"_{timestamp}.db3"
         return bag_file_name
 
 def main(args=None):

@@ -24,6 +24,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/TrajectoryBetweenPoints.srv"
   "srv/SetValue.srv"
   "srv/RecordTopics.srv"
+  "srv/GetGripperPose.srv"
   DEPENDENCIES 
   std_msgs
   geometry_msgs

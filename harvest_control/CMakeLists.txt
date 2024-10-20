@@ -65,6 +65,7 @@ install(PROGRAMS
   scripts/pose_listener.py
   scripts/pressure_averager.py
   scripts/pull_twist_controller.py
+  scripts/trellis_wire_scan.py
   scripts/pyb_scripts/load_objects.py
   scripts/pyb_scripts/load_robot.py
   scripts/pyb_scripts/pyb_utils.py
