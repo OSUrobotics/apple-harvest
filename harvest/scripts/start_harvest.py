@@ -64,10 +64,15 @@ class StartHarvest(Node):
         while not self.trigger_arm_mover_client.wait_for_service(timeout_sec=1.0):
             self.get_logger().info('Waiting for execute_arm_trajectory to be available...')
 
-        # Service provided by "grasp_controller.py"
+        # Services provided by "grasp_controller.py"
         self.grasp_controller_client = self.create_client(Trigger, 'grasp_apple', callback_group=m_callback_group)
         while not self.grasp_controller_client.wait_for_service(timeout_sec=1.0):
             self.get_logger().info('Waiting for grasp_apple service to be available...')
+        
+        self.release_controller_client = self.create_client(Trigger, 'release_apple', callback_group=m_callback_group)
+        while not self.release_controller_client.wait_for_service(timeout_sec=1.0):
+            self.get_logger().info('Waiting for release_apple service to be available...')
+
         
         # Interfaces for Miranda's pick controllers 
         self.start_controller_cli = self.create_client(Empty, 'start_controller')
@@ -287,6 +292,12 @@ class StartHarvest(Node):
         rclpy.spin_until_future_complete(self, self.future)
         return self.future.result()
 
+    def release_controller(self):
+        # build request
+        request = Trigger.Request()
+        self.future = self.release_controller_client.call_async(request)
+        rclpy.spin_until_future_complete(self, self.future)
+        return self.future.result()
 
 
     def start(self): 
@@ -303,17 +314,17 @@ class StartHarvest(Node):
             self.trigger_arm_mover(waypoints)
             self.get_logger().info(f'Initial apple approach complete')
 
-            # self.get_logger().info(f'Switching controller to forward_position_controller.')
-            # self.switch_controller(servo=True, sim=False)
-            # self.get_logger().info(f'Starting servo node.')
-            # self.start_servo()
-            # self.get_logger().info(f'Starting visual servoing to center of apple')
-            # self.start_visual_servo()
-            # self.get_logger().info(f'Switching controller back to scaled_joint_trajectory_controller.')
-            # self.switch_controller(servo=False, sim=False)
 
-            # for i in range(6):
-            #     # TODO: ALEJO SERVICE CALL            
+            self.get_logger().info(f'Switching controller to forward_position_controller.')
+            self.switch_controller(servo=True, sim=False)
+            self.get_logger().info(f'Starting servo node.')
+            self.start_servo()
+            self.get_logger().info(f'Starting visual servoing to center of apple')
+            self.start_visual_servo()
+            self.get_logger().info(f'Switching controller back to scaled_joint_trajectory_controller.')
+            self.switch_controller(servo=False, sim=False)
+            
+            # Grasp Apple (Alejo)            
             self.get_logger().info(f'Switching controller to forward_position_controller.')
             self.switch_controller(servo=True, sim=False)
             self.get_logger().info(f'Starting servo node.')
@@ -347,7 +358,12 @@ class StartHarvest(Node):
             self.get_logger().info(f'Switching controller back to scaled_joint_trajectory_controller.')
             self.switch_controller(servo=False, sim=False)
 
-            #TODO: restart when event is detected (currently is on a timer)
+            # #TODO: restart when event is detected (currently is on a timer)
+
+            # Release Apple (Alejo)
+            self.get_logger().info(f'Releasing apple.')
+            self.release_controller()
+
             
             self.get_logger().info(f'Resetting arm to home position')
             self.go_to_home()
