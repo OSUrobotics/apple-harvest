@@ -40,11 +40,13 @@ class ApplePredictionRS(Node):
         self.declare_parameter("prediction_radius_min", 0.03)
         self.declare_parameter("prediction_radius_max", 0.06)
         self.declare_parameter("prediction_distance_max", 1.0)
+        self.declare_parameter("scan_data_path", "NOTGIVEN")
         self.confidence_thresh = self.get_parameter("prediction_yolo_conf").get_parameter_value().double_value
         self.lower_rad_bound = self.get_parameter("prediction_radius_min").get_parameter_value().double_value
         self.upper_rad_bound = self.get_parameter("prediction_radius_max").get_parameter_value().double_value
         self.distance_thresh = self.get_parameter("prediction_distance_max").get_parameter_value().double_value
         self.model_path = self.get_parameter("prediction_model_path").get_parameter_value().string_value
+        self.scan_data_path = self.get_parameter("scan_data_path").get_parameter_value().string_value
 
         ### YOLO SETUP
         self.model = YOLO(self.model_path)  # pretrained YOLOv8n model
@@ -85,6 +87,9 @@ class ApplePredictionRS(Node):
         self.apple_centers = None
         self.apple_radii = None
         self.c2 = 0
+        self.image_timestamp = "ERROR"
+        self.scan_count = 0
+        self.yolo_result = None
 
 
     def callback(self):
@@ -164,6 +169,7 @@ class ApplePredictionRS(Node):
         # predict segmentation masks using model
         results = self.model(image, conf=self.confidence_thresh)[0]
         apple_masks = []
+        self.yolo_result = results
 
         # creates a mask for each apple detected over the original image
         for i in results:
@@ -220,6 +226,7 @@ class ApplePredictionRS(Node):
                 # get images and get segmentation mask from YOLO
                 depth_image = np.asanyarray(aligned_depth_frame.get_data())
                 color_image = np.asanyarray(color_frame.get_data())
+                self.image_timestamp = str(self.get_clock().now().to_msg().sec)
                 break
         # stop realsense pipeline
         self.pipeline.stop()
@@ -269,7 +276,29 @@ class ApplePredictionRS(Node):
             pass
             # o3d.visualization.draw_geometries(visualization)
 
+        # saving all data
+        if self.scan_data_path != "NOTGIVEN":
+            try: 
+                rgb_pc = o3d.geometry.Image(rgb)
+                depth_pc = o3d.geometry.Image(depth)
+                rgbd_image = o3d.geometry.RGBDImage.create_from_color_and_depth(rgb_pc, depth_pc, convert_rgb_to_intensity=False)
+                pcd = o3d.geometry.PointCloud.create_from_rgbd_image(
+                    rgbd_image,
+                    o3d.camera.PinholeCameraIntrinsic(width=848, height=480, fx=609.6989, fy=609.8549, cx=420.2079, cy=235.2782))
+                o3d.io.write_point_cloud(self.scan_data_path + "/pc_" + str(self.scan_count) + "_" + self.image_timestamp + ".ply", pcd)
+                np.save(self.scan_data_path + "/mask_" + str(self.scan_count) + "_" + self.image_timestamp + ".npy", masks)
+                cv2.imwrite(self.scan_data_path + "/rgb_" + str(self.scan_count) + "_" + self.image_timestamp + ".png", rgb)
+                cv2.imwrite(self.scan_data_path + "/depth_" + str(self.scan_count) + "_" + self.image_timestamp + ".tiff", depth)
+                self.yolo_result.save(filename=self.scan_data_path + "/yolo_" + str(self.scan_count) + "_" + self.image_timestamp + ".png")
+                self.scan_count += 1
+                self.get_logger().info("Data from scan saved.")
+            except:
+                self.get_logger().error("Data from scan unable to be saved")
+        else:
+            self.get_logger().error("No path given to save scan data")
+
         return apple_centers, apple_radii
+        
 
             
 

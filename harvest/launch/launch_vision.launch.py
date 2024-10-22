@@ -22,6 +22,8 @@ def generate_launch_description():
                                   description="Maximum radius bound (meters) for ransac sphere fit in apple_prediction node."))
     declared_arguments.append(DeclareLaunchArgument("prediction_distance_max", default_value="1.0", 
                                   description="Distance threshold in meters for detecting apples. Filters out backgound apples."))
+    declared_arguments.append(DeclareLaunchArgument("scan_data_path", default_value="NOTGIVEN", 
+                                  description="Data path to save pointcloud, realsense rgb image, realsense depth image and masks from prediction node. In format home/dir/data do not add slash at the end."))
 
 
     ### visual_servo node parameters
