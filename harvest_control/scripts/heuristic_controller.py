@@ -18,7 +18,7 @@ class PickController(Node):
         super().__init__('pick_controller')
 
         #set this manually
-        self.derivative_control = True
+        self.derivative_control = False
         
         self.goal= 0.0 #N
         self.max_velocity = 0.2 # * 0.6 m/s

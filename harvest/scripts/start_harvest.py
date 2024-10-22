@@ -38,6 +38,8 @@ class StartHarvest(Node):
             "top_right_coord": None,
             "top_left_coord": None
         }
+
+        self.apple_coorindates = {}
         
         # TODO: Add in realsense recording capabilities
         self.prediction_topics = ['/apple_markers',]
@@ -414,6 +416,7 @@ class StartHarvest(Node):
         self.future = self.grasp_controller_client.call_async(request)
         rclpy.spin_until_future_complete(self, self.future)
         return self.future.result()
+    
     def release_controller(self):
         # build request
         request = Trigger.Request()
@@ -424,9 +427,9 @@ class StartHarvest(Node):
     def save_metadata(self):
         # Combine the dictionaries into a list or another structure if necessary
         data = {
-            'fruit_1': copy.deepcopy(self.trellis_wire_positions),
-            'fruit_2': copy.deepcopy(self.trellis_wire_positions),
-            'fruit_3': copy.deepcopy(self.trellis_wire_positions)
+            'trellis_wire_positions': copy.deepcopy(self.trellis_wire_positions),
+            'apple_coordinates': copy.deepcopy(self.apple_coorindates),
+            # 'fruit_3': copy.deepcopy(self.trellis_wire_positions)
         }
 
         # Save to a YAML file
@@ -446,6 +449,8 @@ class StartHarvest(Node):
         # Stage 2: Request apple location prediction
         self.get_logger().info(f'Sending request to predict apple centerpoint locations in scene.')
         apple_poses = self.start_apple_prediction()
+        # Save the apple poses in a dictionary for metadata
+        self.apple_coorindates = {f'apple_{index + 1}': [pose.position.x, pose.position.y, pose.position.z] for index, pose in enumerate(apple_poses.poses)}
 
         # Loop over apple locations
         for i in apple_poses.poses:
@@ -453,13 +458,13 @@ class StartHarvest(Node):
             base_dir = self.batch_dir + f'apple_{i}/'
 
             # Stage 3: Approach apple
-            self.start_recording(self.approach_trajectory_topics, base_dir + self.approach_trajectory_file_name_prefix)
-            time.sleep(self.recording_startup_delay)
+            # self.start_recording(self.approach_trajectory_topics, base_dir + self.approach_trajectory_file_name_prefix)
+            # time.sleep(self.recording_startup_delay)
             self.get_logger().info(f'Starting initial apple approach.')
             waypoints = self.call_coord_to_traj(i)
             self.trigger_arm_mover(waypoints)
             self.get_logger().info(f'Initial apple approach complete')
-            self.stop_recording()
+            # self.stop_recording()
 
             # Stage 4: Start visual servo
             self.start_recording(self.visual_servo_topics, base_dir + self.visual_servo_file_name_prefix)
@@ -516,16 +521,15 @@ class StartHarvest(Node):
             self.switch_controller(servo=False, sim=False)
             self.stop_recording()
 
-
             # Stage 7: Return arm to home position
             self.get_logger().info(f'Resetting arm to home position')
             self.go_to_home()
 
-            # Stage *: Release apple
+            # Stage 8: Release apple
             self.get_logger().info(f'Releasing apple.')
             self.release_controller()
 
-            # Stage 8: Save batch metadata - final stage
+            # Stage 9: Save batch metadata - final stage
             self.save_metadata()
             
         self.get_logger().info(f'Batch Complete.')
