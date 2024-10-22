@@ -58,7 +58,7 @@ class EventDetector(Node):
         self._action_server = ActionServer(
             self,
             EventDetection,
-            'event_detector',
+            'event_detection',
             self.execute_callback)
 
     def clear_trial(self):
@@ -68,12 +68,13 @@ class EventDetector(Node):
         self.flag = False
         
     def stop_controller(self):
+        self.get_logger().info('AHHHHHHHHHHH IM HERE')
 
-        self.future = self.stop_controller_cli.call_async(self.stop_controller_req)
-        rclpy.spin_until_future_complete(self, self.future)
+        # self.future = self.stop_controller_cli.call_async(self.stop_controller_req)
+        # rclpy.spin_until_future_complete(self, self.future)
 
-        self.future = self.pull_twist_stop_cli.call_async(self.pull_twist_stop_req)
-        rclpy.spin_until_future_complete(self, self.future)
+        # self.future = self.pull_twist_stop_cli.call_async(self.pull_twist_stop_req)
+        # rclpy.spin_until_future_complete(self, self.future)
         
         self.clear_trial()
     
@@ -178,8 +179,8 @@ class EventDetector(Node):
         running = True
         start_time = time.time()
         while running:
-            time = time.time()
-            if (time - start_time) > self.time_limit:
+            current_time = time.time()
+            if (current_time - start_time) > self.time_limit:
                 running = False
                 self.stop_controller()
             else:
@@ -191,7 +192,7 @@ class EventDetector(Node):
         goal_handle.succeed()
 
         result = EventDetection.Result()
-        result.finished != running
+        result.finished = True
 
         return result
 

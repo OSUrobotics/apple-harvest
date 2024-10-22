@@ -10,7 +10,7 @@ from rcl_interfaces.msg import Parameter, ParameterValue, ParameterType
 from rcl_interfaces.srv import SetParameters, GetParameters, ListParameters
 from std_srvs.srv import Trigger, Empty
 from geometry_msgs.msg import Point
-from harvest_interfaces.srv import ApplePrediction, CoordinateToTrajectory, SendTrajectory, RecordTopics, GetGripperPose
+from harvest_interfaces.srv import ApplePrediction, CoordinateToTrajectory, SendTrajectory, RecordTopics, GetGripperPose, SetValue
 from controller_manager_msgs.srv import SwitchController
 from rclpy.action import ActionClient
 from action_msgs.msg import GoalStatus
@@ -122,17 +122,28 @@ class StartHarvest(Node):
         while not self.trigger_arm_mover_client.wait_for_service(timeout_sec=1.0):
             self.get_logger().info('Waiting for execute_arm_trajectory to be available...')
 
-        # Service provided by "grasp_controller.py"
+        # Services provided by "grasp_controller.py"
         self.grasp_controller_client = self.create_client(Trigger, 'grasp_apple', callback_group=m_callback_group)
         while not self.grasp_controller_client.wait_for_service(timeout_sec=1.0):
             self.get_logger().info('Waiting for grasp_apple service to be available...')
+        
+        self.release_controller_client = self.create_client(Trigger, 'release_apple', callback_group=m_callback_group)
+        while not self.release_controller_client.wait_for_service(timeout_sec=1.0):
+            self.get_logger().info('Waiting for release_apple service to be available...')
+
         
         # Interfaces for Miranda's pick controllers 
         self.start_controller_cli = self.create_client(Empty, 'start_controller')
         self.wait_for_srv(self.start_controller_cli)
 
+        self.stop_controller_cli = self.create_client(Empty, 'stop_controller')
+        self.wait_for_srv(self.stop_controller_cli)
+
         self.pull_twist_start_cli = self.create_client(Empty, 'pull_twist/start_controller')
         self.wait_for_srv(self.pull_twist_start_cli)
+
+        self.pull_twist_stop_cli = self.create_client(Empty, 'pull_twist/stop_controller')
+        self.wait_for_srv(self.pull_twist_stop_cli)
 
         self.linear_pull_start_cli = self.create_client(Empty, 'linear/start_controller')
         self.wait_for_srv(self.linear_pull_start_cli)
@@ -140,10 +151,13 @@ class StartHarvest(Node):
         self.linear_pull_stop_cli = self.create_client(Empty, 'linear/stop_controller')
         self.wait_for_srv(self.linear_pull_stop_cli)
 
+        self.set_goal_cli = self.create_client(SetValue, 'set_goal')
+        self.wait_for_srv(self.set_goal_cli)
+
         self._event_client = ActionClient(self, EventDetection, 'event_detection')
 
         # Parameters
-        self.PICK_PATTERN = 'pull-twist' 
+        self.PICK_PATTERN = 'force-heuristic' 
         self.EVENT_SENSITIVITY = 0.43 # a sensitivity of 1.0 will detect any deviation from perfection as failure
 
         self.status = GoalStatus.STATUS_EXECUTING
@@ -221,15 +235,19 @@ class StartHarvest(Node):
     def start_detection(self):
 
         self.status = GoalStatus.STATUS_EXECUTING
+        self.get_logger().info(f'Event Detection status {self.status}')
 
         goal_msg = EventDetection.Goal()
         goal_msg.failure_ratio = (1.0 - self.EVENT_SENSITIVITY)
 
         self._event_client.wait_for_server()
+        self.get_logger().info(f'Server started')
 
         self._send_goal_future = self._event_client.send_goal_async(goal_msg)
 
-        self._send_goal_future.add_done_callback(self.goal_response_callback)
+        return self._send_goal_future.add_done_callback(self.goal_response_callback)
+
+        # return self._send_goal_future
 
     def goal_response_callback(self, future):
         goal_handle = future.result()
@@ -349,14 +367,25 @@ class StartHarvest(Node):
         self.future = self.event_detection_start_cli.call_async(req)
         rclpy.spin_until_future_complete(self, self.future)
     
+    def configure_controller(self):
+        
+        pick_force = 10.0
+        
+        set_goal_req = SetValue.Request()
+        set_goal_req.val = pick_force
+        self.future = self.set_goal_cli.call_async(set_goal_req)
+        rclpy.spin_until_future_complete(self, self.future)
+
+    
     def pick_controller(self):
         req = Empty.Request()
-        
+        stop_time = 15
         if self.PICK_PATTERN == 'force-heuristic':
+            self.configure_controller()
             self.future = self.start_controller_cli.call_async(req)
             rclpy.spin_until_future_complete(self, self.future)
             while self.status != GoalStatus.STATUS_SUCCEEDED: #full disclosure, no idea if this works or if it gums up ROS
-                pass
+               pass
             self.future = self.stop_controller_cli.call_async(req)
             rclpy.spin_until_future_complete(self, self.future)
             
@@ -364,17 +393,17 @@ class StartHarvest(Node):
             self.future = self.pull_twist_start_cli.call_async(req)
             rclpy.spin_until_future_complete(self, self.future)
             while self.status != GoalStatus.STATUS_SUCCEEDED:
-                pass
-            self.future = self.pull_twist_stop_cli.call_async(req)
-            rclpy.spin_until_future_complete(self, self.future)
+               pass
+            #self.future = self.pull_twist_stop_cli.call_async(req)
+            #rclpy.spin_until_future_complete(self, self.future)
             
         elif self.PICK_PATTERN == 'linear-pull':
             self.future = self.linear_pull_start_cli.call_async(req)
             rclpy.spin_until_future_complete(self, self.future)
             while self.status != GoalStatus.STATUS_SUCCEEDED:
-                pass
-            self.future = self.linear_pull_stop_cli.call_async(req)
-            rclpy.spin_until_future_complete(self, self.future)
+               pass
+            #self.future = self.linear_pull_stop_cli.call_async(req)
+            #rclpy.spin_until_future_complete(self, self.future)
             
         else:
             self.get_logger().info(f'No valid control scheme set')
@@ -383,6 +412,12 @@ class StartHarvest(Node):
         # build request
         request = Trigger.Request()
         self.future = self.grasp_controller_client.call_async(request)
+        rclpy.spin_until_future_complete(self, self.future)
+        return self.future.result()
+    def release_controller(self):
+        # build request
+        request = Trigger.Request()
+        self.future = self.release_controller_client.call_async(request)
         rclpy.spin_until_future_complete(self, self.future)
         return self.future.result()
     
@@ -398,7 +433,7 @@ class StartHarvest(Node):
         with open(self.batch_dir + f'batch_{self.batch_number}_metadata.yaml', 'w') as file:
             yaml.dump(data, file)
 
-        self.get_logger().info("YAML file saved successfully.")
+        self.get_logger().info("YAML file saved successfully.")    
 
     def start(self): 
         # Stage 0: Scan trellis wire coordinates by freedriving UR5 to four locations
@@ -454,6 +489,8 @@ class StartHarvest(Node):
             self.switch_controller(servo=False, sim=False)
             self.stop_recording()            
 
+            time.sleep(1.5)
+
             # Stage 6: Start event detection and pick controller
             self.start_recording(self.pick_controller_topics, base_dir + self.pick_controller_file_name_prefix)
             time.sleep(self.recording_startup_delay)
@@ -468,15 +505,25 @@ class StartHarvest(Node):
             self.configure_servo('base_link')
             self.get_logger().info(f'Activating {self.PICK_PATTERN} controller')
             self.pick_controller()
+
+            time.sleep(0.25)
+
+            self.get_logger().info('Starting event detection.')
+            self.start_detection()
             self.get_logger().info(f'Configuring servo planning in tool0 frame')
             self.configure_servo('tool0')
             self.get_logger().info(f'Switching controller back to scaled_joint_trajectory_controller.')
             self.switch_controller(servo=False, sim=False)
             self.stop_recording()
 
+
             # Stage 7: Return arm to home position
             self.get_logger().info(f'Resetting arm to home position')
             self.go_to_home()
+
+            # Stage *: Release apple
+            self.get_logger().info(f'Releasing apple.')
+            self.release_controller()
 
             # Stage 8: Save batch metadata - final stage
             self.save_metadata()
