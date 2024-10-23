@@ -22,15 +22,21 @@ import time
 import os
 import yaml
 import copy
+import re
 
 class StartHarvest(Node):
 
     def __init__(self):
         super().__init__("start_harvest_node")
         m_callback_group = MutuallyExclusiveCallbackGroup()
+
+        # Parameters
+        self.PICK_PATTERN = 'force-heuristic' 
+        self.EVENT_SENSITIVITY = 0.43 # a sensitivity of 1.0 will detect any deviation from perfection as failure
         
         self.recording_startup_delay = 0.5 # Seconds
 
+        # METADATA
         # TODO: What sort of metadata do we want??? ##################################################
         self.trellis_wire_positions = {
             "bottom_left_coord": None,
@@ -40,6 +46,7 @@ class StartHarvest(Node):
         }
 
         self.apple_coorindates = {}
+        self.pick_pattern = {'pick controller': self.PICK_PATTERN}
         
         # TODO: Add in realsense recording capabilities
         self.prediction_topics = ['/apple_markers',]
@@ -63,7 +70,7 @@ class StartHarvest(Node):
                                     '/servo_node/delta_twist_cmds']
         
         # Base data save directory
-        self.base_data_dir = 'harvest_data_prosser_2024/'
+        self.base_data_dir = '/media/imml/LaCie/prosser_data_prosser_2024/day_2/'
         self.batch_dir, self.batch_number = self.create_new_batch_directory(self.base_data_dir)
 
         # Individual stage directories
@@ -72,6 +79,20 @@ class StartHarvest(Node):
         self.visual_servo_file_name_prefix = 'visual_servo'
         self.pressure_servo_file_name_prefix = 'pressure_servo'
         self.pick_controller_file_name_prefix = 'pick_controller'
+
+        # Get presaved apple locations
+        path_to_search = self.base_data_dir + 'apple_locations/'
+        latest_dir = self.get_latest_directory(search_path=path_to_search)
+        if latest_dir:
+            self.get_logger().info(f"Reading apple locations from: {latest_dir}/apple_locations.csv")
+            self.pre_saved_apple_locations = self.read_apple_locations(latest_dir)
+            
+            if self.pre_saved_apple_locations is not None:
+                self.get_logger().info('Found presaved apple location data')
+            else:
+                self.get_logger().info("No data found.")
+        else:
+            self.get_logger().info("No directories found matching the pattern.")
 
         # Client for recorded listed ros topics
         self.start_record_client = self.create_client(RecordTopics, "record_topics", callback_group=m_callback_group)
@@ -158,9 +179,6 @@ class StartHarvest(Node):
 
         self._event_client = ActionClient(self, EventDetection, 'event_detection')
 
-        # Parameters
-        self.PICK_PATTERN = 'force-heuristic' 
-        self.EVENT_SENSITIVITY = 0.43 # a sensitivity of 1.0 will detect any deviation from perfection as failure
 
         self.status = GoalStatus.STATUS_EXECUTING
 
@@ -211,6 +229,32 @@ class StartHarvest(Node):
             self.get_logger().info(f'Recording stopped: {future.result().success}')
         else:
             self.get_logger().error('Failed to call /stop_recording service.')
+
+    def get_latest_directory(self, base_name='farmng_position', search_path='.'):
+        # Get the list of directories in the specified search path
+        dirs = [d for d in os.listdir(search_path) if os.path.isdir(os.path.join(search_path, d)) and re.match(rf'{base_name}_\d+', d)]
+        
+        # Extract the numeric part and convert to integers
+        numbers = [int(re.search(r'\d+', d).group()) for d in dirs]
+        
+        # Get the directory with the highest number
+        if numbers:
+            max_index = numbers.index(max(numbers))
+            latest_dir = dirs[max_index]
+            return os.path.join(search_path, latest_dir)
+        else:
+            return None
+
+    def read_apple_locations(self, directory):
+        csv_file_path = os.path.join(directory, 'apple_locations.csv')
+        
+        # Load the data using NumPy, skipping the header
+        try:
+            data = np.loadtxt(csv_file_path, delimiter=',', skiprows=1)
+            return data
+        except OSError as e:
+            print(f"Error reading {csv_file_path}: {e}")
+            return None
 
     def get_current_gripper_pose(self):
         request = GetGripperPose.Request()
@@ -429,7 +473,7 @@ class StartHarvest(Node):
         data = {
             'trellis_wire_positions': copy.deepcopy(self.trellis_wire_positions),
             'apple_coordinates': copy.deepcopy(self.apple_coorindates),
-            # 'fruit_3': copy.deepcopy(self.trellis_wire_positions)
+            'pick_controller': self.PICK_PATTERN
         }
 
         # Save to a YAML file
@@ -439,23 +483,27 @@ class StartHarvest(Node):
         self.get_logger().info("YAML file saved successfully.")    
 
     def start(self): 
-        # Stage 0: Scan trellis wire coordinates by freedriving UR5 to four locations
-        self.scan_trellis_pts()
+        # # Stage 0: Scan trellis wire coordinates by freedriving UR5 to four locations
+        # self.scan_trellis_pts()
 
         # Stage 1: Reset arm to home position
         self.get_logger().info(f'Resetting arm to home position')
         self.go_to_home()
 
-        # Stage 2: Request apple location prediction
-        self.get_logger().info(f'Sending request to predict apple centerpoint locations in scene.')
-        apple_poses = self.start_apple_prediction()
-        # Save the apple poses in a dictionary for metadata
-        self.apple_coorindates = {f'apple_{index + 1}': [pose.position.x, pose.position.y, pose.position.z] for index, pose in enumerate(apple_poses.poses)}
+        # # Stage 2: Request apple location prediction
+        # self.get_logger().info(f'Sending request to predict apple centerpoint locations in scene.')
+        # apple_poses = self.start_apple_prediction()
+        # # Save the apple poses in a dictionary for metadata
+        # self.apple_coorindates = {f'apple_{index + 1}': [pose.position.x, pose.position.y, pose.position.z] for index, pose in enumerate(apple_poses.poses)}
+
+        # self.get_logger().info(f'3D scan found {len(self.apple_coorindates.values)} apples!')
+        # input('Manually count apples! ')
 
         # Loop over apple locations
-        for i in apple_poses.poses:
+        # for i in apple_poses.poses:
+        for iteration, i in enumerate(self.pre_saved_apple_locations):
             # Update base directory for new apple location
-            base_dir = self.batch_dir + f'apple_{i}/'
+            base_dir = self.batch_dir + f'apple_{iteration}/'
 
             # Stage 3: Approach apple
             # self.start_recording(self.approach_trajectory_topics, base_dir + self.approach_trajectory_file_name_prefix)
