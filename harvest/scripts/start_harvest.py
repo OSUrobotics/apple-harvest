@@ -517,23 +517,28 @@ class StartHarvest(Node):
         self.get_logger().info(f'Resetting arm to home position')
         self.go_to_home()
 
-        x = float(input(f'Enter apple x-location in m: '))
-        y = float(input(f'Enter apple y-location in m: '))
-        z = float(input(f'Enter apple z-location in m: '))
+        apple_idx = int(input(f'Enter desired apple index (from 0): '))
+        apple_pose = self.pre_saved_apple_locations[apple_idx]
 
-        apple_pose = [x, y, z]
+        delta_x = float(input('How much to shift in the x direction: '))
+        delta_y = float(input('How much to shift in the y direction: '))
+        delta_z = float(input('How much to shift in the z direction: '))
+
+        apple_pose[0] = apple_pose[0] + delta_x
+        apple_pose[1] = apple_pose[1] + delta_y
+        apple_pose[2] = apple_pose[2] + delta_z
 
         # Update base directory for new apple location
-        base_dir = self.batch_dir + f'apple_{0}/'
+        base_dir = self.batch_dir + f'apple_{apple_idx}/'
 
         # Stage 3: Approach apple
-        self.start_recording(self.approach_trajectory_topics, base_dir + self.approach_trajectory_file_name_prefix)
-        time.sleep(self.recording_startup_delay)
+        # self.start_recording(self.approach_trajectory_topics, base_dir + self.approach_trajectory_file_name_prefix)
+        # time.sleep(self.recording_startup_delay)
         self.get_logger().info(f'Starting initial apple approach.')
         waypoints = self.call_coord_to_traj(apple_pose)
         self.trigger_arm_mover(waypoints)
         self.get_logger().info(f'Initial apple approach complete')
-        self.stop_recording()
+        # self.stop_recording()
 
         # Stage 4: Start visual servo
         self.start_recording(self.visual_servo_topics, base_dir + self.visual_servo_file_name_prefix)
