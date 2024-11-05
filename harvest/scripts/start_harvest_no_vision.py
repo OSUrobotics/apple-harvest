@@ -137,6 +137,10 @@ class StartHarvest(Node):
         while not self.start_move_arm_to_home_client.wait_for_service(timeout_sec=1.0):
             self.get_logger().info("Start move arm to home service not available, waiting...")
 
+        self.start_move_arm_to_scan_client = self.create_client(Trigger, "/move_arm_to_config", callback_group=m_callback_group)
+        while not self.start_move_arm_to_scan_client.wait_for_service(timeout_sec=1.0):
+            self.get_logger().info("Start move arm to home service not available, waiting...")
+
         self.coord_to_traj_client = self.create_client(CoordinateToTrajectory, 'coordinate_to_trajectory', callback_group=m_callback_group)
         while not self.coord_to_traj_client.wait_for_service(timeout_sec=1.0):
             self.get_logger().info('Waiting for coordinate_to_trajectory to be available...')
@@ -380,10 +384,17 @@ class StartHarvest(Node):
         rclpy.spin_until_future_complete(self, self.future) 
         return self.future.result()
     
+    def go_to_scan_config(self):
+        # Starts go to home
+        self.request = Trigger.Request()
+        self.future = self.start_move_arm_to_scan_client.call_async(self.request)
+        rclpy.spin_until_future_complete(self, self.future) 
+        return self.future.result()
+    
     def call_coord_to_traj(self, apple_pose):
-        x = apple_pose.position.x
-        y = apple_pose.position.y
-        z = apple_pose.position.z
+        x = apple_pose[0]
+        y = apple_pose[1]
+        z = apple_pose[2]
 
         # Create a Point message
         coord = Point()
@@ -425,31 +436,33 @@ class StartHarvest(Node):
     
     def pick_controller(self):
         req = Empty.Request()
-        stop_time = 15
+        stop_time = 8
         if self.PICK_PATTERN == 'force-heuristic':
             self.configure_controller()
             self.future = self.start_controller_cli.call_async(req)
             rclpy.spin_until_future_complete(self, self.future)
-            while self.status != GoalStatus.STATUS_SUCCEEDED: #full disclosure, no idea if this works or if it gums up ROS
-               pass
+            # while self.status != GoalStatus.STATUS_SUCCEEDED: #full disclosure, no idea if this works or if it gums up ROS
+            #    pass
+            time.sleep(stop_time)
+            
             self.future = self.stop_controller_cli.call_async(req)
             rclpy.spin_until_future_complete(self, self.future)
             
         elif self.PICK_PATTERN == 'pull-twist':
             self.future = self.pull_twist_start_cli.call_async(req)
             rclpy.spin_until_future_complete(self, self.future)
-            while self.status != GoalStatus.STATUS_SUCCEEDED:
-               pass
-            #self.future = self.pull_twist_stop_cli.call_async(req)
-            #rclpy.spin_until_future_complete(self, self.future)
+            # while self.status != GoalStatus.STATUS_SUCCEEDED:
+            #    pass
+            self.future = self.pull_twist_stop_cli.call_async(req)
+            rclpy.spin_until_future_complete(self, self.future)
             
         elif self.PICK_PATTERN == 'linear-pull':
             self.future = self.linear_pull_start_cli.call_async(req)
             rclpy.spin_until_future_complete(self, self.future)
-            while self.status != GoalStatus.STATUS_SUCCEEDED:
-               pass
-            #self.future = self.linear_pull_stop_cli.call_async(req)
-            #rclpy.spin_until_future_complete(self, self.future)
+            # while self.status != GoalStatus.STATUS_SUCCEEDED:
+            #    pass
+            self.future = self.linear_pull_stop_cli.call_async(req)
+            rclpy.spin_until_future_complete(self, self.future)
             
         else:
             self.get_logger().info(f'No valid control scheme set')
@@ -483,12 +496,12 @@ class StartHarvest(Node):
         self.get_logger().info("YAML file saved successfully.")    
 
     def start(self): 
-        # # Stage 0: Scan trellis wire coordinates by freedriving UR5 to four locations
+        # Stage 0: Scan trellis wire coordinates by freedriving UR5 to four locations
         # self.scan_trellis_pts()
 
-        # Stage 1: Reset arm to home position
-        self.get_logger().info(f'Resetting arm to home position')
-        self.go_to_home()
+        # Stage 1: Go to scan position
+        # self.get_logger().info("Resetting arm to scan position")
+        # self.go_to_scan_config()
 
         # # Stage 2: Request apple location prediction
         # self.get_logger().info(f'Sending request to predict apple centerpoint locations in scene.')
@@ -496,89 +509,98 @@ class StartHarvest(Node):
         # # Save the apple poses in a dictionary for metadata
         # self.apple_coorindates = {f'apple_{index + 1}': [pose.position.x, pose.position.y, pose.position.z] for index, pose in enumerate(apple_poses.poses)}
 
-        # self.get_logger().info(f'3D scan found {len(self.apple_coorindates.values)} apples!')
-        # input('Manually count apples! ')
+        # self.get_logger().info(f"3D Scan found {len(self.apple_coorindates)} apples!")
+        
+        # input("Manually count reachable apples. Press Enter when done...")
 
-        # Loop over apple locations
-        # for i in apple_poses.poses:
-        for iteration, i in enumerate(self.pre_saved_apple_locations):
-            # Update base directory for new apple location
-            base_dir = self.batch_dir + f'apple_{iteration}/'
+        # Stage 1: Reset arm to home position
+        self.get_logger().info(f'Resetting arm to home position')
+        self.go_to_home()
 
-            # Stage 3: Approach apple
-            # self.start_recording(self.approach_trajectory_topics, base_dir + self.approach_trajectory_file_name_prefix)
-            # time.sleep(self.recording_startup_delay)
-            self.get_logger().info(f'Starting initial apple approach.')
-            waypoints = self.call_coord_to_traj(i)
-            self.trigger_arm_mover(waypoints)
-            self.get_logger().info(f'Initial apple approach complete')
-            # self.stop_recording()
+        apple_idx = int(input(f'Enter desired apple index (from 0): '))
+        apple_pose = self.pre_saved_apple_locations[apple_idx]
 
-            # Stage 4: Start visual servo
-            self.start_recording(self.visual_servo_topics, base_dir + self.visual_servo_file_name_prefix)
-            time.sleep(self.recording_startup_delay)
-            self.get_logger().info(f'Switching controller to forward_position_controller.')
-            self.switch_controller(servo=True, sim=False)
-            self.get_logger().info(f'Starting servo node.')
-            self.start_servo()
-            self.get_logger().info(f'Starting visual servoing to center of apple')
-            self.start_visual_servo()
-            self.get_logger().info(f'Switching controller back to scaled_joint_trajectory_controller.')
-            self.switch_controller(servo=False, sim=False)
-            self.stop_recording()
+        delta_x = float(input('How much to shift in the x direction: '))
+        delta_y = float(input('How much to shift in the y direction: '))
+        delta_z = float(input('How much to shift in the z direction: '))
 
-            # Stage 5: Start final approach and pressure servo
-            self.start_recording(self.pressure_servo_topics, base_dir + self.pressure_servo_file_name_prefix)
-            time.sleep(self.recording_startup_delay)
-            self.get_logger().info(f'Switching controller to forward_position_controller.')
-            self.switch_controller(servo=True, sim=False)
-            self.get_logger().info(f'Starting servo node.')
-            self.start_servo()
-            self.get_logger().info(f'Configuring servo planning in base_link frame')
-            self.configure_servo('base_link')
-            self.get_logger().info(f'Starting apple grasp.')
-            self.grasp_controller()
-            self.get_logger().info(f'Switching controller back to scaled_joint_trajectory_controller.')
-            self.switch_controller(servo=False, sim=False)
-            self.stop_recording()            
+        apple_pose[0] = apple_pose[0] + delta_x
+        apple_pose[1] = apple_pose[1] + delta_y
+        apple_pose[2] = apple_pose[2] + delta_z
 
-            time.sleep(1.5)
+        # Update base directory for new apple location
+        base_dir = self.batch_dir + f'apple_{apple_idx}/'
 
-            # Stage 6: Start event detection and pick controller
-            self.start_recording(self.pick_controller_topics, base_dir + self.pick_controller_file_name_prefix)
-            time.sleep(self.recording_startup_delay)
-            self.get_logger().info('Starting event detection.')
-            self.start_detection()
-            self.get_logger().info(f'Starting pick controller')
-            self.get_logger().info(f'Switching controller to forward_position_controller.')
-            self.switch_controller(servo=True, sim=False)
-            self.get_logger().info(f'Starting servo node.')
-            self.start_servo()
-            self.get_logger().info(f'Configuring servo planning in base_link frame')
-            self.configure_servo('base_link')
-            self.get_logger().info(f'Activating {self.PICK_PATTERN} controller')
-            self.pick_controller()
+        # Stage 3: Approach apple
+        # self.start_recording(self.approach_trajectory_topics, base_dir + self.approach_trajectory_file_name_prefix)
+        # time.sleep(self.recording_startup_delay)
+        self.get_logger().info(f'Starting initial apple approach.')
+        waypoints = self.call_coord_to_traj(apple_pose)
+        self.trigger_arm_mover(waypoints)
+        self.get_logger().info(f'Initial apple approach complete')
+        # self.stop_recording()
 
-            time.sleep(0.25)
+        # Stage 4: Start visual servo
+        self.start_recording(self.visual_servo_topics, base_dir + self.visual_servo_file_name_prefix)
+        time.sleep(self.recording_startup_delay)
+        self.get_logger().info(f'Switching controller to forward_position_controller.')
+        self.switch_controller(servo=True, sim=False)
+        self.get_logger().info(f'Starting servo node.')
+        self.start_servo()
+        self.get_logger().info(f'Starting visual servoing to center of apple')
+        self.start_visual_servo()
+        self.get_logger().info(f'Switching controller back to scaled_joint_trajectory_controller.')
+        self.switch_controller(servo=False, sim=False)
+        self.stop_recording()
 
-            self.get_logger().info('Starting event detection.')
-            self.start_detection()
-            self.get_logger().info(f'Configuring servo planning in tool0 frame')
-            self.configure_servo('tool0')
-            self.get_logger().info(f'Switching controller back to scaled_joint_trajectory_controller.')
-            self.switch_controller(servo=False, sim=False)
-            self.stop_recording()
+        # Stage 5: Start final approach and pressure servo
+        self.start_recording(self.pressure_servo_topics, base_dir + self.pressure_servo_file_name_prefix)
+        time.sleep(self.recording_startup_delay)
+        self.get_logger().info(f'Switching controller to forward_position_controller.')
+        self.switch_controller(servo=True, sim=False)
+        self.get_logger().info(f'Starting servo node.')
+        self.start_servo()
+        self.get_logger().info(f'Configuring servo planning in base_link frame')
+        self.configure_servo('base_link')
+        self.get_logger().info(f'Starting apple grasp.')
+        self.grasp_controller()
+        self.get_logger().info(f'Switching controller back to scaled_joint_trajectory_controller.')
+        self.switch_controller(servo=False, sim=False)
+        self.stop_recording()            
 
-            # Stage 7: Return arm to home position
-            self.get_logger().info(f'Resetting arm to home position')
-            self.go_to_home()
+        time.sleep(0.25)
 
-            # Stage 8: Release apple
-            self.get_logger().info(f'Releasing apple.')
-            self.release_controller()
+        # Stage 6: Start event detection and pick controller
+        self.start_recording(self.pick_controller_topics, base_dir + self.pick_controller_file_name_prefix)
+        time.sleep(self.recording_startup_delay)
+        self.get_logger().info(f'Starting pick controller')
+        self.get_logger().info(f'Switching controller to forward_position_controller.')
+        self.switch_controller(servo=True, sim=False)
+        self.get_logger().info(f'Starting servo node.')
+        self.start_servo()
+        self.get_logger().info(f'Configuring servo planning in base_link frame')
+        self.configure_servo('base_link')
+        self.get_logger().info(f'Activating {self.PICK_PATTERN} controller')
+        self.pick_controller()
+        # time.sleep(0.25)
+        # self.get_logger().info('Starting event detection.')
+        # self.start_detection()
+        self.get_logger().info(f'Configuring servo planning in tool0 frame')
+        self.configure_servo('tool0')
+        self.get_logger().info(f'Switching controller back to scaled_joint_trajectory_controller.')
+        self.switch_controller(servo=False, sim=False)
+        self.stop_recording()
 
-            # Stage 9: Save batch metadata - final stage
-            self.save_metadata()
+        # Stage 7: Return arm to home position
+        self.get_logger().info(f'Resetting arm to home position')
+        self.go_to_home()
+
+        # Stage 8: Release apple
+        self.get_logger().info(f'Releasing apple.')
+        self.release_controller()
+
+        # Stage 9: Save batch metadata - final stage
+        self.save_metadata()
             
         self.get_logger().info(f'Batch Complete.')
 
