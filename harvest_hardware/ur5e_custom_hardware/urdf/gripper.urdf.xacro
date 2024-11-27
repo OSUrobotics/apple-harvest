@@ -31,6 +31,7 @@
         <parent link="gripper_link"/>
         <child link="gripper_top_camera_link"/>
         <origin xyz="0.00 -.072 -0.0865" rpy="0 0 0"/>
+        <!-- <origin xyz="0.009525 -.08255 -0.0445" rpy="0 0 0"/> -->
     </joint>
 
     <link name="gripper_top_camera_link">

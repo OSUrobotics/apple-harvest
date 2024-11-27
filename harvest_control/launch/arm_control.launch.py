@@ -1,10 +1,11 @@
 import os
-from ament_index_python.packages import get_package_prefix
+from ament_index_python.packages import get_package_prefix, get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
-from launch.actions import ExecuteProcess
+from launch.actions import ExecuteProcess, IncludeLaunchDescription
 from launch_ros.actions import Node
+from launch.launch_description_sources import PythonLaunchDescriptionSource
 
 def generate_launch_description():
     # Get the path to the installed Python scripts in the C++ package
@@ -31,7 +32,24 @@ def generate_launch_description():
     declared_arguments.append(DeclareLaunchArgument('traj_time_step', default_value="0.05", 
                                   description="Time step (in seconds) between UR5 joint trajectory waypoints."))
 
+    # Path to UR5 launch files
+    ur_driver_launch_path = os.path.join(
+        get_package_share_directory('ur_robot_driver'),
+        'launch',
+        'ur_control_custom_hw.launch.py')
+    
+    ur_moveit_launch_path = os.path.join(
+        get_package_share_directory('ur_moveit_config'),
+        'launch',
+        'ur_moveit_custom_hw.launch.py')
+
+
     return LaunchDescription(declared_arguments + [
+        
+        # IncludeLaunchDescription(PythonLaunchDescriptionSource(ur_driver_launch_path)),
+        # IncludeLaunchDescription(PythonLaunchDescriptionSource(ur_moveit_launch_path)),
+
+
         # Launch the coordinate_to_trajectory_node
         Node(
             package='harvest_control',
@@ -80,11 +98,17 @@ def generate_launch_description():
         #     name='pressure_averager',
         # ),
 
-        # Node(
-        #     package='harvest_control',
-        #     executable='pull_twist_controller.py',
-        #     name='pull_twist_controller',
-        # ),
+        Node(
+            package='harvest_control',
+            executable='pull_twist_controller.py',
+            name='pull_twist_controller',
+        ),
+
+        Node(
+            package='harvest_control',
+            executable='trellis_wire_scan.py',
+            name='gripper_pose_service',
+        ),
         
         # Launch C++ node
         Node(

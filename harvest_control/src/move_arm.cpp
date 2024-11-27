@@ -48,6 +48,14 @@ private:
         - M_PI / 2,
         0};
 
+    std::vector<double> scan_joint_positions = {
+        M_PI / 2,
+        - M_PI / 2, 
+        2 * M_PI / 3,
+        5 * M_PI / 6,
+        - M_PI / 2,
+        0};
+
     void execute_trajectory(const std::shared_ptr<harvest_interfaces::srv::SendTrajectory::Request> request,
                             std::shared_ptr<harvest_interfaces::srv::SendTrajectory::Response> response);
     void move_to_home(const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
@@ -117,12 +125,12 @@ void MoveArmNode::move_to_config(const std::shared_ptr<std_srvs::srv::Trigger::R
     (void)request; // Suppress unused parameter warning
 
     std::vector<double> target_config = {
-        -2.35,
-        4.88,
-        -0.89,
-        -3.65,
-        3.75,
-        1.62};
+        1.5,
+        -2.775,
+        1.72,
+        4.55,
+        -1.58,
+        0};
 
     // Set the target configuration as the target for the MoveGroup
     move_group_.setJointValueTarget(target_config);

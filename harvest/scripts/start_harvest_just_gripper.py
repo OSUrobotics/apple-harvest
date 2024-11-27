@@ -22,21 +22,15 @@ import time
 import os
 import yaml
 import copy
-import re
 
 class StartHarvest(Node):
 
     def __init__(self):
         super().__init__("start_harvest_node")
         m_callback_group = MutuallyExclusiveCallbackGroup()
-
-        # Parameters
-        self.PICK_PATTERN = 'force-heuristic' 
-        self.EVENT_SENSITIVITY = 0.43 # a sensitivity of 1.0 will detect any deviation from perfection as failure
         
         self.recording_startup_delay = 0.5 # Seconds
 
-        # METADATA
         # TODO: What sort of metadata do we want??? ##################################################
         self.trellis_wire_positions = {
             "bottom_left_coord": None,
@@ -46,7 +40,6 @@ class StartHarvest(Node):
         }
 
         self.apple_coorindates = {}
-        self.pick_pattern = {'pick controller': self.PICK_PATTERN}
         
         # TODO: Add in realsense recording capabilities
         self.prediction_topics = ['/apple_markers',]
@@ -70,7 +63,7 @@ class StartHarvest(Node):
                                     '/servo_node/delta_twist_cmds']
         
         # Base data save directory
-        self.base_data_dir = '/media/imml/LaCie/prosser_data_prosser_2024/day_2/'
+        self.base_data_dir = '/media/alejo/LaCie/harvest_data_prosser_2024/'
         self.batch_dir, self.batch_number = self.create_new_batch_directory(self.base_data_dir)
 
         # Individual stage directories
@@ -79,20 +72,6 @@ class StartHarvest(Node):
         self.visual_servo_file_name_prefix = 'visual_servo'
         self.pressure_servo_file_name_prefix = 'pressure_servo'
         self.pick_controller_file_name_prefix = 'pick_controller'
-
-        # Get presaved apple locations
-        path_to_search = self.base_data_dir + 'apple_locations/'
-        latest_dir = self.get_latest_directory(search_path=path_to_search)
-        if latest_dir:
-            self.get_logger().info(f"Reading apple locations from: {latest_dir}/apple_locations.csv")
-            self.pre_saved_apple_locations = self.read_apple_locations(latest_dir)
-            
-            if self.pre_saved_apple_locations is not None:
-                self.get_logger().info('Found presaved apple location data')
-            else:
-                self.get_logger().info("No data found.")
-        else:
-            self.get_logger().info("No directories found matching the pattern.")
 
         # Client for recorded listed ros topics
         self.start_record_client = self.create_client(RecordTopics, "record_topics", callback_group=m_callback_group)
@@ -137,6 +116,10 @@ class StartHarvest(Node):
         while not self.start_move_arm_to_home_client.wait_for_service(timeout_sec=1.0):
             self.get_logger().info("Start move arm to home service not available, waiting...")
 
+        self.start_move_arm_to_scan_client = self.create_client(Trigger, "/move_arm_to_config", callback_group=m_callback_group)
+        while not self.start_move_arm_to_scan_client.wait_for_service(timeout_sec=1.0):
+            self.get_logger().info("Start move arm to home service not available, waiting...")
+
         self.coord_to_traj_client = self.create_client(CoordinateToTrajectory, 'coordinate_to_trajectory', callback_group=m_callback_group)
         while not self.coord_to_traj_client.wait_for_service(timeout_sec=1.0):
             self.get_logger().info('Waiting for coordinate_to_trajectory to be available...')
@@ -179,6 +162,9 @@ class StartHarvest(Node):
 
         self._event_client = ActionClient(self, EventDetection, 'event_detection')
 
+        # Parameters
+        self.PICK_PATTERN = 'force-heuristic' 
+        self.EVENT_SENSITIVITY = 0.43 # a sensitivity of 1.0 will detect any deviation from perfection as failure
 
         self.status = GoalStatus.STATUS_EXECUTING
 
@@ -229,32 +215,6 @@ class StartHarvest(Node):
             self.get_logger().info(f'Recording stopped: {future.result().success}')
         else:
             self.get_logger().error('Failed to call /stop_recording service.')
-
-    def get_latest_directory(self, base_name='farmng_position', search_path='.'):
-        # Get the list of directories in the specified search path
-        dirs = [d for d in os.listdir(search_path) if os.path.isdir(os.path.join(search_path, d)) and re.match(rf'{base_name}_\d+', d)]
-        
-        # Extract the numeric part and convert to integers
-        numbers = [int(re.search(r'\d+', d).group()) for d in dirs]
-        
-        # Get the directory with the highest number
-        if numbers:
-            max_index = numbers.index(max(numbers))
-            latest_dir = dirs[max_index]
-            return os.path.join(search_path, latest_dir)
-        else:
-            return None
-
-    def read_apple_locations(self, directory):
-        csv_file_path = os.path.join(directory, 'apple_locations.csv')
-        
-        # Load the data using NumPy, skipping the header
-        try:
-            data = np.loadtxt(csv_file_path, delimiter=',', skiprows=1)
-            return data
-        except OSError as e:
-            print(f"Error reading {csv_file_path}: {e}")
-            return None
 
     def get_current_gripper_pose(self):
         request = GetGripperPose.Request()
@@ -380,6 +340,13 @@ class StartHarvest(Node):
         rclpy.spin_until_future_complete(self, self.future) 
         return self.future.result()
     
+    def go_to_scan_config(self):
+        # Starts go to home
+        self.request = Trigger.Request()
+        self.future = self.start_move_arm_to_scan_client.call_async(self.request)
+        rclpy.spin_until_future_complete(self, self.future) 
+        return self.future.result()
+    
     def call_coord_to_traj(self, apple_pose):
         x = apple_pose.position.x
         y = apple_pose.position.y
@@ -483,52 +450,57 @@ class StartHarvest(Node):
         self.get_logger().info("YAML file saved successfully.")    
 
     def start(self): 
-        # # Stage 0: Scan trellis wire coordinates by freedriving UR5 to four locations
+        # Stage 0: Scan trellis wire coordinates by freedriving UR5 to four locations
         # self.scan_trellis_pts()
+
+        # Stage 1: Go to scan position
+        self.get_logger().info("Resetting arm to scan position")
+        # self.go_to_scan_config()
+
+        # Stage 2: Request apple location prediction
+        self.get_logger().info(f'Sending request to predict apple centerpoint locations in scene.')
+        # apple_poses = self.start_apple_prediction()
+        # Save the apple poses in a dictionary for metadata
+        # self.apple_coorindates = {f'apple_{index + 1}': [pose.position.x, pose.position.y, pose.position.z] for index, pose in enumerate(apple_poses.poses)}
+
+        self.get_logger().info(f"3D Scan found {len(self.apple_coorindates)} apples!")
+        
+        # input("Manually count reachable apples. Press Enter when done...")
 
         # Stage 1: Reset arm to home position
         self.get_logger().info(f'Resetting arm to home position')
-        self.go_to_home()
-
-        # # Stage 2: Request apple location prediction
-        # self.get_logger().info(f'Sending request to predict apple centerpoint locations in scene.')
-        # apple_poses = self.start_apple_prediction()
-        # # Save the apple poses in a dictionary for metadata
-        # self.apple_coorindates = {f'apple_{index + 1}': [pose.position.x, pose.position.y, pose.position.z] for index, pose in enumerate(apple_poses.poses)}
-
-        # self.get_logger().info(f'3D scan found {len(self.apple_coorindates.values)} apples!')
-        # input('Manually count apples! ')
+        # self.go_to_home()
 
         # Loop over apple locations
-        # for i in apple_poses.poses:
-        for iteration, i in enumerate(self.pre_saved_apple_locations):
+        for i in range(1):
+        # for iteration, i in enumerate(apple_poses.poses):
             # Update base directory for new apple location
-            base_dir = self.batch_dir + f'apple_{iteration}/'
+            # base_dir = self.batch_dir + f'apple_{iteration}/'
 
-            # Stage 3: Approach apple
+            # # Stage 3: Approach apple
             # self.start_recording(self.approach_trajectory_topics, base_dir + self.approach_trajectory_file_name_prefix)
             # time.sleep(self.recording_startup_delay)
-            self.get_logger().info(f'Starting initial apple approach.')
-            waypoints = self.call_coord_to_traj(i)
-            self.trigger_arm_mover(waypoints)
-            self.get_logger().info(f'Initial apple approach complete')
+            # self.get_logger().info(f'Starting initial apple approach.')
+            # waypoints = self.call_coord_to_traj(i)
+            # self.trigger_arm_mover(waypoints)
+            # self.get_logger().info(f'Initial apple approach complete')
             # self.stop_recording()
 
-            # Stage 4: Start visual servo
-            self.start_recording(self.visual_servo_topics, base_dir + self.visual_servo_file_name_prefix)
-            time.sleep(self.recording_startup_delay)
-            self.get_logger().info(f'Switching controller to forward_position_controller.')
-            self.switch_controller(servo=True, sim=False)
-            self.get_logger().info(f'Starting servo node.')
-            self.start_servo()
-            self.get_logger().info(f'Starting visual servoing to center of apple')
-            self.start_visual_servo()
-            self.get_logger().info(f'Switching controller back to scaled_joint_trajectory_controller.')
-            self.switch_controller(servo=False, sim=False)
-            self.stop_recording()
+            # # Stage 4: Start visual servo
+            # self.start_recording(self.visual_servo_topics, base_dir + self.visual_servo_file_name_prefix)
+            # time.sleep(self.recording_startup_delay)
+            # self.get_logger().info(f'Switching controller to forward_position_controller.')
+            # self.switch_controller(servo=True, sim=False)
+            # self.get_logger().info(f'Starting servo node.')
+            # self.start_servo()
+            # self.get_logger().info(f'Starting visual servoing to center of apple')
+            # self.start_visual_servo()
+            # self.get_logger().info(f'Switching controller back to scaled_joint_trajectory_controller.')
+            # self.switch_controller(servo=False, sim=False)
+            # self.stop_recording()
 
             # Stage 5: Start final approach and pressure servo
-            self.start_recording(self.pressure_servo_topics, base_dir + self.pressure_servo_file_name_prefix)
+            # self.start_recording(self.pressure_servo_topics, base_dir + self.pressure_servo_file_name_prefix)
             time.sleep(self.recording_startup_delay)
             self.get_logger().info(f'Switching controller to forward_position_controller.')
             self.switch_controller(servo=True, sim=False)
@@ -542,32 +514,32 @@ class StartHarvest(Node):
             self.switch_controller(servo=False, sim=False)
             self.stop_recording()            
 
-            time.sleep(1.5)
+            # time.sleep(1.5)
 
-            # Stage 6: Start event detection and pick controller
-            self.start_recording(self.pick_controller_topics, base_dir + self.pick_controller_file_name_prefix)
-            time.sleep(self.recording_startup_delay)
-            self.get_logger().info('Starting event detection.')
-            self.start_detection()
-            self.get_logger().info(f'Starting pick controller')
-            self.get_logger().info(f'Switching controller to forward_position_controller.')
-            self.switch_controller(servo=True, sim=False)
-            self.get_logger().info(f'Starting servo node.')
-            self.start_servo()
-            self.get_logger().info(f'Configuring servo planning in base_link frame')
-            self.configure_servo('base_link')
-            self.get_logger().info(f'Activating {self.PICK_PATTERN} controller')
-            self.pick_controller()
+            # # Stage 6: Start event detection and pick controller
+            # self.start_recording(self.pick_controller_topics, base_dir + self.pick_controller_file_name_prefix)
+            # time.sleep(self.recording_startup_delay)
+            # self.get_logger().info('Starting event detection.')
+            # self.start_detection()
+            # self.get_logger().info(f'Starting pick controller')
+            # self.get_logger().info(f'Switching controller to forward_position_controller.')
+            # self.switch_controller(servo=True, sim=False)
+            # self.get_logger().info(f'Starting servo node.')
+            # self.start_servo()
+            # self.get_logger().info(f'Configuring servo planning in base_link frame')
+            # self.configure_servo('base_link')
+            # self.get_logger().info(f'Activating {self.PICK_PATTERN} controller')
+            # self.pick_controller()
 
-            time.sleep(0.25)
+            # time.sleep(0.25)
 
-            self.get_logger().info('Starting event detection.')
-            self.start_detection()
-            self.get_logger().info(f'Configuring servo planning in tool0 frame')
-            self.configure_servo('tool0')
-            self.get_logger().info(f'Switching controller back to scaled_joint_trajectory_controller.')
-            self.switch_controller(servo=False, sim=False)
-            self.stop_recording()
+            # # self.get_logger().info('Starting event detection.')
+            # # self.start_detection()
+            # self.get_logger().info(f'Configuring servo planning in tool0 frame')
+            # self.configure_servo('tool0')
+            # self.get_logger().info(f'Switching controller back to scaled_joint_trajectory_controller.')
+            # self.switch_controller(servo=False, sim=False)
+            # self.stop_recording()
 
             # Stage 7: Return arm to home position
             self.get_logger().info(f'Resetting arm to home position')
@@ -578,7 +550,7 @@ class StartHarvest(Node):
             self.release_controller()
 
             # Stage 9: Save batch metadata - final stage
-            self.save_metadata()
+            # self.save_metadata()
             
         self.get_logger().info(f'Batch Complete.')
 

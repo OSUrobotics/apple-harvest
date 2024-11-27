@@ -56,7 +56,8 @@ def generate_launch_description():
                      "prediction_yolo_conf": LaunchConfiguration("prediction_yolo_conf"),
                      "prediction_radius_min": LaunchConfiguration("prediction_radius_min"),
                      "prediction_radius_max": LaunchConfiguration("prediction_radius_max"),
-                     "prediction_distance_max": LaunchConfiguration("prediction_distance_max")
+                     "prediction_distance_max": LaunchConfiguration("prediction_distance_max"),
+                     "scan_data_path": LaunchConfiguration("scan_data_path")
                       }
                 ])
     

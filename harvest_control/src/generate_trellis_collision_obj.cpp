@@ -23,18 +23,10 @@ void addTreeToScene()
 
 
     geometry_msgs::msg::Pose leader_pose;
-    leader_pose.position.x = 2.0;
+    leader_pose.position.x = 0.0;
     leader_pose.position.y = 0.0;
     leader_pose.position.z = 2.0;  // Centered vertically
-
-    // Define the canopy angle as a quaterion
-    // -18.435 deg = -0.321751448 rad 
-    tf2::Quaternion canopy_orientation;
-    canopy_orientation.setRPY(0, -0.321751448, 0);
-    leader_pose.orientation.x = canopy_orientation.x();
-    leader_pose.orientation.y = canopy_orientation.y();
-    leader_pose.orientation.z = canopy_orientation.z();
-    leader_pose.orientation.w = canopy_orientation.w();
+    leader_pose.orientation.w = 1;
 
     // Add the leader branch to the tree object
     tree_object.primitives.push_back(leader_branch);
@@ -49,7 +41,7 @@ void addTreeToScene()
         horizontal_branch.dimensions = {4.0, 0.04};  // Height, radius
 
         geometry_msgs::msg::Pose branch_pose;
-        branch_pose.position.x = 2.0;
+        branch_pose.position.x = 0.0;
         branch_pose.position.y = 0.0;
         branch_pose.position.z = i * branch_spacing;  // Spaced vertically
         branch_pose.orientation.x = 0.7071;  // 90-degree rotation around X-axis
@@ -58,6 +50,18 @@ void addTreeToScene()
         tree_object.primitives.push_back(horizontal_branch);
         tree_object.primitive_poses.push_back(branch_pose);
     }
+
+    // Set the pose of the canopy relative to the base of the robot
+    tree_object.pose.position.x = 2.0;
+    tree_object.pose.position.y = 0.0;
+    tree_object.pose.position.z = 0.0;
+
+    tf2::Quaternion canopy_orientation;
+    canopy_orientation.setRPY(0, -0.321751448, 0);
+    tree_object.pose.orientation.x = canopy_orientation.x();
+    tree_object.pose.orientation.y = canopy_orientation.y();
+    tree_object.pose.orientation.z = canopy_orientation.z();
+    tree_object.pose.orientation.w = canopy_orientation.w();
 
     // Set the operation to ADD
     tree_object.operation = moveit_msgs::msg::CollisionObject::ADD;
@@ -75,7 +79,7 @@ int main(int argc, char** argv)
     auto node = rclcpp::Node::make_shared("add_tree_to_scene");
 
     // Allow some time for MoveIt to initialize
-    rclcpp::sleep_for(std::chrono::seconds(2));
+    rclcpp::sleep_for(std::chrono::seconds(1));
 
     // Add the tree structure to the planning scene
     addTreeToScene();
