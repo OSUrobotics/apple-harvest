@@ -27,6 +27,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/SetValue.srv"
   "srv/RecordTopics.srv"
   "srv/GetGripperPose.srv"
+  "srv/UpdateTrellisPosition.srv"
   DEPENDENCIES 
   std_msgs
   geometry_msgs

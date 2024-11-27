@@ -66,6 +66,7 @@ ament_target_dependencies(generate_trellis_collision_obj
   "moveit_msgs"
   "shape_msgs"
   "tf2"
+  "harvest_interfaces"
 )
 
 ### PYTHON ###
