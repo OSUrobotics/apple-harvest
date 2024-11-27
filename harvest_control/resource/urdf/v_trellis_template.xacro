@@ -1,0 +1,60 @@
+<?xml version="1.0"?>
+<robot name="tree_structure" xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <!-- Parameters for branches -->
+  <xacro:property name="horizontal_branch_spacing" value="1.0"/> <!-- Spacing between horizontal branches -->
+  <xacro:property name="branch_diameter" value="0.04"/>          <!-- Diameter of the horizontal branches -->
+  <xacro:property name="branch_length" value="4.0"/>              <!-- Length of the horizontal branches -->
+  <xacro:property name="leader_branch_radius" value="0.08"/>      <!-- Radius of the leader branch -->
+  <xacro:property name="leader_branch_length" value="4.0"/>       <!-- Length of the leader branch -->
+
+  <!-- Leader branch -->
+  <link name="leader_branch">
+    <visual>
+      <geometry>
+        <cylinder length="${leader_branch_length}" radius="${leader_branch_radius}" />
+      </geometry>
+      <origin xyz="0 0 ${leader_branch_length/2}" rpy="0 0 0" />
+      <material name="gray" />
+    </visual>
+    <collision>
+      <geometry>
+        <cylinder length="${leader_branch_length}" radius="${leader_branch_radius}" />
+      </geometry>
+      <origin xyz="0 0 ${leader_branch_length/2}" rpy="0 0 0" />
+    </collision>
+  </link>
+
+  <!-- Macro to define horizontal branches -->
+  <xacro:macro name="horizontal_branch" params="index z_position">
+    <link name="horizontal_branch_${index}">
+      <visual>
+        <geometry>
+          <cylinder length="${branch_length}" radius="${branch_diameter}" />
+        </geometry>
+        <origin xyz="0 0 0" rpy="0 1.5708 0" />
+        <material name="brown" />
+      </visual>
+      <collision>
+        <geometry>
+          <cylinder length="${branch_length}" radius="${branch_diameter}" />
+        </geometry>
+        <origin xyz="0 0 0" rpy="0 1.5708 0" />
+      </collision>
+    </link>
+
+    <!-- Joint to attach the branch to the leader branch -->
+    <joint name="joint_branch_${index}" type="fixed">
+      <parent link="leader_branch"/>
+      <child link="horizontal_branch_${index}"/>
+      <origin xyz="0 0 ${z_position}" rpy="0 0 0"/>
+    </joint>
+  </xacro:macro>
+
+  <!-- Call the macro for each horizontal branch with calculated z positions -->
+  <xacro:horizontal_branch index="1" z_position="${horizontal_branch_spacing * 1}"/>
+  <xacro:horizontal_branch index="2" z_position="${horizontal_branch_spacing * 2}"/>
+  <xacro:horizontal_branch index="3" z_position="${horizontal_branch_spacing * 3}"/>
+  <xacro:horizontal_branch index="4" z_position="${horizontal_branch_spacing * 4}"/>
+
+</robot>

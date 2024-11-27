@@ -20,17 +20,25 @@ find_package(moveit_ros_planning_interface REQUIRED)
 find_package(controller_manager_msgs REQUIRED)
 find_package(trajectory_msgs REQUIRED)
 find_package(harvest_interfaces)
-find_package(jsoncpp REQUIRED)
 
 
 ### C++ ###
 add_executable(move_arm src/move_arm.cpp)
+# add_executable(move_arm_action_based src/move_arm_action_based.cpp src/generate_trellis_collision_obj.cpp)
+# add_executable(move_arm_action_based src/generate_trellis_collision_obj.cpp)
+
+add_executable(generate_trellis_collision_obj src/generate_trellis_collision_obj.cpp)
 
 target_include_directories(move_arm PUBLIC
-  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-  $<INSTALL_INTERFACE:include>)
+$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+$<INSTALL_INTERFACE:include>)
+
+# target_include_directories(move_arm_action_based PUBLIC
+# $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+# $<INSTALL_INTERFACE:include>)
 
 target_compile_features(move_arm PUBLIC c_std_99 cxx_std_17)  # Require C99 and C++17
+# target_compile_features(move_arm_action_based PUBLIC c_std_99 cxx_std_17)  # Require C99 and C++17
 
 ament_target_dependencies(
   move_arm
@@ -39,15 +47,26 @@ ament_target_dependencies(
   "rclcpp"
   "trajectory_msgs"
   "std_srvs"
+  "shape_msgs"
+  )
+  
+  # ament_target_dependencies(
+    #   move_arm_action_based
+    #   "moveit_ros_planning_interface"
+    #   "harvest_interfaces"
+    #   "rclcpp"
+    #   "trajectory_msgs"
+    #   "std_srvs"
+    # )
+    
+ament_target_dependencies(generate_trellis_collision_obj
+  "rclcpp"
+  "moveit_ros_planning_interface"
+  "geometry_msgs"
+  "moveit_msgs"
+  "shape_msgs"
+  "tf2"
 )
-
-# Link jsoncpp manually
-find_library(JSONCPP_LIBRARIES NAMES jsoncpp PATHS /usr/lib /usr/local/lib)
-if (JSONCPP_LIBRARIES)
-  target_link_libraries(move_arm ${JSONCPP_LIBRARIES})
-else()
-  message(FATAL_ERROR "Could not find jsoncpp library")
-endif()
 
 ### PYTHON ###
 # Install Python modules
@@ -67,13 +86,16 @@ install(PROGRAMS
   scripts/pull_twist_controller.py
   scripts/trellis_wire_scan.py
   scripts/get_manual_apple_locations.py
-  scripts/pyb_scripts/load_objects.py
-  scripts/pyb_scripts/load_robot.py
-  scripts/pyb_scripts/pyb_utils.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
 install(TARGETS move_arm
+  DESTINATION lib/${PROJECT_NAME})
+
+# install(TARGETS move_arm_action_based
+  # DESTINATION lib/${PROJECT_NAME})
+
+install(TARGETS generate_trellis_collision_obj
   DESTINATION lib/${PROJECT_NAME})
 
 ### LAUNCH ###

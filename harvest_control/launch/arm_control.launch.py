@@ -44,52 +44,52 @@ def generate_launch_description():
                     ]
         ),
 
-        Node(
-            package='harvest_control',
-            executable='event_detector.py',
-            name='event_detector',
-        ),
+        # Node(
+        #     package='harvest_control',
+        #     executable='event_detector.py',
+        #     name='event_detector',
+        # ),
 
-        Node(
-            package='harvest_control',
-            executable='force_filter.py',
-            name='forcefilter',
-        ),
+        # Node(
+        #     package='harvest_control',
+        #     executable='force_filter.py',
+        #     name='forcefilter',
+        # ),
 
-        Node(
-            package='harvest_control',
-            executable='heuristic_controller.py',
-            name='pick_controller',
-        ),
+        # Node(
+        #     package='harvest_control',
+        #     executable='heuristic_controller.py',
+        #     name='pick_controller',
+        # ),
 
-        Node(
-            package='harvest_control',
-            executable='linear_controller.py',
-            name='linear_controller',
-        ),
+        # Node(
+        #     package='harvest_control',
+        #     executable='linear_controller.py',
+        #     name='linear_controller',
+        # ),
 
-        Node(
-            package='harvest_control',
-            executable='pose_listener.py',
-            name='tf_listener',
-        ),
+        # Node(
+        #     package='harvest_control',
+        #     executable='pose_listener.py',
+        #     name='tf_listener',
+        # ),
 
-        Node(
-            package='harvest_control',
-            executable='pressure_averager.py',
-            name='pressure_averager',
-        ),
+        # Node(
+        #     package='harvest_control',
+        #     executable='pressure_averager.py',
+        #     name='pressure_averager',
+        # ),
 
-        Node(
-            package='harvest_control',
-            executable='pull_twist_controller.py',
-            name='pull_twist_controller',
-        ),
+        # Node(
+        #     package='harvest_control',
+        #     executable='pull_twist_controller.py',
+        #     name='pull_twist_controller',
+        # ),
         
         # Launch C++ node
         Node(
             package='harvest_control',
-            executable='move_arm',
+            executable='move_arm_action_based',
             name='move_arm_node',
             parameters=[
                     {"max_accel": LaunchConfiguration("max_accel"),
