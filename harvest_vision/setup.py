@@ -25,6 +25,8 @@ setup(
     entry_points={
         'console_scripts': [
             'apple_prediction = harvest_vision.apple_prediction:main',
+            'apple_prediction_presaved_images = harvest_vision.apple_prediction_presaved_images:main',
+            'voxelize_scan = harvest_vision.voxelize_scan:main',
         ],
     },
 )

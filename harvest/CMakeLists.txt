@@ -29,6 +29,7 @@ install(PROGRAMS
   scripts/start_harvest_no_vision.py
   scripts/start_harvest_just_gripper.py
   scripts/record.py
+  scripts/apple_prediction_test.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

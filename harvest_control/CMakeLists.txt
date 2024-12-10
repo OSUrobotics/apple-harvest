@@ -28,6 +28,7 @@ add_executable(move_arm src/move_arm.cpp)
 # add_executable(move_arm_action_based src/generate_trellis_collision_obj.cpp)
 
 add_executable(generate_trellis_collision_obj src/generate_trellis_collision_obj.cpp)
+add_executable(pointcloud_to_collision_obj src/pointcloud_to_collision_obj.cpp)
 
 target_include_directories(move_arm PUBLIC
 $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -69,6 +70,16 @@ ament_target_dependencies(generate_trellis_collision_obj
   "harvest_interfaces"
 )
 
+ament_target_dependencies(pointcloud_to_collision_obj
+  "rclcpp"
+  "moveit_ros_planning_interface"
+  "geometry_msgs"
+  "moveit_msgs"
+  "shape_msgs"
+  "tf2"
+  "harvest_interfaces"
+)
+
 ### PYTHON ###
 # Install Python modules
 ament_python_install_package(${PROJECT_NAME})
@@ -97,6 +108,9 @@ install(TARGETS move_arm
   # DESTINATION lib/${PROJECT_NAME})
 
 install(TARGETS generate_trellis_collision_obj
+  DESTINATION lib/${PROJECT_NAME})
+
+install(TARGETS pointcloud_to_collision_obj
   DESTINATION lib/${PROJECT_NAME})
 
 ### LAUNCH ###
