@@ -13,20 +13,46 @@ class VoxelGridService(Node):
         self.publisher = self.create_publisher(Point, 'voxel_centers', 10)
         self.get_logger().info('VoxelGrid Service ready.')
 
+    def transform_points(self, pcd_points, rotation, translation):
+        # Scale points from mm to m
+        pcd_points = np.asarray(pcd_points) / 1000  
+
+        # Combine rotation and translation into a single transformation matrix
+        transformation_matrix = np.eye(4)  # 4x4 identity matrix
+        transformation_matrix[:3, :3] = rotation  # Set the rotation
+        transformation_matrix[:3, 3] = translation  # Set the translation
+
+        # Convert points to homogeneous coordinates (Nx4)
+        homogeneous_points = np.hstack((pcd_points, np.ones((pcd_points.shape[0], 1))))
+
+        # Apply the transformation
+        transformed_points = homogeneous_points @ transformation_matrix.T
+
+        # Return only the 3D points
+        return transformed_points[:, :3]
+
     def voxelize_point_cloud(self, file_path, voxel_size):
         # Load the point cloud
         pcd = o3d.io.read_point_cloud(file_path)
-        
-        # Convert points from mm to m
-        pcd_points = np.asarray(pcd.points)  # Convert to NumPy array
-        pcd_points /= 1000  # Scale points from mm to m
 
-        # # Coordinate frame change
-        # new_points = np.copy(pcd_points)
-        # new_points[:, 1] = pcd_points[:, 2]
-        # new_points[:, 2] = pcd_points[:, 1]
+        # Coordinate frame change
+        ## Microsoft Azure Kinect DK coordinate frame (when looking out from the camera)
+        ### x-axis: right 
+        ### y-axis: down
+        ### z-axis: forward
+        R = np.array([
+            [1, 0, 0],  # X remains X
+            [0, 0, 1],  # Z becomes Y
+            [0, -1, 0]  # -Y becomes Z
+        ])
 
-        pcd.points = o3d.utility.Vector3dVector(pcd_points)  # Convert back to Open3D format
+        # Translation vector (new origin relative to old origin)
+        translation = np.array([0, 0, 0.75])
+
+        # Transform the points
+        transformed_points = self.transform_points(pcd.points, R, translation)
+
+        pcd.points = o3d.utility.Vector3dVector(transformed_points)  # Convert back to Open3D format
 
         # Perform voxelization
         voxel_grid = o3d.geometry.VoxelGrid.create_from_point_cloud(pcd, voxel_size=voxel_size)
@@ -67,16 +93,16 @@ def main(args=None):
     rclpy.init(args=args)
     node = VoxelGridService()
 
-    # try:
-    #     rclpy.spin(node)
-    # except KeyboardInterrupt:
-    #     pass
-    # finally:
-    #     node.destroy_node()
-    #     rclpy.shutdown()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
 
-    rclpy.spin(node)
-    rclpy.shutdown()
+    # rclpy.spin(node)
+    # rclpy.shutdown()
 
 
 if __name__ == '__main__':

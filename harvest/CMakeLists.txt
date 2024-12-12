@@ -30,6 +30,7 @@ install(PROGRAMS
   scripts/start_harvest_just_gripper.py
   scripts/record.py
   scripts/apple_prediction_test.py
+  scripts/orchard_templating.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
