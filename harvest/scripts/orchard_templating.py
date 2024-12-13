@@ -7,7 +7,7 @@ from rclpy.executors import MultiThreadedExecutor
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 from moveit_msgs.msg import CollisionObject
 from shape_msgs.msg import SolidPrimitive
-from geometry_msgs.msg import Pose
+from geometry_msgs.msg import Pose, Point
 # Interfaces
 from harvest_interfaces.srv import ApplePrediction, VoxelGrid
 
@@ -19,6 +19,8 @@ class OrchardTemplating(Node):
     def __init__(self):
         super().__init__("orchard_templating_node")
         m_callback_group = MutuallyExclusiveCallbackGroup()
+
+        self.voxel_size = 0.05
 
         # Publishers
         self.voxel_collision_pub = self.create_publisher(CollisionObject, "/collision_object", 10)
@@ -41,11 +43,29 @@ class OrchardTemplating(Node):
     
     def call_voxel_grid_service(self):
         request = VoxelGrid.Request()
-        request.voxel_size = 0.1  # Adjust voxel size
+        request.voxel_size = self.voxel_size  # TODO: Set voxel size as a ros2 parameter
 
         self.future = self.voxel_client.call_async(request)
         rclpy.spin_until_future_complete(self, self.future) 
         return self.future.result().voxel_centers
+    
+    def get_neighbors(self, coordinates, target_coordinates, radius=0.25):
+        # Find coordinates within the sphere
+        points = []
+        idx = []
+        for target in target_coordinates:
+            # Compute Euclidean distances from the target to all original coordinates
+            distances = np.linalg.norm(coordinates - target, axis=1)
+            # Get indices of coordinates within the radius
+            indices = np.where(distances <= radius)[0]
+            # Collect results
+            points.append(coordinates[indices])
+            idx.append(indices)
+        
+        # Flatten the array and remove duplicates
+        idx_flattened = np.unique(np.hstack(idx))
+
+        return np.array(points, dtype=object), idx_flattened
     
     def add_collision_objects(self, voxel_centers):
         for i, voxel_center in enumerate(voxel_centers):
@@ -56,7 +76,7 @@ class OrchardTemplating(Node):
             # Define the shape and size
             primitive = SolidPrimitive()
             primitive.type = SolidPrimitive.BOX
-            primitive.dimensions = [0.1, 0.1, 0.1]  # Voxel size
+            primitive.dimensions = [self.voxel_size] * 3
 
             # Define the pose
             box_pose = Pose()
@@ -68,20 +88,31 @@ class OrchardTemplating(Node):
             collision_object.operation = CollisionObject.ADD
 
             self.voxel_collision_pub.publish(collision_object)
-        self.get_logger().info(f"Published {len(voxel_centers)} collision objects to planning scene")
 
     def start(self): 
-        # Stage 2: Request apple location prediction
+        # Request apple location prediction
         self.get_logger().info(f'Sending request to predict apple centerpoint locations in scene.')
         apple_poses = self.start_apple_prediction()
-        point_cloud_voxels = self.call_voxel_grid_service()
+        apple_coords = np.array([[pose.position.x, pose.position.y, pose.position.z] for pose in apple_poses.poses])
+        self.get_logger().info(f'# of apples found: {len(apple_poses.poses)}')
 
-        # Loop over apple locations
-        # for i in apple_poses.poses:
-        self.get_logger().info(f'# Apples found: {len(apple_poses.poses)}')
-        self.get_logger().info(f"# Voxels found: {len(point_cloud_voxels)}")
+        # Request voxel data from point cloud
+        self.get_logger().info(f'Sending request to extract voxels from point cloud.')
+        voxel_centers = self.call_voxel_grid_service()
+        voxel_centers = np.array([[point.x, point.y, point.z] for point in voxel_centers])
+        self.get_logger().info(f"# of voxels generated: {len(voxel_centers)}")
 
-        self.add_collision_objects(point_cloud_voxels)
+        # Find all neighboring point within a sphere around the apple locations
+        neighbor_coords, neighbor_idx = self.get_neighbors(voxel_centers, apple_coords, radius=0.1)
+        self.get_logger().info(f'# of voxels to remove based on apple locations: {len(neighbor_idx)}')
+
+        voxel_centers_apple_masked = [idx for i, idx in enumerate(voxel_centers) if i not in neighbor_idx]
+        self.get_logger().info(f'# of voxels after apple location removal: {len(voxel_centers_apple_masked)}')
+
+        # Add voxels as moveit2 collision objects - first convert back to pose message
+        voxel_centers_apple_masked_poses = [Point(x=coord[0], y=coord[1], z=coord[2]) for coord in voxel_centers_apple_masked]
+        self.get_logger().info(f"Publishing {len(voxel_centers_apple_masked_poses)} collision objects to planning scene")
+        self.add_collision_objects(voxel_centers_apple_masked_poses)
 
 
 def main(args=None):

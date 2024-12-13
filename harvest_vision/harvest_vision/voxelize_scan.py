@@ -47,7 +47,7 @@ class VoxelGridService(Node):
         ])
 
         # Translation vector (new origin relative to old origin)
-        translation = np.array([0, 0, 0.75])
+        translation = np.array([0, 0.25, 0.45])
 
         # Transform the points
         transformed_points = self.transform_points(pcd.points, R, translation)
@@ -69,7 +69,7 @@ class VoxelGridService(Node):
             # Use the voxel size from the request
             voxel_size = request.voxel_size
 
-            file_path = "/home/marcus/orchard_template_ws/src/apple-harvest/harvest_vision/harvest_vision/point_cloud/pointcloud_1.ply"
+            file_path = "/home/marcus/orchard_template_ws/src/apple-harvest/harvest_vision/point_cloud/pointcloud_1.ply"
 
             # Voxelize the point cloud
             voxel_centers, _ = self.voxelize_point_cloud(file_path, voxel_size)

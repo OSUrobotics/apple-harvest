@@ -26,6 +26,11 @@ class ApplePredictionPreSaved(Node):
         Then uses RANSAC to fit a sphere to each apple to estimate the position and radius.'''
         super().__init__("apple_prediction_pre_saved_node")
 
+        self.camera_type = 'azure'
+
+        ### AZURE CAMERA INTRINSICS
+        self.azure_depth_intrinsic = [504.88714599609375, 0.0, 325.4923095703125, 0.0, 504.9976806640625, 322.3111877441406, 0.0, 0.0, 1.0]
+
         ### SERVICE
         self.prediction_srv = self.create_service(ApplePrediction, "apple_prediction_presaved_images", self.prediction_callback_srv)
 
@@ -114,7 +119,8 @@ class ApplePredictionPreSaved(Node):
         transformed_poses = PoseArray()
         for i in apple_poses:
             origin = PoseStamped()
-            origin.header.frame_id = "camera_color_optical_frame"
+            # origin.header.frame_id = "camera_color_optical_frame"
+            origin.header.frame_id = "camera_link"
             origin.pose.position.x = i[0]
             origin.pose.position.y = i[1]
             origin.pose.position.z = i[2]
@@ -130,6 +136,18 @@ class ApplePredictionPreSaved(Node):
         return transformed_poses
     
     def publish_markers(self, apple_poses, apple_radii):
+        # Clear existing markers
+        clear_markers = MarkerArray()
+        for i in range(self.marker_counter):
+            marker = Marker()
+            marker.header.frame_id = "base_link"
+            marker.id = i
+            marker.action = Marker.DELETE
+            clear_markers.markers.append(marker)
+        self.marker_pub.publish(clear_markers)
+        self.marker_counter = 0  # Reset the marker counter
+
+        # Publish new markers
         markers = MarkerArray()
         for i in range(len(apple_poses.poses)):
             marker = Marker()
@@ -218,10 +236,17 @@ class ApplePredictionPreSaved(Node):
             rgb_pc = o3d.geometry.Image(rgb)
             depth_pc = o3d.geometry.Image(depth_segmented)
             rgbd_image = o3d.geometry.RGBDImage.create_from_color_and_depth(rgb_pc, depth_pc, convert_rgb_to_intensity=False)
-            # Creates pointcloud using camera intrinsics from Realsense 435i
-            pcd = o3d.geometry.PointCloud.create_from_rgbd_image(
-                rgbd_image,
-                o3d.camera.PinholeCameraIntrinsic(width=848, height=480, fx=609.6989, fy=609.8549, cx=420.2079, cy=235.2782))
+
+            if self.camera_type == 'realsense':
+                # Creates pointcloud using camera intrinsics from Realsense 435i
+                pcd = o3d.geometry.PointCloud.create_from_rgbd_image(
+                    rgbd_image,
+                    o3d.camera.PinholeCameraIntrinsic(width=848, height=480, fx=609.6989, fy=609.8549, cx=420.2079, cy=235.2782))
+            elif self.camera_type == 'azure':
+                # Creates pointcloud using camera intrinsics from Microsoft Azure
+                pcd = o3d.geometry.PointCloud.create_from_rgbd_image(
+                    rgbd_image,
+                    o3d.camera.PinholeCameraIntrinsic(width=848, height=480, fx=self.azure_depth_intrinsic[0], fy=self.azure_depth_intrinsic[4], cx=self.azure_depth_intrinsic[2], cy=self.azure_depth_intrinsic[5]))
             center, radius = self.ransac_apple_estimation(np.array(pcd.points))
 
             if center and radius: 
