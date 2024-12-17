@@ -1,4 +1,5 @@
 #include <rclcpp/rclcpp.hpp>
+#include "harvest_interfaces/action/move_to_config.hpp"
 #include "harvest_interfaces/srv/move_to_pose.hpp"
 #include "harvest_interfaces/srv/send_trajectory.hpp"
 #include "trajectory_msgs/msg/joint_trajectory.hpp"
@@ -20,7 +21,7 @@
 #include <fstream>
 #include <vector>
 #include <stdexcept>
-#include <cmath>               // For M_PI
+#include <cmath> // For M_PI
 
 using std::placeholders::_1;
 using std::placeholders::_2;
@@ -35,6 +36,7 @@ private:
     rclcpp::Service<harvest_interfaces::srv::SendTrajectory>::SharedPtr arm_trajectory_service_;
     rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr arm_to_home_service_;
     rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr arm_to_config_service_;
+    rclcpp::Service<harvest_interfaces::srv::MoveToPose>::SharedPtr arm_to_pose_service_;
 
     std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
     std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
@@ -42,18 +44,18 @@ private:
     moveit::planning_interface::MoveGroupInterface move_group_;
     std::vector<double> home_joint_positions = {
         M_PI / 2,
-        - M_PI / 2, 
+        -M_PI / 2,
         2 * M_PI / 3,
         5 * M_PI / 6,
-        - M_PI / 2,
+        -M_PI / 2,
         0};
 
     std::vector<double> scan_joint_positions = {
         M_PI / 2,
-        - M_PI / 2, 
+        -M_PI / 2,
         2 * M_PI / 3,
         5 * M_PI / 6,
-        - M_PI / 2,
+        -M_PI / 2,
         0};
 
     void execute_trajectory(const std::shared_ptr<harvest_interfaces::srv::SendTrajectory::Request> request,
@@ -61,7 +63,9 @@ private:
     void move_to_home(const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
                       std::shared_ptr<std_srvs::srv::Trigger::Response> response);
     void move_to_config(const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
-                      std::shared_ptr<std_srvs::srv::Trigger::Response> response);
+                        std::shared_ptr<std_srvs::srv::Trigger::Response> response);
+    void move_to_pose(const std::shared_ptr<harvest_interfaces::srv::MoveToPose::Request> request,
+                      const std::shared_ptr<harvest_interfaces::srv::MoveToPose::Response> response);
 };
 
 MoveArmNode::MoveArmNode()
@@ -79,6 +83,9 @@ MoveArmNode::MoveArmNode()
 
     arm_to_config_service_ = this->create_service<std_srvs::srv::Trigger>(
         "move_arm_to_config", std::bind(&MoveArmNode::move_to_config, this, _1, _2));
+
+    arm_to_pose_service_ = this->create_service<harvest_interfaces::srv::MoveToPose>(
+        "move_arm_to_pose", std::bind(&MoveArmNode::move_to_pose, this, _1, _2));
 
     // Set up parameters
     double max_accel = this->get_parameter("max_accel").as_double();
@@ -149,6 +156,44 @@ void MoveArmNode::move_to_config(const std::shared_ptr<std_srvs::srv::Trigger::R
     {
         RCLCPP_ERROR(this->get_logger(), "Failed to move to target configuration.");
         response->success = false;
+    }
+}
+
+void MoveArmNode::move_to_pose(const std::shared_ptr<harvest_interfaces::srv::MoveToPose::Request> request,
+                               const std::shared_ptr<harvest_interfaces::srv::MoveToPose::Response> response)
+{
+    // Set the current state as the start
+    this->move_group_.setStartStateToCurrentState();
+
+    // Make PoseStamped message
+    tf2::Quaternion orientation;
+    orientation.setRPY(3.14 / 2, 3.14, 3.14);  // Set desired orientation
+    geometry_msgs::msg::PoseStamped msg;
+    msg.header.frame_id = "base_link";
+    msg.pose.orientation = tf2::toMsg(orientation);
+    msg.pose.position.x = request->position.x;
+    msg.pose.position.y = request->position.y;
+    msg.pose.position.z = request->position.z;
+
+    // Set pose and joint tolerances
+    this->move_group_.setPoseTarget(msg, "gripper_link");
+    this->move_group_.setGoalOrientationTolerance(0.2);
+    this->move_group_.setGoalJointTolerance(0.001); // Minimize joint changes
+
+    // Use an optimization-aware planner
+    this->move_group_.setPlannerId("RRTstarkConfigDefault");
+
+    // Plan and execute
+    moveit::planning_interface::MoveGroupInterface::Plan goal;
+    if (move_group_.plan(goal))
+    {
+        this->move_group_.execute(goal);
+        response->result = true;
+    }
+    else
+    {
+        RCLCPP_ERROR(this->get_logger(), "Planning failed!");
+        response->result = false;
     }
 }
 

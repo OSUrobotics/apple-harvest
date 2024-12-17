@@ -31,6 +31,16 @@ class ApplePredictionPreSaved(Node):
         ### AZURE CAMERA INTRINSICS
         self.azure_depth_intrinsic = [504.88714599609375, 0.0, 325.4923095703125, 0.0, 504.9976806640625, 322.3111877441406, 0.0, 0.0, 1.0]
 
+        if self.camera_type == 'azure':
+            # self.target_size = (640, 480)
+            self.target_size = (640, 576) # Retrieved from the Properties of the depth image
+            # width = int(np.floor(2 * self.azure_depth_intrinsic[2]))
+            # height = int(np.floor(2 * self.azure_depth_intrinsic[5]))
+            # self.target_size = (width, height)
+            self.get_logger().info(f'width: {self.target_size[0]}, height: {self.target_size[1]}')
+        else:
+            self.target_size = (848, 480)
+
         ### SERVICE
         self.prediction_srv = self.create_service(ApplePrediction, "apple_prediction_presaved_images", self.prediction_callback_srv)
 
@@ -88,18 +98,15 @@ class ApplePredictionPreSaved(Node):
         rgb_image = cv2.imread('/home/marcus/orchard_template_ws/src/apple-harvest/harvest_vision/images/color/color_raw_1.png')
         depth_image = cv2.imread('/home/marcus/orchard_template_ws/src/apple-harvest/harvest_vision/images/depth/depth_raw_1.png', cv2.IMREAD_UNCHANGED)
 
-        # Target size
-        target_size = (848, 480)
-
         # Resize RGB image
-        rgb_image = cv2.resize(rgb_image, target_size, interpolation=cv2.INTER_LINEAR)
+        rgb_image = cv2.resize(rgb_image, self.target_size, interpolation=cv2.INTER_LINEAR)
 
         # Resize depth image
-        depth_image = cv2.resize(depth_image, target_size, interpolation=cv2.INTER_NEAREST)
+        depth_image = cv2.resize(depth_image, self.target_size, interpolation=cv2.INTER_NEAREST)
 
         # Segment apples and resize masks
         apple_masks = self.segment_apples(rgb_image)
-        resized_apple_masks = [cv2.resize(mask, target_size, interpolation=cv2.INTER_NEAREST) for mask in apple_masks]
+        resized_apple_masks = [cv2.resize(mask, self.target_size, interpolation=cv2.INTER_NEAREST) for mask in apple_masks]
 
         # Process images and masks
         rgb_image = cv2.cvtColor(rgb_image, cv2.COLOR_BGR2RGB)
@@ -246,7 +253,11 @@ class ApplePredictionPreSaved(Node):
                 # Creates pointcloud using camera intrinsics from Microsoft Azure
                 pcd = o3d.geometry.PointCloud.create_from_rgbd_image(
                     rgbd_image,
-                    o3d.camera.PinholeCameraIntrinsic(width=848, height=480, fx=self.azure_depth_intrinsic[0], fy=self.azure_depth_intrinsic[4], cx=self.azure_depth_intrinsic[2], cy=self.azure_depth_intrinsic[5]))
+                    o3d.camera.PinholeCameraIntrinsic(width=self.target_size[0], height=self.target_size[1], 
+                                                      fx=self.azure_depth_intrinsic[0],
+                                                      fy=self.azure_depth_intrinsic[4], 
+                                                      cx=self.azure_depth_intrinsic[2], 
+                                                      cy=self.azure_depth_intrinsic[5]))
             center, radius = self.ransac_apple_estimation(np.array(pcd.points))
 
             if center and radius: 

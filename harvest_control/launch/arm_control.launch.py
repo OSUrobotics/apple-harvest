@@ -50,17 +50,17 @@ def generate_launch_description():
         # IncludeLaunchDescription(PythonLaunchDescriptionSource(ur_moveit_launch_path)),
 
 
-        # Launch the coordinate_to_trajectory_node
-        Node(
-            package='harvest_control',
-            executable='coordinate_to_trajectory.py',
-            name='trajectory_query_node',
-            parameters=[
-                    {"sim": LaunchConfiguration("sim"),
-                     "voxel_distance_tol": LaunchConfiguration("voxel_distance_tol")
-                      }
-                    ]
-        ),
+        # # Launch the coordinate_to_trajectory_node
+        # Node(
+        #     package='harvest_control',
+        #     executable='coordinate_to_trajectory.py',
+        #     name='trajectory_query_node',
+        #     parameters=[
+        #             {"sim": LaunchConfiguration("sim"),
+        #              "voxel_distance_tol": LaunchConfiguration("voxel_distance_tol")
+        #               }
+        #             ]
+        # ),
 
         # Node(
         #     package='harvest_control',
@@ -98,22 +98,22 @@ def generate_launch_description():
         #     name='pressure_averager',
         # ),
 
-        Node(
-            package='harvest_control',
-            executable='pull_twist_controller.py',
-            name='pull_twist_controller',
-        ),
+        # Node(
+        #     package='harvest_control',
+        #     executable='pull_twist_controller.py',
+        #     name='pull_twist_controller',
+        # ),
 
-        Node(
-            package='harvest_control',
-            executable='trellis_wire_scan.py',
-            name='gripper_pose_service',
-        ),
+        # Node(
+        #     package='harvest_control',
+        #     executable='trellis_wire_scan.py',
+        #     name='gripper_pose_service',
+        # ),
         
         # Launch C++ node
         Node(
             package='harvest_control',
-            executable='move_arm_action_based',
+            executable='move_arm',
             name='move_arm_node',
             parameters=[
                     {"max_accel": LaunchConfiguration("max_accel"),
