@@ -11,11 +11,11 @@ class TreeSceneNode : public rclcpp::Node
 {
 public:
     TreeSceneNode()
-        : Node("tree_scene_node"), tree_position_{2.0, 0.0, 0.0}
+        : Node("tree_scene_node"), tree_position_{0.0, 2.0, 0.0}
     {
         // Create the service
         update_position_service_ = this->create_service<harvest_interfaces::srv::UpdateTrellisPosition>(
-            "update_tree_position",
+            "update_trellis_position",
             std::bind(&TreeSceneNode::updateTreePositionCallback, this, std::placeholders::_1, std::placeholders::_2));
 
         // Allow some time for MoveIt to initialize
@@ -59,12 +59,12 @@ private:
         // Define the leader branch (cylinder)
         shape_msgs::msg::SolidPrimitive leader_branch;
         leader_branch.type = shape_msgs::msg::SolidPrimitive::CYLINDER;
-        leader_branch.dimensions = {4.0, 0.08};  // Height, radius
+        leader_branch.dimensions = {2.0, 0.08};  // Height, radius
 
         geometry_msgs::msg::Pose leader_pose;
         leader_pose.position.x = 0.0;
         leader_pose.position.y = 0.0;
-        leader_pose.position.z = 2.0;  // Centered vertically
+        leader_pose.position.z = 1.0;  // Centered vertically
         leader_pose.orientation.w = 1;
 
         // Add the leader branch to the tree object
@@ -72,12 +72,12 @@ private:
         tree_object.primitive_poses.push_back(leader_pose);
 
         // Define and add horizontal branches
-        double branch_spacing = 1.0;
+        double branch_spacing = 0.5;
         for (int i = 1; i <= 4; ++i)
         {
             shape_msgs::msg::SolidPrimitive horizontal_branch;
             horizontal_branch.type = shape_msgs::msg::SolidPrimitive::CYLINDER;
-            horizontal_branch.dimensions = {4.0, 0.04};  // Height, radius
+            horizontal_branch.dimensions = {2.0, 0.04};  // Height, radius
 
             geometry_msgs::msg::Pose branch_pose;
             branch_pose.position.x = 0.0;
@@ -96,7 +96,7 @@ private:
         tree_object.pose.position.z = tree_position_[2];
 
         tf2::Quaternion canopy_orientation;
-        canopy_orientation.setRPY(0, -0.321751448, 0);
+        canopy_orientation.setRPY(0, -0.321751448, 1.57079632679);
         tree_object.pose.orientation.x = canopy_orientation.x();
         tree_object.pose.orientation.y = canopy_orientation.y();
         tree_object.pose.orientation.z = canopy_orientation.z();

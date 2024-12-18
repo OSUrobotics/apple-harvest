@@ -12,7 +12,7 @@ from std_srvs.srv import Trigger
 import tf2_ros
 from geometry_msgs.msg import TransformStamped
 # Interfaces
-from harvest_interfaces.srv import ApplePrediction, VoxelGrid, MoveToPose
+from harvest_interfaces.srv import ApplePrediction, VoxelGrid, MoveToPose, UpdateTrellisPosition
 
 # Python 
 import numpy as np
@@ -50,6 +50,10 @@ class OrchardTemplating(Node):
         self.start_move_arm_to_home_client = self.create_client(Trigger, "/move_arm_to_home", callback_group=m_callback_group)
         while not self.start_move_arm_to_home_client.wait_for_service(timeout_sec=1.0):
             self.get_logger().info("Start move arm to home service not available, waiting...")
+
+        self.trellis_template_client = self.create_client(UpdateTrellisPosition, "/update_trellis_position", callback_group=m_callback_group)
+        while not self.trellis_template_client.wait_for_service(timeout_sec=1.0):
+            self.get_logger().info("Trellis template placement service not available, waiting...")
     
     def get_gripper_position(self, target_frame="world", source_frame="gripper_link"):
         try:
@@ -92,6 +96,16 @@ class OrchardTemplating(Node):
         self.future = self.voxel_client.call_async(request)
         rclpy.spin_until_future_complete(self, self.future) 
         return self.future.result().voxel_centers
+    
+    def update_trellis_template_pos(self, target_base_position):
+        request = UpdateTrellisPosition.Request()
+        request.x = target_base_position[0]
+        request.y = target_base_position[1]
+        request.z = target_base_position[2]
+
+        self.future = self.trellis_template_client.call_async(request)
+        rclpy.spin_until_future_complete(self, self.future) 
+        return self.future.result().success
     
     def get_neighbors(self, coordinates, target_coordinates, radius=0.25):
         # Find coordinates within the sphere
@@ -178,21 +192,26 @@ class OrchardTemplating(Node):
         voxel_centers_apple_masked = [idx for i, idx in enumerate(voxel_centers) if i not in neighbor_idx]
         self.get_logger().info(f'# of voxels after apple location removal: {len(voxel_centers_apple_masked)}')
 
-        # Add voxels as moveit2 collision objects - first convert back to pose message
-        voxel_centers_apple_masked_poses = [Point(x=coord[0], y=coord[1], z=coord[2]) for coord in voxel_centers_apple_masked]
-        self.get_logger().info(f"Publishing {len(voxel_centers_apple_masked_poses)} collision objects to planning scene")
-        self.add_collision_objects(voxel_centers_apple_masked_poses)
+        # # Add voxels as moveit2 collision objects - first convert back to pose message
+        # voxel_centers_apple_masked_poses = [Point(x=coord[0], y=coord[1], z=coord[2]) for coord in voxel_centers_apple_masked]
+        # self.get_logger().info(f"Publishing {len(voxel_centers_apple_masked_poses)} collision objects to planning scene")
+        # self.add_collision_objects(voxel_centers_apple_masked_poses)
 
-        # # Move arm to apple position
-        # apple_coords[:, 1] -= 0.1
-        # for i, apple in enumerate(apple_coords):
-        #     self.get_logger().info(f'Moving arm to apple ID: {i}')
-        #     self.send_pose_goal(apple)
+        # Move arm to apple position
+        apple_coords[:, 1] -= 0.1
+        for i, apple in enumerate(apple_coords):
+            self.get_logger().info(f'Moving arm to apple ID: {i}')
+            self.send_pose_goal(apple)
             
-        #     self.get_logger().info(f'Moving arm to home')
-        #     self.go_to_home()
+            self.get_logger().info(f'Moving arm to home')
+            self.go_to_home()
         
-        # self.get_logger().info(f'Searched through all apples!')
+        self.get_logger().info(f'Searched through all apples!')
+
+        # Place trellis template
+        target_base_pos = np.array([-0.07, 1.105, -0.19])
+        self.get_logger().info(f'Placing trellis template at x={np.round(target_base_pos[0], 3)}, y={np.round(target_base_pos[1], 3)}, z={np.round(target_base_pos[2], 3)} in the planning scene')
+        self.update_trellis_template_pos(target_base_pos)
 
 
 def main(args=None):
