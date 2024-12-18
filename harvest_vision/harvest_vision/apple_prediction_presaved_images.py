@@ -12,6 +12,10 @@ from tf2_ros.transform_listener import TransformListener
 from tf2_ros import TransformException
 import tf2_geometry_msgs
 # Image processing
+from sensor_msgs.msg import PointCloud2, PointField, Image
+from sensor_msgs_py import point_cloud2
+from std_msgs.msg import Header
+from cv_bridge import CvBridge
 import cv2
 import numpy as np
 from ultralytics import YOLO
@@ -27,25 +31,48 @@ class ApplePredictionPreSaved(Node):
         super().__init__("apple_prediction_pre_saved_node")
 
         self.camera_type = 'azure'
-
+        
         ### AZURE CAMERA INTRINSICS
-        self.azure_depth_intrinsic = [504.88714599609375, 0.0, 325.4923095703125, 0.0, 504.9976806640625, 322.3111877441406, 0.0, 0.0, 1.0]
+        # self.azure_depth_intrinsic = [504.88714599609375, 0.0, 325.4923095703125, 0.0, 504.9976806640625, 322.3111877441406, 0.0, 0.0, 1.0]
+        self.azure_color_intrinsic = [902.98, 0, 956.55, 0, 902.77, 547.68, 0, 0, 1]
+        self.fx = self.azure_color_intrinsic[0]  # Focal length in x
+        self.fy = self.azure_color_intrinsic[4]  # Focal length in y
+        self.cx = self.azure_color_intrinsic[2]  # Principal point x
+        self.cy = self.azure_color_intrinsic[5]  # Principal point y
 
         if self.camera_type == 'azure':
-            # self.target_size = (640, 480)
-            self.target_size = (640, 576) # Retrieved from the Properties of the depth image
-            # width = int(np.floor(2 * self.azure_depth_intrinsic[2]))
-            # height = int(np.floor(2 * self.azure_depth_intrinsic[5]))
-            # self.target_size = (width, height)
-            self.get_logger().info(f'width: {self.target_size[0]}, height: {self.target_size[1]}')
+            # self.target_size = (640, 576) # Retrieved from the Properties of the depth image
+            self.target_size = (1920, 1080)
         else:
             self.target_size = (848, 480)
+
+        # Load RGB and depth images
+        # TODO: update file paths to be ros2 parameters
+        rgb_path = '/home/marcus/orchard_template_ws/src/apple-harvest/harvest_vision/images/color/color_raw_1.png'
+        # depth_path = '/home/marcus/orchard_template_ws/src/apple-harvest/harvest_vision/images/depth/depth_raw_1.png'
+        depth_path = '/home/marcus/orchard_template_ws/src/apple-harvest/harvest_vision/images/depth/depth_to_color_1.png'
+        self.rgb_image = cv2.imread(rgb_path)
+        self.depth_image = cv2.imread(depth_path, cv2.IMREAD_UNCHANGED)
+        self.rgb_image = cv2.resize(self.rgb_image, self.target_size, interpolation=cv2.INTER_LINEAR) # Resize RGB image
+        self.depth_image = cv2.resize(self.depth_image, self.target_size, interpolation=cv2.INTER_NEAREST) # Resize depth image
 
         ### SERVICE
         self.prediction_srv = self.create_service(ApplePrediction, "apple_prediction_presaved_images", self.prediction_callback_srv)
 
-        ### PUBLISHER
+        ### PUBLISHERS
         self.marker_pub = self.create_publisher(MarkerArray, "apple_markers", 10)
+        self.rgb_publisher = self.create_publisher(Image, 'rgb_image', 10)
+        self.depth_publisher = self.create_publisher(Image, 'depth_image', 10)
+
+        ### TIMERS
+        self.timer = self.create_timer(0.1, self.publish_images)  # Publish at 10 Hz
+        self.pc_timer = self.create_timer(0.5, self.publish_pointcloud)  # Publish at 2 Hz
+        self.marker_timer = self.create_timer(0.5, self.marker_timer_callback)
+
+        self.pointcloud_publisher = self.create_publisher(PointCloud2, 'rgbd_pointcloud', 10)
+        self.scale = 1000.0  # Depth scale (e.g., mm to meters)
+
+        self.bridge = CvBridge()
 
         ### PARAMETERS
         self.declare_parameter("prediction_model_path", "NA")
@@ -74,7 +101,7 @@ class ApplePredictionPreSaved(Node):
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
 
-        ### vARS
+        ### VARS
         self.debug_flag = False
         self.marker_counter = 0
         self.ransac_thresh = .0001  # UNITS: m - distance that is considered an inlier point and an outlier point in the sphere fit
@@ -86,31 +113,14 @@ class ApplePredictionPreSaved(Node):
         self.scan_count = 0
         self.yolo_result = None
 
-    def callback(self):
-
-        if self.apple_centers and self.apple_radii and self.c2 < 1:
-            print("HERE")
-            self.publish_markers(self.apple_centers, self.apple_radii)
-            self.c2 += 1
-
     def prediction_callback_srv(self, request, response):
-        # Load RGB and depth images
-        rgb_image = cv2.imread('/home/marcus/orchard_template_ws/src/apple-harvest/harvest_vision/images/color/color_raw_1.png')
-        depth_image = cv2.imread('/home/marcus/orchard_template_ws/src/apple-harvest/harvest_vision/images/depth/depth_raw_1.png', cv2.IMREAD_UNCHANGED)
-
-        # Resize RGB image
-        rgb_image = cv2.resize(rgb_image, self.target_size, interpolation=cv2.INTER_LINEAR)
-
-        # Resize depth image
-        depth_image = cv2.resize(depth_image, self.target_size, interpolation=cv2.INTER_NEAREST)
-
         # Segment apples and resize masks
-        apple_masks = self.segment_apples(rgb_image)
+        apple_masks = self.segment_apples(self.rgb_image)
         resized_apple_masks = [cv2.resize(mask, self.target_size, interpolation=cv2.INTER_NEAREST) for mask in apple_masks]
 
         # Process images and masks
-        rgb_image = cv2.cvtColor(rgb_image, cv2.COLOR_BGR2RGB)
-        centers, radii = self.get_apple_centers(rgb_image, depth_image, resized_apple_masks)
+        rgb_image = cv2.cvtColor(self.rgb_image, cv2.COLOR_BGR2RGB)
+        centers, radii = self.get_apple_centers(rgb_image, self.depth_image, resized_apple_masks)
         transformed_poses = self.transform_apple_poses(centers)
 
         # Publish results
@@ -121,69 +131,6 @@ class ApplePredictionPreSaved(Node):
         self.c2 = 0
 
         return response
-
-    def transform_apple_poses(self, apple_poses):
-        transformed_poses = PoseArray()
-        for i in apple_poses:
-            origin = PoseStamped()
-            # origin.header.frame_id = "camera_color_optical_frame"
-            origin.header.frame_id = "camera_link"
-            origin.pose.position.x = i[0]
-            origin.pose.position.y = i[1]
-            origin.pose.position.z = i[2]
-            origin.pose.orientation.x = 0.0
-            origin.pose.orientation.y = 0.0
-            origin.pose.orientation.z = 0.0
-            origin.pose.orientation.w = 1.0
-            try:
-                new_pose = self.tf_buffer.transform(origin, "base_link", rclpy.duration.Duration(seconds=1))
-                transformed_poses.poses.append(new_pose.pose)
-            except TransformException as e:
-                self.get_logger().info(f'Transform failed: {e}')
-        return transformed_poses
-    
-    def publish_markers(self, apple_poses, apple_radii):
-        # Clear existing markers
-        clear_markers = MarkerArray()
-        for i in range(self.marker_counter):
-            marker = Marker()
-            marker.header.frame_id = "base_link"
-            marker.id = i
-            marker.action = Marker.DELETE
-            clear_markers.markers.append(marker)
-        self.marker_pub.publish(clear_markers)
-        self.marker_counter = 0  # Reset the marker counter
-
-        # Publish new markers
-        markers = MarkerArray()
-        for i in range(len(apple_poses.poses)):
-            marker = Marker()
-            marker.header.frame_id = "base_link"
-            marker.header.stamp = self.get_clock().now().to_msg()
-            marker.id = self.marker_counter
-            marker.type = Marker.SPHERE
-            marker.action = Marker.ADD
-            # Set the scale
-            marker.scale.x = apple_radii[i] * 2
-            marker.scale.y = apple_radii[i] * 2
-            marker.scale.z = apple_radii[i] * 2
-            # Set the color
-            marker.color.r = 1.0
-            marker.color.g = 0.0
-            marker.color.b = 0.0
-            marker.color.a = 1.0
-            # Set the pose
-            marker.pose.position.x = apple_poses.poses[i].position.x
-            marker.pose.position.y = apple_poses.poses[i].position.y
-            marker.pose.position.z = apple_poses.poses[i].position.z
-            marker.pose.orientation.x = 0.0
-            marker.pose.orientation.y = 0.0
-            marker.pose.orientation.z = 0.0
-            marker.pose.orientation.w = 1.0
-            markers.markers.append(marker)
-            self.marker_counter += 1
-            self.get_logger().info(f"Apple found at: [{apple_poses.poses[i].position.x}, {apple_poses.poses[i].position.y}, {apple_poses.poses[i].position.z}] with radius {apple_radii[i]}")
-        self.marker_pub.publish(markers)
 
     def segment_apples(self, image):
         # returns masks of apples, each apple has its own mask. 0 for no apple, 255 for apple.  
@@ -254,10 +201,10 @@ class ApplePredictionPreSaved(Node):
                 pcd = o3d.geometry.PointCloud.create_from_rgbd_image(
                     rgbd_image,
                     o3d.camera.PinholeCameraIntrinsic(width=self.target_size[0], height=self.target_size[1], 
-                                                      fx=self.azure_depth_intrinsic[0],
-                                                      fy=self.azure_depth_intrinsic[4], 
-                                                      cx=self.azure_depth_intrinsic[2], 
-                                                      cy=self.azure_depth_intrinsic[5]))
+                                                      fx=self.fx,
+                                                      fy=self.fy, 
+                                                      cx=self.cx, 
+                                                      cy=self.cy))
             center, radius = self.ransac_apple_estimation(np.array(pcd.points))
 
             if center and radius: 
@@ -274,28 +221,127 @@ class ApplePredictionPreSaved(Node):
             pass
             # o3d.visualization.draw_geometries(visualization)
 
-        # saving all data
-        if self.scan_data_path != "NOTGIVEN":
-            try: 
-                rgb_pc = o3d.geometry.Image(rgb)
-                depth_pc = o3d.geometry.Image(depth)
-                rgbd_image = o3d.geometry.RGBDImage.create_from_color_and_depth(rgb_pc, depth_pc, convert_rgb_to_intensity=False)
-                pcd = o3d.geometry.PointCloud.create_from_rgbd_image(
-                    rgbd_image,
-                    o3d.camera.PinholeCameraIntrinsic(width=848, height=480, fx=609.6989, fy=609.8549, cx=420.2079, cy=235.2782))
-                o3d.io.write_point_cloud(self.scan_data_path + "/pc_" + str(self.scan_count) + "_" + self.image_timestamp + ".ply", pcd)
-                np.save(self.scan_data_path + "/mask_" + str(self.scan_count) + "_" + self.image_timestamp + ".npy", masks)
-                cv2.imwrite(self.scan_data_path + "/rgb_" + str(self.scan_count) + "_" + self.image_timestamp + ".png", rgb)
-                cv2.imwrite(self.scan_data_path + "/depth_" + str(self.scan_count) + "_" + self.image_timestamp + ".tiff", depth)
-                self.yolo_result.save(filename=self.scan_data_path + "/yolo_" + str(self.scan_count) + "_" + self.image_timestamp + ".png")
-                self.scan_count += 1
-                self.get_logger().info("Data from scan saved.")
-            except:
-                self.get_logger().error("Data from scan unable to be saved")
-        else:
-            self.get_logger().error("No path given to save scan data")
-
         return apple_centers, apple_radii
+
+    def transform_apple_poses(self, apple_poses):
+        transformed_poses = PoseArray()
+        for i in apple_poses:
+            origin = PoseStamped()
+            # origin.header.frame_id = "camera_color_optical_frame"
+            origin.header.frame_id = "camera_link"
+            origin.pose.position.x = i[0]
+            origin.pose.position.y = i[1]
+            origin.pose.position.z = i[2]
+            origin.pose.orientation.x = 0.0
+            origin.pose.orientation.y = 0.0
+            origin.pose.orientation.z = 0.0
+            origin.pose.orientation.w = 1.0
+            try:
+                new_pose = self.tf_buffer.transform(origin, "base_link", rclpy.duration.Duration(seconds=1))
+                transformed_poses.poses.append(new_pose.pose)
+            except TransformException as e:
+                self.get_logger().info(f'Transform failed: {e}')
+        return transformed_poses
+    
+    def publish_markers(self, apple_poses, apple_radii):
+        # Clear existing markers
+        clear_markers = MarkerArray()
+        for i in range(self.marker_counter):
+            marker = Marker()
+            marker.header.frame_id = "base_link"
+            marker.id = i
+            marker.action = Marker.DELETE
+            clear_markers.markers.append(marker)
+        self.marker_pub.publish(clear_markers)
+        self.marker_counter = 0  # Reset the marker counter
+
+        # Publish new markers
+        markers = MarkerArray()
+        for i in range(len(apple_poses.poses)):
+            marker = Marker()
+            marker.header.frame_id = "base_link"
+            marker.header.stamp = self.get_clock().now().to_msg()
+            marker.id = self.marker_counter
+            marker.type = Marker.SPHERE
+            marker.action = Marker.ADD
+            # Set the scale
+            marker.scale.x = apple_radii[i] * 2
+            marker.scale.y = apple_radii[i] * 2
+            marker.scale.z = apple_radii[i] * 2
+            # Set the color
+            marker.color.r = 1.0
+            marker.color.g = 0.0
+            marker.color.b = 0.0
+            marker.color.a = 1.0
+            # Set the pose
+            marker.pose.position.x = apple_poses.poses[i].position.x
+            marker.pose.position.y = apple_poses.poses[i].position.y
+            marker.pose.position.z = apple_poses.poses[i].position.z
+            marker.pose.orientation.x = 0.0
+            marker.pose.orientation.y = 0.0
+            marker.pose.orientation.z = 0.0
+            marker.pose.orientation.w = 1.0
+            markers.markers.append(marker)
+            self.marker_counter += 1
+            self.get_logger().info(f"Apple found at: [{apple_poses.poses[i].position.x}, {apple_poses.poses[i].position.y}, {apple_poses.poses[i].position.z}] with radius {apple_radii[i]}")
+        self.marker_pub.publish(markers)
+    
+    def publish_images(self):
+        # Convert RGB image to ROS message
+        rgb_msg = self.bridge.cv2_to_imgmsg(self.rgb_image, encoding="bgr8")
+        # Convert depth image to ROS message
+        depth_msg = self.bridge.cv2_to_imgmsg(self.depth_image, encoding="mono16")
+
+        # Publish both images
+        self.rgb_publisher.publish(rgb_msg)
+        self.depth_publisher.publish(depth_msg)
+
+    def publish_pointcloud(self):
+        # Convert RGB and depth images to an Open3D point cloud
+        rgbd_image = o3d.geometry.RGBDImage.create_from_color_and_depth(
+            o3d.geometry.Image(self.rgb_image),
+            o3d.geometry.Image(self.depth_image),
+            depth_scale=self.scale,
+            depth_trunc=3.0,  # Ignore points beyond 3m
+            convert_rgb_to_intensity=False
+        )
+        camera_intrinsics = o3d.camera.PinholeCameraIntrinsic(
+            self.target_size[0],
+            self.target_size[1],
+            self.fx,
+            self.fy,
+            self.cx,
+            self.cy
+        )
+        pcd = o3d.geometry.PointCloud.create_from_rgbd_image(rgbd_image, camera_intrinsics)
+
+        # Extract points and colors
+        points = np.asarray(pcd.points)
+        colors = (np.asarray(pcd.colors) * 255).astype(np.uint8)  # Convert to 0-255 scale
+        packed_points = [
+            (x, y, z, (r << 16) | (g << 8) | b)
+            for (x, y, z), (r, g, b) in zip(points, colors)
+        ]
+
+        # Create ROS PointCloud2 message
+        header = Header()
+        header.stamp = self.get_clock().now().to_msg()
+        header.frame_id = 'camera_link'  # Replace with your frame
+        fields = [
+            PointField(name='x', offset=0, datatype=PointField.FLOAT32, count=1),
+            PointField(name='y', offset=4, datatype=PointField.FLOAT32, count=1),
+            PointField(name='z', offset=8, datatype=PointField.FLOAT32, count=1),
+            PointField(name='rgb', offset=12, datatype=PointField.UINT32, count=1),
+        ]
+        cloud_msg = point_cloud2.create_cloud(header, fields, packed_points)
+
+        # Publish the point cloud
+        self.pointcloud_publisher.publish(cloud_msg)
+    
+    def marker_timer_callback(self):
+        """Periodically publish markers using the latest apple data."""
+        if self.apple_centers is not None and self.apple_radii is not None:
+            self.publish_markers(self.apple_centers, self.apple_radii)
             
 
 def main(args=None):

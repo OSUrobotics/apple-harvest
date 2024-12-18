@@ -29,7 +29,7 @@ class OrchardTemplating(Node):
 
         # TODO: Set as a ros2 parameters
         self.voxel_size = 0.02
-        self.neighbor_radii = 0.15
+        self.neighbor_radii = 0.06
 
         # Publishers
         self.voxel_collision_pub = self.create_publisher(CollisionObject, "/collision_object", 10)
@@ -183,16 +183,16 @@ class OrchardTemplating(Node):
         self.get_logger().info(f"Publishing {len(voxel_centers_apple_masked_poses)} collision objects to planning scene")
         self.add_collision_objects(voxel_centers_apple_masked_poses)
 
-        # Move arm to apple position
-        apple_coords[:, 1] -= 0.1
-        for i, apple in enumerate(apple_coords):
-            self.get_logger().info(f'Moving arm to apple ID: {i}')
-            self.send_pose_goal(apple)
+        # # Move arm to apple position
+        # apple_coords[:, 1] -= 0.1
+        # for i, apple in enumerate(apple_coords):
+        #     self.get_logger().info(f'Moving arm to apple ID: {i}')
+        #     self.send_pose_goal(apple)
             
-            self.get_logger().info(f'Moving arm to home')
-            self.go_to_home()
+        #     self.get_logger().info(f'Moving arm to home')
+        #     self.go_to_home()
         
-        self.get_logger().info(f'Searched through all apples!')
+        # self.get_logger().info(f'Searched through all apples!')
 
 
 def main(args=None):
