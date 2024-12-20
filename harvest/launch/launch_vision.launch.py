@@ -49,10 +49,8 @@ def generate_launch_description():
     ### Nodes
     apple_prediction_node = launch_ros.actions.Node(
                 package="harvest_vision",
-                # executable="apple_prediction",
-                # name="apple_prediction",
-                executable="apple_prediction_presaved_images",
-                name="apple_prediction_presaved_images",
+                executable="apple_prediction",
+                name="apple_prediction",
                 parameters=[
                     {"prediction_model_path": LaunchConfiguration("prediction_model_path"),
                      "prediction_yolo_conf": LaunchConfiguration("prediction_yolo_conf"),
@@ -63,30 +61,30 @@ def generate_launch_description():
                       }
                 ])
     
-    # vservo_node = launch_ros.actions.Node(
-    #             package="harvest_control",
-    #             executable="visual_servo.py",
-    #             name="visual_servo",
-    #             parameters=[
-    #                 {"vservo_model_path": LaunchConfiguration("vservo_model_path"),
-    #                  "vservo_yolo_conf": LaunchConfiguration("vservo_yolo_conf"),
-    #                  "vservo_accuracy_px": LaunchConfiguration("vservo_accuracy_px"),
-    #                  "vservo_smoothing_factor": LaunchConfiguration("vservo_smoothing_factor"),
-    #                  "vservo_max_vel": LaunchConfiguration("vservo_max_vel")
-    #                   }
-    #             ])
+    vservo_node = launch_ros.actions.Node(
+                package="harvest_control",
+                executable="visual_servo.py",
+                name="visual_servo",
+                parameters=[
+                    {"vservo_model_path": LaunchConfiguration("vservo_model_path"),
+                     "vservo_yolo_conf": LaunchConfiguration("vservo_yolo_conf"),
+                     "vservo_accuracy_px": LaunchConfiguration("vservo_accuracy_px"),
+                     "vservo_smoothing_factor": LaunchConfiguration("vservo_smoothing_factor"),
+                     "vservo_max_vel": LaunchConfiguration("vservo_max_vel")
+                      }
+                ])
 
-    # palm_camera_node = launch_ros.actions.Node(
-    #             package="ur5e_custom_hardware",
-    #             executable="gripper_palm_camera",
-    #             name="gripper_palm_camera",
-    #             parameters=[
-    #                 {"palm_camera_device_num": LaunchConfiguration("palm_camera_device_num")
-    #                   }
-    #             ])
+    palm_camera_node = launch_ros.actions.Node(
+                package="ur5e_custom_hardware",
+                executable="gripper_palm_camera",
+                name="gripper_palm_camera",
+                parameters=[
+                    {"palm_camera_device_num": LaunchConfiguration("palm_camera_device_num")
+                      }
+                ])
     
     return LaunchDescription(declared_arguments + [
                              apple_prediction_node, 
-                            #  vservo_node, 
-                            #  palm_camera_node,
+                             vservo_node, 
+                             palm_camera_node,
     ])

@@ -24,22 +24,12 @@ find_package(harvest_interfaces)
 
 ### C++ ###
 add_executable(move_arm src/move_arm.cpp)
-# add_executable(move_arm_action_based src/move_arm_action_based.cpp src/generate_trellis_collision_obj.cpp)
-# add_executable(move_arm_action_based src/generate_trellis_collision_obj.cpp)
-
-add_executable(generate_trellis_collision_obj src/generate_trellis_collision_obj.cpp)
-add_executable(pointcloud_to_collision_obj src/pointcloud_to_collision_obj.cpp)
 
 target_include_directories(move_arm PUBLIC
 $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
 $<INSTALL_INTERFACE:include>)
 
-# target_include_directories(move_arm_action_based PUBLIC
-# $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-# $<INSTALL_INTERFACE:include>)
-
 target_compile_features(move_arm PUBLIC c_std_99 cxx_std_17)  # Require C99 and C++17
-# target_compile_features(move_arm_action_based PUBLIC c_std_99 cxx_std_17)  # Require C99 and C++17
 
 ament_target_dependencies(
   move_arm
@@ -51,6 +41,14 @@ ament_target_dependencies(
   "shape_msgs"
   )
   
+  # add_executable(move_arm_action_based src/move_arm_action_based.cpp)
+  
+  # target_include_directories(move_arm_action_based PUBLIC
+  # $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  # $<INSTALL_INTERFACE:include>)
+
+  # target_compile_features(move_arm_action_based PUBLIC c_std_99 cxx_std_17)  # Require C99 and C++17
+
   # ament_target_dependencies(
     #   move_arm_action_based
     #   "moveit_ros_planning_interface"
@@ -59,26 +57,6 @@ ament_target_dependencies(
     #   "trajectory_msgs"
     #   "std_srvs"
     # )
-    
-ament_target_dependencies(generate_trellis_collision_obj
-  "rclcpp"
-  "moveit_ros_planning_interface"
-  "geometry_msgs"
-  "moveit_msgs"
-  "shape_msgs"
-  "tf2"
-  "harvest_interfaces"
-)
-
-ament_target_dependencies(pointcloud_to_collision_obj
-  "rclcpp"
-  "moveit_ros_planning_interface"
-  "geometry_msgs"
-  "moveit_msgs"
-  "shape_msgs"
-  "tf2"
-  "harvest_interfaces"
-)
 
 ### PYTHON ###
 # Install Python modules
@@ -98,6 +76,7 @@ install(PROGRAMS
   scripts/pull_twist_controller.py
   scripts/trellis_wire_scan.py
   scripts/get_manual_apple_locations.py
+  scripts/generate_trellis_collision_obj.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
@@ -106,12 +85,6 @@ install(TARGETS move_arm
 
 # install(TARGETS move_arm_action_based
   # DESTINATION lib/${PROJECT_NAME})
-
-install(TARGETS generate_trellis_collision_obj
-  DESTINATION lib/${PROJECT_NAME})
-
-install(TARGETS pointcloud_to_collision_obj
-  DESTINATION lib/${PROJECT_NAME})
 
 ### LAUNCH ###
 # Install launch files.

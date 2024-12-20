@@ -2,16 +2,36 @@ import rclpy
 from rclpy.node import Node
 from harvest_interfaces.srv import VoxelGrid
 from geometry_msgs.msg import Point
+from ament_index_python.packages import get_package_share_directory
 import open3d as o3d
 import numpy as np
+import os
 from tf2_ros import Buffer, TransformListener
 
 
 class VoxelGridService(Node):
     def __init__(self):
         super().__init__('voxel_grid_node')
-        self.srv = self.create_service(VoxelGrid, 'voxel_grid', self.voxel_grid_callback)
+        # Parameters
+        self.declare_parameter("vision_experiment", "NA")
+        self.vision_experiment = self.get_parameter("vision_experiment").get_parameter_value().string_value
+
+        # Retrieve point cloud data from vision experiment
+        package_name = 'harvest_vision'
+        try:
+            # Get the package's share directory
+            share_directory = get_package_share_directory(package_name)
+            
+            # Access a file or subdirectory within the share directory
+            self.point_cloud_path = os.path.join(share_directory, 'data/', f'prosser_{self.vision_experiment}/', 'pointcloud.ply')
+        except Exception as e:
+            self.get_logger().error(f"Error accessing share directory: {e}")
+
+        # Publishers
         self.publisher = self.create_publisher(Point, 'voxel_centers', 10)
+        
+        # Services
+        self.srv = self.create_service(VoxelGrid, 'voxel_grid', self.voxel_grid_callback)
 
         # Coordinate frame change
         ## Microsoft Azure Kinect DK coordinate frame (when looking out from the camera)
@@ -92,8 +112,6 @@ class VoxelGridService(Node):
             # Use the voxel size from the request
             voxel_size = request.voxel_size
 
-            file_path = "/home/marcus/orchard_template_ws/src/apple-harvest/harvest_vision/point_cloud/pointcloud_1.ply"
-
             # Get the transform from camera_link to the world frame
             target_frame = 'base_link'
             source_frame = 'camera_link'
@@ -105,7 +123,7 @@ class VoxelGridService(Node):
                 return response
 
             # Voxelize the point cloud
-            voxel_centers, _ = self.voxelize_point_cloud(file_path, voxel_size, transform)
+            voxel_centers, _ = self.voxelize_point_cloud(self.point_cloud_path, voxel_size, transform)
 
             # Populate the response
             response.voxel_centers = [Point(x=float(v[0]), y=float(v[1]), z=float(v[2])) for v in voxel_centers]
@@ -134,32 +152,6 @@ def main(args=None):
         node.destroy_node()
         rclpy.shutdown()
 
-    # rclpy.spin(node)
-    # rclpy.shutdown()
-
 
 if __name__ == '__main__':
     main()
-
-    # file_path = "/home/marcus/orchard_template_ws/src/apple-harvest/harvest_vision/harvest_vision/point_cloud/pointcloud_1.ply"
-    # voxel_size = 0.01
-
-    # # Load the point cloud
-    # pcd = o3d.io.read_point_cloud(file_path)
-    
-    # # Convert points from mm to m
-    # pcd_points = np.asarray(pcd.points)  # Convert to NumPy array
-    # pcd_points /= 1000  # Scale points from mm to m
-    # pcd.points = o3d.utility.Vector3dVector(pcd_points)  # Convert back to Open3D format
-
-    # # Perform voxelization
-    # voxel_grid = o3d.geometry.VoxelGrid.create_from_point_cloud(pcd, voxel_size=voxel_size)
-
-    # # Get the voxel data
-    # voxels = voxel_grid.get_voxels()
-    
-    # # Extract voxel centers and their indices
-    # voxel_centers, voxel_indices = zip(*[(voxel_grid.get_voxel_center_coordinate(voxel.grid_index), voxel.grid_index) for voxel in voxels])
-
-    # print(voxel_centers[0])
-    # print(len(voxel_centers))

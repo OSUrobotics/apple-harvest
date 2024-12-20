@@ -3,6 +3,7 @@
 # ROS2
 import rclpy
 from rclpy.node import Node
+from ament_index_python.packages import get_package_share_directory
 from visualization_msgs.msg import Marker, MarkerArray
 from geometry_msgs.msg import PoseStamped, PoseArray
 from harvest_interfaces.srv import ApplePrediction
@@ -19,6 +20,7 @@ from cv_bridge import CvBridge
 import cv2
 import numpy as np
 from ultralytics import YOLO
+import os
 # pointcloud reconstruction
 import open3d as o3d
 from .sphere_ransac import Sphere
@@ -26,14 +28,13 @@ from .sphere_ransac import Sphere
 
 class ApplePredictionPreSaved(Node):
     def __init__(self):
-        '''Uses presaved Azure RGBD image, uses YOLO to segment apples and then creates pointcloud.
+        '''Uses presaved Azure RGBD images, uses YOLO to segment apples and then creates pointcloud.
         Then uses RANSAC to fit a sphere to each apple to estimate the position and radius.'''
         super().__init__("apple_prediction_pre_saved_node")
 
         self.camera_type = 'azure'
         
         ### AZURE CAMERA INTRINSICS
-        # self.azure_depth_intrinsic = [504.88714599609375, 0.0, 325.4923095703125, 0.0, 504.9976806640625, 322.3111877441406, 0.0, 0.0, 1.0]
         self.azure_color_intrinsic = [902.98, 0, 956.55, 0, 902.77, 547.68, 0, 0, 1]
         self.fx = self.azure_color_intrinsic[0]  # Focal length in x
         self.fy = self.azure_color_intrinsic[4]  # Focal length in y
@@ -41,20 +42,9 @@ class ApplePredictionPreSaved(Node):
         self.cy = self.azure_color_intrinsic[5]  # Principal point y
 
         if self.camera_type == 'azure':
-            # self.target_size = (640, 576) # Retrieved from the Properties of the depth image
             self.target_size = (1920, 1080)
         else:
             self.target_size = (848, 480)
-
-        # Load RGB and depth images
-        # TODO: update file paths to be ros2 parameters
-        rgb_path = '/home/marcus/orchard_template_ws/src/apple-harvest/harvest_vision/images/color/color_raw_1.png'
-        # depth_path = '/home/marcus/orchard_template_ws/src/apple-harvest/harvest_vision/images/depth/depth_raw_1.png'
-        depth_path = '/home/marcus/orchard_template_ws/src/apple-harvest/harvest_vision/images/depth/depth_to_color_1.png'
-        self.rgb_image = cv2.imread(rgb_path)
-        self.depth_image = cv2.imread(depth_path, cv2.IMREAD_UNCHANGED)
-        self.rgb_image = cv2.resize(self.rgb_image, self.target_size, interpolation=cv2.INTER_LINEAR) # Resize RGB image
-        self.depth_image = cv2.resize(self.depth_image, self.target_size, interpolation=cv2.INTER_NEAREST) # Resize depth image
 
         ### SERVICE
         self.prediction_srv = self.create_service(ApplePrediction, "apple_prediction_presaved_images", self.prediction_callback_srv)
@@ -80,15 +70,31 @@ class ApplePredictionPreSaved(Node):
         self.declare_parameter("prediction_radius_min", 0.03)
         self.declare_parameter("prediction_radius_max", 0.06)
         self.declare_parameter("prediction_distance_max", 1.0)
-        self.declare_parameter("scan_data_path", "NOTGIVEN")
+        self.declare_parameter("vision_experiment", "NA")
+        self.model_path = self.get_parameter("prediction_model_path").get_parameter_value().string_value
         self.confidence_thresh = self.get_parameter("prediction_yolo_conf").get_parameter_value().double_value
         self.lower_rad_bound = self.get_parameter("prediction_radius_min").get_parameter_value().double_value
         self.upper_rad_bound = self.get_parameter("prediction_radius_max").get_parameter_value().double_value
         self.distance_thresh = self.get_parameter("prediction_distance_max").get_parameter_value().double_value
-        self.model_path = self.get_parameter("prediction_model_path").get_parameter_value().string_value
-        self.scan_data_path = self.get_parameter("scan_data_path").get_parameter_value().string_value
+        self.vision_experiment = self.get_parameter("vision_experiment").get_parameter_value().string_value
 
-        self.get_logger().info(self.scan_data_path)
+        # Retrieve rgb and depth images from vision experiment
+        package_name = 'harvest_vision'
+        try:
+            # Get the package's share directory
+            share_directory = get_package_share_directory(package_name)
+            
+            # Access a file or subdirectory within the share directory
+            self.rgb_path = os.path.join(share_directory, 'data/', f'prosser_{self.vision_experiment}/', 'color_raw.png')
+            self.depth_path = os.path.join(share_directory, 'data/', f'prosser_{self.vision_experiment}/', 'depth_to_color.png')
+        except Exception as e:
+            self.get_logger().error(f"Error accessing share directory: {e}")
+
+        # Load RGB and depth images
+        self.rgb_image = cv2.imread(self.rgb_path)
+        self.depth_image = cv2.imread(self.depth_path, cv2.IMREAD_UNCHANGED)
+        self.rgb_image = cv2.resize(self.rgb_image, self.target_size, interpolation=cv2.INTER_LINEAR) # Resize RGB image
+        self.depth_image = cv2.resize(self.depth_image, self.target_size, interpolation=cv2.INTER_NEAREST) # Resize depth image
 
         ### YOLO SETUP
         self.model = YOLO(self.model_path)  # pretrained YOLOv8n model
@@ -176,7 +182,6 @@ class ApplePredictionPreSaved(Node):
         return center, radius
 
     def get_apple_centers(self, rgb, depth, masks):
-        #TODO check that apple is far enough, check that apples have been identified. 
         apple_centers = []
         apple_radii = []
         visualization = []

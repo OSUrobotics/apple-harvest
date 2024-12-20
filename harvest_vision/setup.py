@@ -4,6 +4,15 @@ import os
 
 package_name = 'harvest_vision'
 
+# List of prosser data directories
+prosser_directories = ['prosser_a', 'prosser_b', 'prosser_c', 'prosser_d', 'prosser_e']
+
+# Generate data mappings for prosser directories
+prosser_data_files = [
+    (os.path.join('share', package_name, f'data/{directory}'), glob(os.path.join('data', directory, '*')))
+    for directory in prosser_directories
+]
+
 setup(
     name=package_name,
     version='0.0.1',
@@ -14,7 +23,7 @@ setup(
         ('share/' + package_name, ['package.xml']),
         (os.path.join('share', package_name, 'launch'), glob(os.path.join('launch', '*launch.[pxy][yma]*'))),
         (os.path.join('share', package_name, 'yolo_networks'), glob(os.path.join('yolo_networks', '*'))),
-    ],
+    ] + prosser_data_files,
     install_requires=['setuptools'],
     zip_safe=True,
     maintainer='Keegan Nave',

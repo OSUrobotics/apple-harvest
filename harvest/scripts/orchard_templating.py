@@ -192,26 +192,26 @@ class OrchardTemplating(Node):
         voxel_centers_apple_masked = [idx for i, idx in enumerate(voxel_centers) if i not in neighbor_idx]
         self.get_logger().info(f'# of voxels after apple location removal: {len(voxel_centers_apple_masked)}')
 
-        # # Add voxels as moveit2 collision objects - first convert back to pose message
-        # voxel_centers_apple_masked_poses = [Point(x=coord[0], y=coord[1], z=coord[2]) for coord in voxel_centers_apple_masked]
-        # self.get_logger().info(f"Publishing {len(voxel_centers_apple_masked_poses)} collision objects to planning scene")
-        # self.add_collision_objects(voxel_centers_apple_masked_poses)
+        # Add voxels as moveit2 collision objects - first convert back to pose message
+        voxel_centers_apple_masked_poses = [Point(x=coord[0], y=coord[1], z=coord[2]) for coord in voxel_centers_apple_masked]
+        self.get_logger().info(f"Publishing {len(voxel_centers_apple_masked_poses)} collision objects to planning scene")
+        self.add_collision_objects(voxel_centers_apple_masked_poses)
 
-        # Move arm to apple position
-        apple_coords[:, 1] -= 0.1
-        for i, apple in enumerate(apple_coords):
-            self.get_logger().info(f'Moving arm to apple ID: {i}')
-            self.send_pose_goal(apple)
+        # # Move arm to apple position
+        # apple_coords[:, 1] -= 0.1
+        # for i, apple in enumerate(apple_coords):
+        #     self.get_logger().info(f'Moving arm to apple ID: {i}')
+        #     self.send_pose_goal(apple)
             
-            self.get_logger().info(f'Moving arm to home')
-            self.go_to_home()
+        #     self.get_logger().info(f'Moving arm to home')
+        #     self.go_to_home()
         
-        self.get_logger().info(f'Searched through all apples!')
+        # self.get_logger().info(f'Searched through all apples!')
 
-        # Place trellis template
-        target_base_pos = np.array([-0.07, 1.105, -0.19])
-        self.get_logger().info(f'Placing trellis template at x={np.round(target_base_pos[0], 3)}, y={np.round(target_base_pos[1], 3)}, z={np.round(target_base_pos[2], 3)} in the planning scene')
-        self.update_trellis_template_pos(target_base_pos)
+        # # Place trellis template
+        # target_base_pos = np.array([-0.07, 1.105, -0.19])
+        # self.get_logger().info(f'Placing trellis template at x={np.round(target_base_pos[0], 3)}, y={np.round(target_base_pos[1], 3)}, z={np.round(target_base_pos[2], 3)} in the planning scene')
+        # self.update_trellis_template_pos(target_base_pos)
 
 
 def main(args=None):
