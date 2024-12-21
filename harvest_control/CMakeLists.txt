@@ -20,6 +20,8 @@ find_package(moveit_ros_planning_interface REQUIRED)
 find_package(controller_manager_msgs REQUIRED)
 find_package(trajectory_msgs REQUIRED)
 find_package(harvest_interfaces)
+find_package(geometric_shapes REQUIRED)
+include_directories(${geometric_shapes_INCLUDE_DIRS})
 
 
 ### C++ ###

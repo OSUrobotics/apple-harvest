@@ -41,11 +41,18 @@ private:
     std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
 
     moveit::planning_interface::MoveGroupInterface move_group_;
+    // std::vector<double> home_joint_positions = {
+    //     M_PI / 2,
+    //     -M_PI / 2,
+    //     2 * M_PI / 3,
+    //     5 * M_PI / 6,
+    //     -M_PI / 2,
+    //     0};
     std::vector<double> home_joint_positions = {
         M_PI / 2,
-        -M_PI / 2,
+        -2.36,
         2 * M_PI / 3,
-        5 * M_PI / 6,
+        3.40,
         -M_PI / 2,
         0};
 
@@ -188,6 +195,27 @@ void MoveArmNode::move_to_pose(const std::shared_ptr<harvest_interfaces::srv::Mo
     {
         this->move_group_.execute(goal);
         response->result = true;
+
+        // Save the reverse trajectory as Float32MultiArray
+        std_msgs::msg::Float32MultiArray reverse_traj;
+        reverse_traj.layout.dim.resize(2);
+        reverse_traj.layout.dim[0].label = "waypoints";
+        reverse_traj.layout.dim[0].size = goal.trajectory_.joint_trajectory.points.size();
+        reverse_traj.layout.dim[0].stride = goal.trajectory_.joint_trajectory.points.size() * goal.trajectory_.joint_trajectory.joint_names.size();
+        reverse_traj.layout.dim[1].label = "joints";
+        reverse_traj.layout.dim[1].size = goal.trajectory_.joint_trajectory.joint_names.size();
+        reverse_traj.layout.dim[1].stride = goal.trajectory_.joint_trajectory.joint_names.size();
+
+        
+        for (auto it = goal.trajectory_.joint_trajectory.points.rbegin(); it != goal.trajectory_.joint_trajectory.points.rend(); ++it)
+        {
+            for (double position : it->positions)
+            {
+                reverse_traj.data.push_back(position);
+            }
+        }
+
+        response->reverse_traj = reverse_traj;
     }
     else
     {

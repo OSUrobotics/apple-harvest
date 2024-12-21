@@ -23,8 +23,8 @@ class TreeSceneNode(Node):
         # Publisher for collision objects
         self.collision_object_publisher = self.create_publisher(CollisionObject, 'collision_object', 10)
 
-        # Timer for periodic publishing
-        self.timer = self.create_timer(2.0, self.add_tree_to_scene)
+        # # Timer for periodic publishing
+        # self.timer = self.create_timer(2.0, self.add_tree_to_scene)
 
         # Parameters 
         self.declare_parameter("leader_branch_radii", 0.08)
@@ -42,12 +42,12 @@ class TreeSceneNode(Node):
         self.trellis_angle = np.deg2rad(-18.435) # Angle provided by Martin (WSU) 9/11/2024
         self.branch_spacing = self.leader_branch_len / self.num_side_branches
         
-        # Add the tree to the scene
-        self.add_tree_to_scene()
+        # # Add the tree to the scene
+        # self.add_tree_to_scene()
 
-        self.get_logger().info(f'Trellis template node running')
-        self.get_logger().info(f'Added template to base location x={self.trellis_position[0]}, y={self.trellis_position[1]}, z={self.trellis_position[2]}, '
-                               f'with tilt angle={np.rad2deg(self.trellis_angle)} deg')
+        # self.get_logger().info(f'Trellis template node running')
+        # self.get_logger().info(f'Added template to base location x={self.trellis_position[0]}, y={self.trellis_position[1]}, z={self.trellis_position[2]}, '
+        #                        f'with tilt angle={np.rad2deg(self.trellis_angle)} deg')
 
     def update_trellis_position_callback(self, request, response):
         # Update the position

@@ -19,6 +19,7 @@
   <depend>tf2_ros</depend>
   <depend>geometry_msgs</depend>
   <depend>trajectory_msgs</depend>
+  <depend>geometric_shapes</depend>
 
   <exec_depend>controller_manager_msgs</exec_depend>
   <exec_depend>moveit_ros_planning_interface</exec_depend>
