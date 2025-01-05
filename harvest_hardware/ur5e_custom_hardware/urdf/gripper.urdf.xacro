@@ -79,14 +79,14 @@
         </joint>
 
         <link name="camera_link">
-            <visual>
+            <!-- <visual>
                 <geometry>
                     <box size="0.03 0.03 0.01" />
                 </geometry>
                 <material name="green">
                     <color rgba="0 1 0 1" />
                 </material>
-            </visual>
+            </visual> -->
         </link>
 
         <!-- <xacro:arg name="use_nominal_extrinsics" default="false" />

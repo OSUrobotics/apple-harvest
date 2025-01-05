@@ -307,7 +307,7 @@ class ApplePredictionPreSaved(Node):
             o3d.geometry.Image(self.rgb_image),
             o3d.geometry.Image(self.depth_image),
             depth_scale=self.scale,
-            depth_trunc=3.0,  # Ignore points beyond 3m
+            depth_trunc=1.5,  # Ignore points beyond 3m
             convert_rgb_to_intensity=False
         )
         camera_intrinsics = o3d.camera.PinholeCameraIntrinsic(
@@ -323,9 +323,10 @@ class ApplePredictionPreSaved(Node):
         # Extract points and colors
         points = np.asarray(pcd.points)
         colors = (np.asarray(pcd.colors) * 255).astype(np.uint8)  # Convert to 0-255 scale
+        # Pack the points but convert from rgb to bgr
         packed_points = [
-            (x, y, z, (r << 16) | (g << 8) | b)
-            for (x, y, z), (r, g, b) in zip(points, colors)
+            (x, y, z, b | (g << 8) | (r << 16))
+            for (x, y, z), (b, g, r) in zip(points, colors)
         ]
 
         # Create ROS PointCloud2 message
