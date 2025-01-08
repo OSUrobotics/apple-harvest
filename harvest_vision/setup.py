@@ -5,7 +5,7 @@ import os
 package_name = 'harvest_vision'
 
 # List of prosser data directories
-prosser_directories = ['prosser_a', 'prosser_b', 'prosser_c', 'prosser_d', 'prosser_e']
+prosser_directories = ['prosser_a', 'prosser_b', 'prosser_c', 'prosser_d', 'prosser_e', 'prosser_f', 'prosser_g', 'prosser_h', 'prosser_i', 'prosser_j']
 
 # Generate data mappings for prosser directories
 prosser_data_files = [

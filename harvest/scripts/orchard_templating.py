@@ -35,7 +35,7 @@ class OrchardTemplating(Node):
         self.data_save_dir = '/home/marcus/orchard_template_ws/results_data/'
 
         # TODO: Set as a ros2 parameters
-        self.vision_experiment = 'e'
+        self.vision_experiment = 'j'
         self.yolo_model = 'v9e.pt'
         self.apple_coords_sorted = None
         self.voxel_size = 0.01
@@ -48,8 +48,8 @@ class OrchardTemplating(Node):
         self.unreached_idx_voxelization = []
 
         # Vision experiment parameters
-        trellis_base_positions = [[-0.07, 1.105, -0.19], [-0.07, 1.05, -0.14], [-0.1, 1.0, -0.17], [-0.04, 1.21, -0.17], [-0.15, 1.02, -0.22]] # a through e (e has the most uncertainty on the bottom side branch)
-        vision_experiments = ['a', 'b', 'c', 'd', 'e']
+        trellis_base_positions = [[-0.07, 1.105, -0.19], [-0.07, 1.05, -0.14], [-0.1, 1.0, -0.17], [-0.04, 1.21, -0.17], [-0.15, 1.02, -0.22], [-0.05, 1.05, -0.15], [-0.09, 1.16, -0.16], [-0.08, 1.11, -0.18], [-0.085, 1.03, -0.15], [-0.05, 1.12, -0.19]] # a through e (e has the most uncertainty on the bottom side branch)
+        vision_experiments = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j']
         trellis_tempate_params = {key: value for key, value in zip(vision_experiments, trellis_base_positions)}
         self.trellis_base_position = trellis_tempate_params.get(self.vision_experiment)
 
