@@ -11,15 +11,18 @@ from geometry_msgs.msg import Pose, Point
 from std_srvs.srv import Trigger
 import tf2_ros
 from geometry_msgs.msg import TransformStamped
+from moveit_msgs.srv import GetPlanningScene
+from moveit_msgs.msg import PlanningSceneComponents
 
 # Interfaces
-from harvest_interfaces.srv import ApplePrediction, VoxelGrid, MoveToPose, UpdateTrellisPosition, SendTrajectory
+from harvest_interfaces.srv import ApplePrediction, VoxelGrid, MoveToPose, UpdateTrellisPosition, SendTrajectory, FinalApproachLinear
 
 # Python 
 import numpy as np
 import os
 import yaml
 import copy
+from scipy.spatial.transform import Rotation as R
 
 class OrchardTemplating(Node):
 
@@ -32,20 +35,21 @@ class OrchardTemplating(Node):
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
 
         # Data saving directory
-        self.data_save_dir = '/home/marcus/orchard_template_ws/results_data/'
+        self.data_save_dir = '/home/marcus/orchard_template_ws/results_data/v2/'
 
         # TODO: Set as a ros2 parameters
-        self.vision_experiment = 'j'
+        self.vision_experiment = 'a'
         self.yolo_model = 'v9e.pt'
         self.apple_coords_sorted = None
         self.voxel_size = 0.01
         self.voxel_neighbor_radii = 0.08 # 2cm larger than the max apple radii threshold
-        self.apple_approach_offset = 0.1 # meters
+        self.apple_approach_offset = 0.04 # meters
         self.apples_found = 0
         self.apples_reached_templating = 0
         self.apples_reached_voxelization = 0
         self.unreached_idx_templating = []
         self.unreached_idx_voxelization = []
+        self.side_branch_locations = []
 
         # Vision experiment parameters
         trellis_base_positions = [[-0.07, 1.105, -0.19], [-0.07, 1.05, -0.14], [-0.1, 1.0, -0.17], [-0.04, 1.21, -0.17], [-0.15, 1.02, -0.22], [-0.05, 1.05, -0.15], [-0.09, 1.16, -0.16], [-0.08, 1.11, -0.18], [-0.085, 1.03, -0.15], [-0.05, 1.12, -0.19]] # a through e (e has the most uncertainty on the bottom side branch)
@@ -69,6 +73,10 @@ class OrchardTemplating(Node):
         while not self.move_arm_to_pose_client.wait_for_service(timeout_sec=1.0):
             self.get_logger().info("Move arm to pose service not available, waiting...")
 
+        self.arm_final_approach_linear_client = self.create_client(FinalApproachLinear, "/final_approach_linear",callback_group=m_callback_group)
+        while not self.arm_final_approach_linear_client.wait_for_service(timeout_sec=1.0):
+            self.get_logger().info("Final linear approach service not available, waiting...")
+
         self.start_move_arm_to_home_client = self.create_client(Trigger, "/move_arm_to_home", callback_group=m_callback_group)
         while not self.start_move_arm_to_home_client.wait_for_service(timeout_sec=1.0):
             self.get_logger().info("Start move arm to home service not available, waiting...")
@@ -80,6 +88,8 @@ class OrchardTemplating(Node):
         self.trigger_arm_mover_client = self.create_client(SendTrajectory, 'send_arm_trajectory', callback_group=m_callback_group)
         while not self.trigger_arm_mover_client.wait_for_service(timeout_sec=1.0):
             self.get_logger().info('Waiting for send_arm_trajectory to be available...')
+
+        self.get_planning_scene_client = self.create_client(GetPlanningScene, 'get_planning_scene')
     
     def get_gripper_position(self, target_frame="world", source_frame="gripper_link"):
         try:
@@ -179,6 +189,44 @@ class OrchardTemplating(Node):
         tree_object.operation = CollisionObject.REMOVE
         self.voxel_collision_pub.publish(tree_object)
 
+    def get_side_branch_locations(self):
+        # Wait for the service to be available
+        self.get_planning_scene_client.wait_for_service()
+
+        # Create a request to get the full planning scene
+        request = GetPlanningScene.Request()
+        request.components.components = PlanningSceneComponents.WORLD_OBJECT_GEOMETRY
+
+        # Call the service
+        future = self.get_planning_scene_client.call_async(request)
+        rclpy.spin_until_future_complete(self, future)
+        response = future.result()
+
+        # Find the v_trellis_tree object in the planning scene
+        tree_object = None
+        for obj in response.scene.world.collision_objects:
+            if obj.id == 'v_trellis_tree':
+                tree_object = obj
+                break
+
+        if tree_object is None:
+            print("v_trellis_tree object not found in the planning scene.")
+            return
+
+        # Extract and print horizontal branch locations with applied trellis_position and canopy_orientation
+        canopy_orientation = [tree_object.pose.orientation.x,
+                              tree_object.pose.orientation.y,
+                              tree_object.pose.orientation.z,
+                              tree_object.pose.orientation.w]
+        canopy_rotation = R.from_quat(canopy_orientation)
+        for pose in tree_object.primitive_poses[1:]:  # Skip the base horizontal branch
+            branch_position = np.array([pose.position.x, pose.position.y, pose.position.z])
+            rotated_position = canopy_rotation.apply(branch_position)
+            transformed_position = rotated_position + self.trellis_base_position
+            self.side_branch_locations.append(transformed_position)
+        
+        self.side_branch_locations = np.vstack(self.side_branch_locations).tolist()
+
     def send_pose_goal(self, coordinate):
         point = Point()
         point.x = coordinate[0]
@@ -213,6 +261,15 @@ class OrchardTemplating(Node):
             self.get_logger().warn(f'Failed to moved home')
 
         return self.future.result()
+    
+    def final_linear_approach(self, distance):
+        request = FinalApproachLinear.Request()
+        request.distance = distance
+
+        # Use async call
+        future = self.arm_final_approach_linear_client.call_async(request)
+        rclpy.spin_until_future_complete(self, future) 
+        return future.result()
 
     def save_metadata(self):
         # Combine the dictionaries into a list or another structure if necessary
@@ -229,10 +286,11 @@ class OrchardTemplating(Node):
             'apples_reached_voxelization': self.apples_reached_voxelization,
             'unreached_idx_templating': self.unreached_idx_templating,
             'unreached_idx_voxelization': self.unreached_idx_voxelization,
+            'side_branch_locations': self.side_branch_locations,
         }
 
         # Save to a YAML file
-        with open(self.data_save_dir + f'experiment_{self.vision_experiment}_results.yaml', 'w') as file:
+        with open(self.data_save_dir + f'experiment_{self.vision_experiment}_results_rrtstart_2.yaml', 'w') as file:
             yaml.dump(data, file)
 
         self.get_logger().info("YAML file saved successfully.")   
@@ -260,9 +318,10 @@ class OrchardTemplating(Node):
         # Place trellis template
         self.get_logger().info(f'Placing trellis template at x={np.round(self.trellis_base_position[0], 3)}, y={np.round(self.trellis_base_position[1], 3)}, z={np.round(self.trellis_base_position[2], 3)} in the planning scene')
         self.update_trellis_template_pos(self.trellis_base_position)
+        self.get_side_branch_locations()
 
         # Set a gripper approach offset to each apple location
-        apple_coords[:, 1] -= self.apple_approach_offset
+        apple_coords[:, 1] -= (self.apple_approach_offset) # apple radius offset
 
         # Move arm to apple position
         for i, apple in enumerate(apple_coords):
@@ -278,6 +337,71 @@ class OrchardTemplating(Node):
             else:
                 self.get_logger().warn(f'Apple ID: {i} not reachable')
                 self.unreached_idx_templating.append(i)
+
+        # ### ATTEMPTING TWO PLANNING PHASES - INITIAL APPROACH WHICH IS FURTHER FROM THE APPLE AND THEN ANOTHER PLAN TO THE APPLE
+        # for i, apple in enumerate(apple_coords):
+        #     self.get_logger().info(f'Moving arm to apple ID: {i}')
+        #     initial_point = np.copy(apple)
+        #     initial_point[1] -= 0.06
+        #     result = self.send_pose_goal(initial_point)
+        #     if result.result:
+        #         self.get_logger().info(f'Initial approach successful')
+
+        #         # Final linear approach
+        #         final_approach_result = self.send_pose_goal(apple)
+
+        #         if final_approach_result.result:
+        #             self.get_logger().info(f'Apple ID: {i} reached')
+        #             self.apples_reached_templating += 1
+
+        #             self.get_logger().info(f'Retracting arm from final approach')
+        #             retract_result = self.send_pose_goal(initial_point)
+        #             if retract_result.result:
+        #                 self.get_logger().info(f'Arm retracted successfully')
+        #             else:
+        #                 self.get_logger().warn(f'Failed to retract arm')
+                        
+        #             self.get_logger().info(f'Moving arm to home')
+        #             self.go_to_home()
+        #         else:
+        #             self.get_logger().warn(f'Apple ID: {i} not reachable')
+        #             self.unreached_idx_templating.append(i)
+        #     else:
+        #         self.get_logger().warn(f'Apple ID: {i} not reachable')
+        #         self.unreached_idx_templating.append(i)
+
+        # ### ATTEMPTING TWO PLANNING PHASES - INITIAL APPROACH WHICH IS FURTHER FROM THE APPLE AND THEN ANOTHER LINEAR PLAN TO THE APPLE
+        # for i, apple in enumerate(apple_coords):
+        #     self.get_logger().info(f'Moving arm to apple ID: {i}')
+        #     result = self.send_pose_goal(apple)
+        #     if result.result:
+        #         self.get_logger().info(f'Initial approach successful')
+
+        #         # Final linear approach
+        #         final_approach_result = self.final_linear_approach(0.06)
+
+        #         if final_approach_result.success:
+        #             self.get_logger().info(f'Apple ID: {i} reached')
+        #             self.apples_reached_templating += 1
+
+        #             self.get_logger().info(f'Retracting arm from final approach')
+        #             retract_result = self.final_linear_approach(-0.12)
+        #             if retract_result.success:
+        #                 self.get_logger().info(f'Arm retracted successfully')
+        #             else:
+        #                 self.get_logger().warn(f'Failed to retract arm')
+                        
+        #             self.get_logger().info(f'Moving arm to home')
+        #             self.go_to_home()
+        #         else:
+        #             self.get_logger().warn(f'Apple ID: {i} not reachable')
+        #             self.unreached_idx_templating.append(i)
+        #         # self.get_logger().info(f'Moving arm to home')
+        #         # trajectory = result.reverse_traj
+        #         # self.send_trajectory(trajectory)
+        #     else:
+        #         self.get_logger().warn(f'Apple ID: {i} not reachable')
+        #         self.unreached_idx_templating.append(i)
         
         self.get_logger().info(f'Number of apples reached via templating: {self.apples_reached_templating}')
 
@@ -320,7 +444,7 @@ class OrchardTemplating(Node):
                 self.get_logger().warn(f'Apple ID: {i} not reachable')
                 self.unreached_idx_voxelization.append(i)
 
-        self.get_logger().info(f'Number of apples reached via voxelizatoin: {self.apples_reached_voxelization}')
+        self.get_logger().info(f'Number of apples reached via voxelization: {self.apples_reached_voxelization}')
 
         ### STAGE 3 - SAVE DATA
         self.save_metadata()

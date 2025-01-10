@@ -92,6 +92,12 @@ def generate_launch_description():
                     ]
         ),
         
+        Node(
+            package='harvest_control',
+            executable='pose_listener.py',
+            name='tf_listener',
+        ),
+        
         # Launch C++ node
         Node(
             package='harvest_control',

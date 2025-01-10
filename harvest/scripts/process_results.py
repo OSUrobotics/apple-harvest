@@ -27,6 +27,7 @@ def extract_reachable_apple_data(file_path, dir="/home/marcus/orchard_template_w
     unreached_idx_voxelization = data.get("unreached_idx_voxelization", None)
     unreached_idx_templating = data.get("unreached_idx_templating", None)
     apple_coordinates = data.get("apple_coordinates", None)
+    side_branch_locations = data.get("side_branch_locations", None)
     
     return {
         "apples_found": apples_found,
@@ -35,6 +36,7 @@ def extract_reachable_apple_data(file_path, dir="/home/marcus/orchard_template_w
         "unreached_idx_voxelization": unreached_idx_voxelization,
         "unreached_idx_templating": unreached_idx_templating,
         "apple_coords": apple_coordinates,
+        "side_branch_locations": side_branch_locations
     }
 
 def get_avg_reachable_rate(data_filenames):
@@ -73,15 +75,15 @@ def norm_apple_coord_to_branch(branch_location, apple_coords):
 
     return normalized_coords, distances_yz
 
-def plot_apple_reachability(data_filename, branch_location):
-    # for i, filenames in enumerate(data_filenames):
+def plot_single_apple_reachability(data_filename, side_branch_idx=1, radii_threshold=0.3):
     apple_data = extract_reachable_apple_data(data_filename)
 
     apple_coordinates = apple_data['apple_coords']
     unreached_idx_templating = apple_data['unreached_idx_templating']
+    side_branch_locations = apple_data['side_branch_locations']
 
     # Normalize apple coordinates
-    normalized_coords, distances_yz = norm_apple_coord_to_branch(branch_location, apple_coordinates)
+    normalized_coords, distances_yz = norm_apple_coord_to_branch(side_branch_locations[side_branch_idx], apple_coordinates)
 
     unreached_coords = np.array(normalized_coords)[unreached_idx_templating]
     reached_coords = np.array(normalized_coords)[[i for i in range(len(normalized_coords)) if i not in unreached_idx_templating]]
@@ -89,12 +91,12 @@ def plot_apple_reachability(data_filename, branch_location):
     unreached_radii = distances_yz[unreached_idx_templating]
     reached_radii = distances_yz[[i for i in range(len(normalized_coords)) if i not in unreached_idx_templating]]
 
-    # Filter out coordinates with radii greater than 0.3
-    unreached_coords = unreached_coords[unreached_radii <= 0.3]
-    reached_coords = reached_coords[reached_radii <= 0.3]
+    # Filter out coordinates with radii greater than the radiance threshold
+    unreached_coords = unreached_coords[unreached_radii <= radii_threshold]
+    reached_coords = reached_coords[reached_radii <= radii_threshold]
 
     # Create the plot
-    plt.figure(figsize=(10, 6))
+    plt.figure(figsize=(8, 6))
     
     # Plot the origin point
     plt.scatter(0, 0, color='brown', s=100, label='Branch Location (Origin)')
@@ -108,7 +110,66 @@ def plot_apple_reachability(data_filename, branch_location):
     # Label the axes
     plt.xlabel('y')
     plt.ylabel('z')
+
+    # Set the axis limits
+    plt.xlim(-radii_threshold, radii_threshold)
+    plt.ylim(-radii_threshold, radii_threshold)
     
+    # Add a legend
+    plt.legend()
+    
+    # Show the plot
+    plt.show()
+
+def plot_multiple_apple_reachability(data_filenames, branch_locations, radii_threshold=0.3):
+    total_unreached_coords = []
+    total_reached_coords = []
+    for i, filename in enumerate(data_filenames):
+        apple_data = extract_reachable_apple_data(filename)
+
+        apple_coordinates = apple_data['apple_coords']
+        unreached_idx_templating = apple_data['unreached_idx_templating']
+
+        # Normalize apple coordinates
+        normalized_coords, distances_yz = norm_apple_coord_to_branch(branch_locations[i], apple_coordinates)
+
+        unreached_coords = np.array(normalized_coords)[unreached_idx_templating]
+        reached_coords = np.array(normalized_coords)[[i for i in range(len(normalized_coords)) if i not in unreached_idx_templating]]
+
+        unreached_radii = distances_yz[unreached_idx_templating]
+        reached_radii = distances_yz[[i for i in range(len(normalized_coords)) if i not in unreached_idx_templating]]
+
+        # Filter out coordinates with radii greater than the radiance threshold
+        unreached_coords = unreached_coords[unreached_radii <= radii_threshold]
+        reached_coords = reached_coords[reached_radii <= radii_threshold]
+
+        # Append the coordinates to the total list
+        total_unreached_coords.append(unreached_coords)
+        total_reached_coords.append(reached_coords)
+
+    total_unreached_coords = np.vstack(total_unreached_coords)
+    total_reached_coords = np.vstack(total_reached_coords)
+
+    # Create the plot
+    plt.figure(figsize=(10, 6))
+    
+    # Plot the origin point
+    plt.scatter(0, 0, color='brown', s=100, label='Branch Location (Origin)')
+    
+    # Plot reachable coordinates
+    plt.scatter(total_reached_coords[:, 1], total_reached_coords[:, 2], color='green', label='Reachable Apples')
+    
+    # Plot unreachable coordinates
+    plt.scatter(total_unreached_coords[:, 1], total_unreached_coords[:, 2], color='red', label='Unreachable Apples')
+    
+    # Label the axes
+    plt.xlabel('y')
+    plt.ylabel('z')
+
+    # Set the axis limits
+    plt.xlim(-radii_threshold, radii_threshold)
+    plt.ylim(-radii_threshold, radii_threshold)
+
     # Add a legend
     plt.legend()
     
@@ -119,8 +180,9 @@ def plot_apple_reachability(data_filename, branch_location):
 if __name__ == '__main__':
     # get_avg_reachable_rate(results_files)
 
-    # Branch location for vision experiment A
-    branch_location = [0.31, 0.83, 0.76]
-    plot_apple_reachability(results_a, branch_location)
+    # # Branch locations for vision experiments A-J
+    # branch_locations = [[0.31, 0.83, 0.76], [0.23, 0.73, 0.8], [0.23, 0.67, 0.78], [0.23, 0.9, 0.78], [0.23, 0.71, 0.73], [0.23, 0.74, 0.8], [0.23, 0.84, 0.8], [0.23, 0.79, 0.77], [0.23, 0.71, 0.79], [0.23, 0.81, 0.76]]
+    # plot_multiple_apple_reachability(results_files, branch_locations)
 
-    # TODO: Measure the branch location for the other experiments and plot the apple reachability for each experiment on a single plot
+    # Plot the reachability of apples for a single experiment
+    plot_single_apple_reachability('v2/experiment_a_results_rrtconnect_4.yaml')
