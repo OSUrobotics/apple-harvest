@@ -13,6 +13,7 @@ import tf2_ros
 from geometry_msgs.msg import TransformStamped
 from moveit_msgs.srv import GetPlanningScene
 from moveit_msgs.msg import PlanningSceneComponents
+from rcl_interfaces.srv import GetParameters
 
 # Interfaces
 from harvest_interfaces.srv import ApplePrediction, VoxelGrid, MoveToPose, UpdateTrellisPosition, SendTrajectory, FinalApproachLinear
@@ -38,7 +39,7 @@ class OrchardTemplating(Node):
         self.data_save_dir = '/home/marcus/orchard_template_ws/results_data/v2/'
 
         # TODO: Set as a ros2 parameters
-        self.vision_experiment = 'a'
+        self.vision_experiment = None
         self.yolo_model = 'v9e.pt'
         self.apple_coords_sorted = None
         self.voxel_size = 0.01
@@ -51,11 +52,11 @@ class OrchardTemplating(Node):
         self.unreached_idx_voxelization = []
         self.side_branch_locations = []
 
-        # Vision experiment parameters
-        trellis_base_positions = [[-0.07, 1.105, -0.19], [-0.07, 1.05, -0.14], [-0.1, 1.0, -0.17], [-0.04, 1.21, -0.17], [-0.15, 1.02, -0.22], [-0.05, 1.05, -0.15], [-0.09, 1.16, -0.16], [-0.08, 1.11, -0.18], [-0.085, 1.03, -0.15], [-0.05, 1.12, -0.19]] # a through e (e has the most uncertainty on the bottom side branch)
-        vision_experiments = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j']
-        trellis_tempate_params = {key: value for key, value in zip(vision_experiments, trellis_base_positions)}
-        self.trellis_base_position = trellis_tempate_params.get(self.vision_experiment)
+        # # Vision experiment parameters
+        # trellis_base_positions = [[-0.07, 1.105, -0.19], [-0.07, 1.05, -0.14], [-0.1, 1.0, -0.17], [-0.04, 1.21, -0.17], [-0.15, 1.02, -0.22], [-0.05, 1.05, -0.15], [-0.09, 1.16, -0.16], [-0.08, 1.11, -0.18], [-0.085, 1.03, -0.15], [-0.05, 1.12, -0.19]] # a through e (e has the most uncertainty on the bottom side branch)
+        # vision_experiments = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j']
+        # trellis_tempate_params = {key: value for key, value in zip(vision_experiments, trellis_base_positions)}
+        # self.trellis_base_position = trellis_tempate_params.get(self.vision_experiment)
 
         # Publishers
         self.voxel_collision_pub = self.create_publisher(CollisionObject, "/collision_object", 10)
@@ -63,9 +64,13 @@ class OrchardTemplating(Node):
         # Services
         self.start_apple_prediction_client = self.create_client(ApplePrediction, "/apple_prediction_presaved_images", callback_group=m_callback_group)
         while not self.start_apple_prediction_client.wait_for_service(timeout_sec=1.0):
-            self.get_logger().info("Apple prediction service not available, waiting...")    
+            self.get_logger().info("Apple prediction service not available, waiting...")   
 
-        self.voxel_client = self.create_client(VoxelGrid, "voxel_grid")    
+        self.vision_experiment_param_client = self.create_client(GetParameters, '/apple_prediction_presaved_images/get_parameters', callback_group=m_callback_group)
+        while not self.vision_experiment_param_client.wait_for_service(timeout_sec=1.0):
+            self.get_logger().info('Waiting for vision experiment parameter service...')
+
+        self.voxel_client = self.create_client(VoxelGrid, "voxel_grid", callback_group=m_callback_group)    
         while not self.voxel_client.wait_for_service(timeout_sec=1.0):
             self.get_logger().info("Voxel grid service not available, waiting...")   
 
@@ -89,7 +94,39 @@ class OrchardTemplating(Node):
         while not self.trigger_arm_mover_client.wait_for_service(timeout_sec=1.0):
             self.get_logger().info('Waiting for send_arm_trajectory to be available...')
 
-        self.get_planning_scene_client = self.create_client(GetPlanningScene, 'get_planning_scene')
+        self.get_planning_scene_client = self.create_client(GetPlanningScene, 'get_planning_scene', callback_group=m_callback_group)
+        while not self.get_planning_scene_client.wait_for_service(timeout_sec=1.0):
+            self.get_logger().info('Waiting for get_planning_scene_client to be available...')
+
+    def param_callback(self, future):
+        try:
+            response = future.result()
+            self.vision_experiment = response.values[0].string_value
+            self.get_logger().info(f"Retrieved parameter: {self.vision_experiment}")
+
+            # Update trellis_base_position after retrieving vision_experiment
+            trellis_tempate_params = {
+                'a': [-0.07, 1.105, -0.19], 'b': [-0.07, 1.05, -0.14],
+                'c': [-0.1, 1.0, -0.17], 'd': [-0.04, 1.21, -0.17],
+                'e': [-0.15, 1.02, -0.22], 'f': [-0.05, 1.05, -0.15],
+                'g': [-0.09, 1.16, -0.16], 'h': [-0.08, 1.11, -0.18],
+                'i': [-0.085, 1.03, -0.15], 'j': [-0.05, 1.12, -0.19]
+            }
+            self.trellis_base_position = trellis_tempate_params.get(self.vision_experiment)
+
+            if self.trellis_base_position:
+                self.get_logger().info(f"Trellis base position set to: {self.trellis_base_position}")
+            else:
+                self.get_logger().warn(f"Invalid vision_experiment value: {self.vision_experiment}")
+        except Exception as e:
+            self.get_logger().error(f"Failed to get parameter: {e}")
+
+    def get_vision_experiment_param(self):
+        req = GetParameters.Request()
+        req.names = ['vision_experiment']
+        # TODO: Can I get away with not using call_async?
+        future = self.vision_experiment_param_client.call_async(req)
+        future.add_done_callback(self.param_callback)
     
     def get_gripper_position(self, target_frame="world", source_frame="gripper_link"):
         try:
@@ -290,12 +327,16 @@ class OrchardTemplating(Node):
         }
 
         # Save to a YAML file
-        with open(self.data_save_dir + f'experiment_{self.vision_experiment}_results_rrtstart_2.yaml', 'w') as file:
+        with open(self.data_save_dir + f'experiment_{self.vision_experiment}_results.yaml', 'w') as file:
             yaml.dump(data, file)
 
         self.get_logger().info("YAML file saved successfully.")   
 
     def start(self): 
+        ### GET VISION EXPERIMENT PARAMETER
+        self.get_logger().info(f'Getting vision experiment parameter')
+        self.get_vision_experiment_param()
+
         ### STAGE 0 - INITIALIZE ARM POSITION AND LOCATE APPLES
         # Ensure arm is in home position
         self.get_logger().info(f'Moving arm to home')

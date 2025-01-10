@@ -75,53 +75,7 @@ def norm_apple_coord_to_branch(branch_location, apple_coords):
 
     return normalized_coords, distances_yz
 
-def plot_single_apple_reachability(data_filename, side_branch_idx=1, radii_threshold=0.3):
-    apple_data = extract_reachable_apple_data(data_filename)
-
-    apple_coordinates = apple_data['apple_coords']
-    unreached_idx_templating = apple_data['unreached_idx_templating']
-    side_branch_locations = apple_data['side_branch_locations']
-
-    # Normalize apple coordinates
-    normalized_coords, distances_yz = norm_apple_coord_to_branch(side_branch_locations[side_branch_idx], apple_coordinates)
-
-    unreached_coords = np.array(normalized_coords)[unreached_idx_templating]
-    reached_coords = np.array(normalized_coords)[[i for i in range(len(normalized_coords)) if i not in unreached_idx_templating]]
-
-    unreached_radii = distances_yz[unreached_idx_templating]
-    reached_radii = distances_yz[[i for i in range(len(normalized_coords)) if i not in unreached_idx_templating]]
-
-    # Filter out coordinates with radii greater than the radiance threshold
-    unreached_coords = unreached_coords[unreached_radii <= radii_threshold]
-    reached_coords = reached_coords[reached_radii <= radii_threshold]
-
-    # Create the plot
-    plt.figure(figsize=(8, 6))
-    
-    # Plot the origin point
-    plt.scatter(0, 0, color='brown', s=100, label='Branch Location (Origin)')
-    
-    # Plot reachable coordinates
-    plt.scatter(reached_coords[:, 1], reached_coords[:, 2], color='green', label='Reachable Apples')
-    
-    # Plot unreachable coordinates
-    plt.scatter(unreached_coords[:, 1], unreached_coords[:, 2], color='red', label='Unreachable Apples')
-    
-    # Label the axes
-    plt.xlabel('y')
-    plt.ylabel('z')
-
-    # Set the axis limits
-    plt.xlim(-radii_threshold, radii_threshold)
-    plt.ylim(-radii_threshold, radii_threshold)
-    
-    # Add a legend
-    plt.legend()
-    
-    # Show the plot
-    plt.show()
-
-def plot_multiple_apple_reachability(data_filenames, branch_locations, radii_threshold=0.3):
+def plot_apple_reachability(data_filenames, side_branch_idx=1, radii_threshold=0.3, figsize=(10, 6)):
     total_unreached_coords = []
     total_reached_coords = []
     for i, filename in enumerate(data_filenames):
@@ -129,9 +83,10 @@ def plot_multiple_apple_reachability(data_filenames, branch_locations, radii_thr
 
         apple_coordinates = apple_data['apple_coords']
         unreached_idx_templating = apple_data['unreached_idx_templating']
+        side_branch_locations = apple_data['side_branch_locations']
 
         # Normalize apple coordinates
-        normalized_coords, distances_yz = norm_apple_coord_to_branch(branch_locations[i], apple_coordinates)
+        normalized_coords, distances_yz = norm_apple_coord_to_branch(side_branch_locations[side_branch_idx], apple_coordinates)
 
         unreached_coords = np.array(normalized_coords)[unreached_idx_templating]
         reached_coords = np.array(normalized_coords)[[i for i in range(len(normalized_coords)) if i not in unreached_idx_templating]]
@@ -151,38 +106,39 @@ def plot_multiple_apple_reachability(data_filenames, branch_locations, radii_thr
     total_reached_coords = np.vstack(total_reached_coords)
 
     # Create the plot
-    plt.figure(figsize=(10, 6))
-    
-    # Plot the origin point
-    plt.scatter(0, 0, color='brown', s=100, label='Branch Location (Origin)')
-    
+    fig, ax = plt.subplots(figsize=figsize)
+
     # Plot reachable coordinates
-    plt.scatter(total_reached_coords[:, 1], total_reached_coords[:, 2], color='green', label='Reachable Apples')
+    ax.scatter(total_reached_coords[:, 1], total_reached_coords[:, 2], color='green', label='Reachable Apples')
     
     # Plot unreachable coordinates
-    plt.scatter(total_unreached_coords[:, 1], total_unreached_coords[:, 2], color='red', label='Unreachable Apples')
-    
+    ax.scatter(total_unreached_coords[:, 1], total_unreached_coords[:, 2], color='red', label='Unreachable Apples')
+
+    # Plot a circle at the origin point with the target radius (side branch)
+    circle = plt.Circle((0, 0), 0.04, color='brown', fill=False, linestyle='-', linewidth=2, label='Side Branch')
+    ax.add_patch(circle)
+
+    # Ensure the aspect ratio is equal to make the circle appear correctly
+    ax.set_aspect('equal', adjustable='box')
+
     # Label the axes
-    plt.xlabel('y')
-    plt.ylabel('z')
+    ax.set_xlabel('y')
+    ax.set_ylabel('z')
 
     # Set the axis limits
-    plt.xlim(-radii_threshold, radii_threshold)
-    plt.ylim(-radii_threshold, radii_threshold)
+    ax.set_xlim(-radii_threshold, radii_threshold)
+    ax.set_ylim(-radii_threshold, radii_threshold)
 
     # Add a legend
-    plt.legend()
-    
+    ax.legend()
+
     # Show the plot
+    plt.grid(True)
     plt.show()
 
 
 if __name__ == '__main__':
+    # Plot the reachability of apples
+    plot_apple_reachability(['v2/experiment_a_results.yaml', 'v2/experiment_b_results.yaml', 'v2/experiment_c_results.yaml', 'v2/experiment_d_results.yaml'])
+
     # get_avg_reachable_rate(results_files)
-
-    # # Branch locations for vision experiments A-J
-    # branch_locations = [[0.31, 0.83, 0.76], [0.23, 0.73, 0.8], [0.23, 0.67, 0.78], [0.23, 0.9, 0.78], [0.23, 0.71, 0.73], [0.23, 0.74, 0.8], [0.23, 0.84, 0.8], [0.23, 0.79, 0.77], [0.23, 0.71, 0.79], [0.23, 0.81, 0.76]]
-    # plot_multiple_apple_reachability(results_files, branch_locations)
-
-    # Plot the reachability of apples for a single experiment
-    plot_single_apple_reachability('v2/experiment_a_results_rrtconnect_4.yaml')
