@@ -208,8 +208,9 @@ void MoveArmNode::move_to_pose(const std::shared_ptr<harvest_interfaces::srv::Mo
 
     // Set pose and joint tolerances
     this->move_group_.setPoseTarget(msg, "gripper_link");
-    this->move_group_.setGoalOrientationTolerance(0.2);
-    this->move_group_.setGoalJointTolerance(0.001); // Minimize joint changes
+    // this->move_group_.setGoalOrientationTolerance(0.35);
+    this->move_group_.setGoalOrientationTolerance(1.05);
+    // this->move_group_.setGoalJointTolerance(0.001); // Minimize joint changes
 
     // Use an optimization-aware planner
     // this->move_group_.setPlannerId("RRTstarkConfigDefault");

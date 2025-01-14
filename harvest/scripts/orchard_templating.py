@@ -36,7 +36,7 @@ class OrchardTemplating(Node):
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
 
         # Data saving directory
-        self.data_save_dir = '/home/marcus/orchard_template_ws/results_data/v2/'
+        self.data_save_dir = '/home/marcus/orchard_template_ws/results_data/tests/'
 
         # TODO: Set as a ros2 parameters
         self.vision_experiment = None
@@ -105,12 +105,20 @@ class OrchardTemplating(Node):
             self.get_logger().info(f"Retrieved parameter: {self.vision_experiment}")
 
             # Update trellis_base_position after retrieving vision_experiment
+            # trellis_tempate_params = {
+            #     'a': [-0.07, 1.105, -0.19], 'b': [-0.07, 1.05, -0.14],
+            #     'c': [-0.1, 1.0, -0.17], 'd': [-0.04, 1.21, -0.17],
+            #     'e': [-0.15, 1.02, -0.22], 'f': [-0.05, 1.05, -0.15],
+            #     'g': [-0.09, 1.16, -0.16], 'h': [-0.08, 1.11, -0.18],
+            #     'i': [-0.085, 1.03, -0.15], 'j': [-0.05, 1.12, -0.19]
+            # }
+            offset = 0.1  # Example offset value
             trellis_tempate_params = {
-                'a': [-0.07, 1.105, -0.19], 'b': [-0.07, 1.05, -0.14],
-                'c': [-0.1, 1.0, -0.17], 'd': [-0.04, 1.21, -0.17],
-                'e': [-0.15, 1.02, -0.22], 'f': [-0.05, 1.05, -0.15],
-                'g': [-0.09, 1.16, -0.16], 'h': [-0.08, 1.11, -0.18],
-                'i': [-0.085, 1.03, -0.15], 'j': [-0.05, 1.12, -0.19]
+                'a': [-0.07, 1.105 - offset, -0.19], 'b': [-0.07, 1.05 - offset, -0.14],
+                'c': [-0.1, 1.0 - offset, -0.17], 'd': [-0.04, 1.21 - offset, -0.17],
+                'e': [-0.15, 1.02 - offset, -0.22], 'f': [-0.05, 1.05 - offset, -0.15],
+                'g': [-0.09, 1.16 - offset, -0.16], 'h': [-0.08, 1.11 - offset, -0.18],
+                'i': [-0.085, 1.03 - offset, -0.15], 'j': [-0.05, 1.12 - offset, -0.19]
             }
             self.trellis_base_position = trellis_tempate_params.get(self.vision_experiment)
 
@@ -327,7 +335,8 @@ class OrchardTemplating(Node):
         }
 
         # Save to a YAML file
-        with open(self.data_save_dir + f'experiment_{self.vision_experiment}_results.yaml', 'w') as file:
+        # with open(self.data_save_dir + f'experiment_{self.vision_experiment}_results.yaml', 'w') as file:
+        with open(self.data_save_dir + f'experiment_{self.vision_experiment}_closer_camera_greater_tol.yaml', 'w') as file:
             yaml.dump(data, file)
 
         self.get_logger().info("YAML file saved successfully.")   
