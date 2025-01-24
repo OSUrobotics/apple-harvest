@@ -9,7 +9,6 @@ from moveit_msgs.msg import CollisionObject
 from shape_msgs.msg import SolidPrimitive
 from geometry_msgs.msg import Pose, Point
 from std_srvs.srv import Trigger
-from visualization_msgs.msg import Marker, MarkerArray
 import tf2_ros
 from geometry_msgs.msg import TransformStamped
 from moveit_msgs.srv import GetPlanningScene
@@ -37,12 +36,12 @@ class OrchardTemplating(Node):
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
 
         # Data saving directory
-        self.data_save_dir = '/home/marcus/orchard_template_ws/results_data/v5/'
+        self.data_save_dir = '/home/marcus/orchard_template_ws/results_data/v3/'
 
         # TODO: Set as a ros2 parameters
         self.vision_experiment = None
         self.yolo_model = 'v9e.pt'
-        self.apple_coords = None
+        self.apple_coords_sorted = None
         self.voxel_size = 0.01
         self.voxel_neighbor_radii = 0.08 # 2cm larger than the max apple radii threshold
         self.apple_approach_offset = 0.04 # meters
@@ -53,10 +52,14 @@ class OrchardTemplating(Node):
         self.unreached_idx_voxelization = []
         self.side_branch_locations = []
 
+        # # Vision experiment parameters
+        # trellis_base_positions = [[-0.07, 1.105, -0.19], [-0.07, 1.05, -0.14], [-0.1, 1.0, -0.17], [-0.04, 1.21, -0.17], [-0.15, 1.02, -0.22], [-0.05, 1.05, -0.15], [-0.09, 1.16, -0.16], [-0.08, 1.11, -0.18], [-0.085, 1.03, -0.15], [-0.05, 1.12, -0.19]] # a through e (e has the most uncertainty on the bottom side branch)
+        # vision_experiments = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j']
+        # trellis_tempate_params = {key: value for key, value in zip(vision_experiments, trellis_base_positions)}
+        # self.trellis_base_position = trellis_tempate_params.get(self.vision_experiment)
+
         # Publishers
         self.voxel_collision_pub = self.create_publisher(CollisionObject, "/collision_object", 10)
-        self.voxel_marker_publisher = self.create_publisher(MarkerArray, 'voxel_markers', 10)
-        self.voxel_marker_removed_publisher = self.create_publisher(MarkerArray, 'removed_voxel_markers', 10)
 
         # Services
         self.start_apple_prediction_client = self.create_client(ApplePrediction, "/apple_prediction_presaved_images", callback_group=m_callback_group)
@@ -173,7 +176,7 @@ class OrchardTemplating(Node):
 
         self.future = self.voxel_client.call_async(request)
         rclpy.spin_until_future_complete(self, self.future) 
-        return self.future.result()
+        return self.future.result().voxel_centers
     
     def update_trellis_template_pos(self, target_base_position):
         request = UpdateTrellisPosition.Request()
@@ -224,51 +227,6 @@ class OrchardTemplating(Node):
             collision_object.operation = CollisionObject.ADD
 
             self.voxel_collision_pub.publish(collision_object)
-    
-    def add_voxels(self, voxel_centers, colors=None):
-        removed = False
-        if colors == None:
-            removed = True
-            colors = [[0.8, 0.0, 0.0, 0.5] for _ in range(len(voxel_centers))]
-
-        # # Clear existing markers
-        # clear_markers = MarkerArray()
-        # marker = Marker()
-        # marker.action = Marker.DELETEALL
-        # clear_markers.markers.append(marker)
-        # self.voxel_marker_publisher.publish(clear_markers)
-
-        marker_array = MarkerArray()
-        for i, (center, color) in enumerate(zip(voxel_centers, colors)):
-            marker = Marker()
-            marker.header.frame_id = "base_link"
-            marker.header.stamp = self.get_clock().now().to_msg()
-            marker.ns = "voxels"
-            marker.id = i
-            marker.type = Marker.CUBE
-            marker.action = Marker.ADD
-            marker.pose.position.x = center[0]
-            marker.pose.position.y = center[1]
-            marker.pose.position.z = center[2]
-            marker.pose.orientation.x = 0.0
-            marker.pose.orientation.y = 0.0
-            marker.pose.orientation.z = 0.0
-            marker.pose.orientation.w = 1.0
-            marker.scale.x = self.voxel_size  # Cube size matches voxel size
-            marker.scale.y = self.voxel_size
-            marker.scale.z = self.voxel_size
-            marker.color.r = color[0]
-            marker.color.g = color[1]
-            marker.color.b = color[2]
-            marker.color.a = color[3]  # Ensure alpha is set
-            marker_array.markers.append(marker)
-
-        # Publish the markers
-        self.get_logger().info(f"Publishing {len(marker_array.markers)} markers to RViz.")
-        if removed:
-            self.voxel_marker_removed_publisher.publish(marker_array)
-        else:
-            self.voxel_marker_publisher.publish(marker_array)
     
     def remove_tree_from_scene(self):
         tree_object = CollisionObject()
@@ -363,7 +321,7 @@ class OrchardTemplating(Node):
         data = {
             'vision_experiment':    self.vision_experiment,
             'YOLO_model':           self.yolo_model,
-            'apple_coordinates':    self.apple_coords.tolist(),
+            'apple_coordinates':    self.apple_coords_sorted.tolist(),
             'voxel_size':           self.voxel_size,
             'voxel_neighbor_radii': self.voxel_neighbor_radii,
             'apple_approach_offset':self.apple_approach_offset,
@@ -378,6 +336,7 @@ class OrchardTemplating(Node):
 
         # Save to a YAML file
         with open(self.data_save_dir + f'experiment_{self.vision_experiment}_results.yaml', 'w') as file:
+        # with open(self.data_save_dir + f'experiment_{self.vision_experiment}_voxel_trans.yaml', 'w') as file:
             yaml.dump(data, file)
 
         self.get_logger().info("YAML file saved successfully.")   
@@ -387,17 +346,22 @@ class OrchardTemplating(Node):
         self.get_logger().info(f'Getting vision experiment parameter')
         self.get_vision_experiment_param()
 
-        # ### STAGE 0 - INITIALIZE ARM POSITION AND LOCATE APPLES
-        # # Ensure arm is in home position
-        # self.get_logger().info(f'Moving arm to home')
-        # self.go_to_home()
+        ### STAGE 0 - INITIALIZE ARM POSITION AND LOCATE APPLES
+        # Ensure arm is in home position
+        self.get_logger().info(f'Moving arm to home')
+        self.go_to_home()
 
         # Request apple location prediction
         self.get_logger().info(f'Sending request to predict apple centerpoint locations in scene.')
         apple_poses = self.start_apple_prediction()
         self.apples_found = len(apple_poses.poses)
-        self.apple_coords = np.array([[pose.position.x, pose.position.y, pose.position.z] for pose in apple_poses.poses])
+        apple_coords = np.array([[pose.position.x, pose.position.y, pose.position.z] for pose in apple_poses.poses])
         self.get_logger().info(f'# of apples found: {len(apple_poses.poses)}')
+
+        # Sort apple locations based on closeness to gripper_link
+        self.get_logger().info(f'Sorting apple locations')
+        gripper_position = self.get_gripper_position()
+        self.apple_coords_sorted = self.sort_coordinates(gripper_position, apple_coords)
 
         ### STAGE 1 - TEMPLATING
         self.get_logger().info(f'Starting templating method')
@@ -407,7 +371,6 @@ class OrchardTemplating(Node):
         self.get_side_branch_locations()
 
         # Set a gripper approach offset to each apple location
-        apple_coords = copy.deepcopy(self.apple_coords)
         apple_coords[:, 1] -= (self.apple_approach_offset) # apple radius offset
 
         # Move arm to apple position
@@ -418,12 +381,77 @@ class OrchardTemplating(Node):
                 self.get_logger().info(f'Apple ID: {i} reached')
                 self.apples_reached_templating += 1
 
-                # self.get_logger().info(f'Moving arm to home')
-                # trajectory = result.reverse_traj
-                # self.send_trajectory(trajectory)
+                self.get_logger().info(f'Moving arm to home')
+                trajectory = result.reverse_traj
+                self.send_trajectory(trajectory)
             else:
                 self.get_logger().warn(f'Apple ID: {i} not reachable')
                 self.unreached_idx_templating.append(i)
+
+        # ### ATTEMPTING TWO PLANNING PHASES - INITIAL APPROACH WHICH IS FURTHER FROM THE APPLE AND THEN ANOTHER PLAN TO THE APPLE
+        # for i, apple in enumerate(apple_coords):
+        #     self.get_logger().info(f'Moving arm to apple ID: {i}')
+        #     initial_point = np.copy(apple)
+        #     initial_point[1] -= 0.06
+        #     result = self.send_pose_goal(initial_point)
+        #     if result.result:
+        #         self.get_logger().info(f'Initial approach successful')
+
+        #         # Final linear approach
+        #         final_approach_result = self.send_pose_goal(apple)
+
+        #         if final_approach_result.result:
+        #             self.get_logger().info(f'Apple ID: {i} reached')
+        #             self.apples_reached_templating += 1
+
+        #             self.get_logger().info(f'Retracting arm from final approach')
+        #             retract_result = self.send_pose_goal(initial_point)
+        #             if retract_result.result:
+        #                 self.get_logger().info(f'Arm retracted successfully')
+        #             else:
+        #                 self.get_logger().warn(f'Failed to retract arm')
+                        
+        #             self.get_logger().info(f'Moving arm to home')
+        #             self.go_to_home()
+        #         else:
+        #             self.get_logger().warn(f'Apple ID: {i} not reachable')
+        #             self.unreached_idx_templating.append(i)
+        #     else:
+        #         self.get_logger().warn(f'Apple ID: {i} not reachable')
+        #         self.unreached_idx_templating.append(i)
+
+        # ### ATTEMPTING TWO PLANNING PHASES - INITIAL APPROACH WHICH IS FURTHER FROM THE APPLE AND THEN ANOTHER LINEAR PLAN TO THE APPLE
+        # for i, apple in enumerate(apple_coords):
+        #     self.get_logger().info(f'Moving arm to apple ID: {i}')
+        #     result = self.send_pose_goal(apple)
+        #     if result.result:
+        #         self.get_logger().info(f'Initial approach successful')
+
+        #         # Final linear approach
+        #         final_approach_result = self.final_linear_approach(0.06)
+
+        #         if final_approach_result.success:
+        #             self.get_logger().info(f'Apple ID: {i} reached')
+        #             self.apples_reached_templating += 1
+
+        #             self.get_logger().info(f'Retracting arm from final approach')
+        #             retract_result = self.final_linear_approach(-0.12)
+        #             if retract_result.success:
+        #                 self.get_logger().info(f'Arm retracted successfully')
+        #             else:
+        #                 self.get_logger().warn(f'Failed to retract arm')
+                        
+        #             self.get_logger().info(f'Moving arm to home')
+        #             self.go_to_home()
+        #         else:
+        #             self.get_logger().warn(f'Apple ID: {i} not reachable')
+        #             self.unreached_idx_templating.append(i)
+        #         # self.get_logger().info(f'Moving arm to home')
+        #         # trajectory = result.reverse_traj
+        #         # self.send_trajectory(trajectory)
+        #     else:
+        #         self.get_logger().warn(f'Apple ID: {i} not reachable')
+        #         self.unreached_idx_templating.append(i)
         
         self.get_logger().info(f'Number of apples reached via templating: {self.apples_reached_templating}')
 
@@ -435,26 +463,16 @@ class OrchardTemplating(Node):
         self.get_logger().info(f'Starting voxelization method')
         # Request voxel data from point cloud
         self.get_logger().info(f'Sending request to extract voxels from point cloud.')
-        voxel_data = self.call_voxel_grid_service()
-        voxel_centers = voxel_data.voxel_centers
-        voxel_colors = voxel_data.voxel_colors
+        voxel_centers = self.call_voxel_grid_service()
         voxel_centers = np.array([[point.x, point.y, point.z] for point in voxel_centers])
-        voxel_colors = np.array([[color.r, color.g, color.b, color.a] for color in voxel_colors])
         self.get_logger().info(f"# of voxels generated: {len(voxel_centers)}")
 
         # Find all neighboring point within a sphere around the apple locations
-        neighbor_coords, neighbor_idx = self.get_neighbors(voxel_centers, self.apple_coords, radius=self.voxel_neighbor_radii)
+        neighbor_coords, neighbor_idx = self.get_neighbors(voxel_centers, self.apple_coords_sorted, radius=self.voxel_neighbor_radii)
         self.get_logger().info(f'# of voxels to remove based on apple locations: {len(neighbor_idx)}')
 
-        voxel_centers_apple_masked = [voxel_centers[i] for i in range(len(voxel_centers)) if i not in neighbor_idx]
-        voxel_colors_apple_masked = [voxel_colors[i] for i in range(len(voxel_colors)) if i not in neighbor_idx]
-        voxel_centers_removed = [voxel_centers[i] for i in neighbor_idx]
-        voxel_colors_removed = [voxel_colors[i] for i in neighbor_idx]
+        voxel_centers_apple_masked = [idx for i, idx in enumerate(voxel_centers) if i not in neighbor_idx]
         self.get_logger().info(f'# of voxels after apple location removal: {len(voxel_centers_apple_masked)}')
-        self.get_logger().info(f'# of voxels removed: {len(voxel_centers_removed)}')
-
-        self.add_voxels(voxel_centers_apple_masked, voxel_colors_apple_masked)
-        self.add_voxels(voxel_centers_removed)
 
         # Add voxels as moveit2 collision objects - first convert back to pose message
         voxel_centers_apple_masked_poses = [Point(x=coord[0], y=coord[1], z=coord[2]) for coord in voxel_centers_apple_masked]
@@ -469,9 +487,9 @@ class OrchardTemplating(Node):
                 self.get_logger().info(f'Apple ID: {i} reached')
                 self.apples_reached_voxelization += 1
 
-                # self.get_logger().info(f'Moving arm to home')
-                # trajectory = result.reverse_traj
-                # self.send_trajectory(trajectory)
+                self.get_logger().info(f'Moving arm to home')
+                trajectory = result.reverse_traj
+                self.send_trajectory(trajectory)
             else:
                 self.get_logger().warn(f'Apple ID: {i} not reachable')
                 self.unreached_idx_voxelization.append(i)

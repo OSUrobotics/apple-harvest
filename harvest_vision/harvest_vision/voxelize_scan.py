@@ -2,11 +2,14 @@ import rclpy
 from rclpy.node import Node
 from harvest_interfaces.srv import VoxelGrid
 from geometry_msgs.msg import Point
+from std_msgs.msg import ColorRGBA
 from ament_index_python.packages import get_package_share_directory
 import open3d as o3d
 import numpy as np
 import os
 from tf2_ros import Buffer, TransformListener
+from scipy.spatial.transform import Rotation as R
+import cv2
 
 
 class VoxelGridService(Node):
@@ -24,8 +27,24 @@ class VoxelGridService(Node):
             
             # Access a file or subdirectory within the share directory
             self.point_cloud_path = os.path.join(share_directory, 'data/', f'prosser_{self.vision_experiment}/', 'pointcloud.ply')
+            self.rgb_path = os.path.join(share_directory, 'data/', f'prosser_{self.vision_experiment}/', 'color_raw.png')
+            self.depth_path = os.path.join(share_directory, 'data/', f'prosser_{self.vision_experiment}/', 'depth_to_color.png')
         except Exception as e:
             self.get_logger().error(f"Error accessing share directory: {e}")
+        
+        ### AZURE CAMERA INTRINSICS
+        self.azure_color_intrinsic = [902.98, 0, 956.55, 0, 902.77, 547.68, 0, 0, 1]
+        self.fx = self.azure_color_intrinsic[0]  # Focal length in x
+        self.fy = self.azure_color_intrinsic[4]  # Focal length in y
+        self.cx = self.azure_color_intrinsic[2]  # Principal point x
+        self.cy = self.azure_color_intrinsic[5]  # Principal point y
+        self.target_size = (1920, 1080)
+
+        # Load RGB and depth images
+        self.rgb_image = cv2.imread(self.rgb_path)
+        self.depth_image = cv2.imread(self.depth_path, cv2.IMREAD_UNCHANGED)
+        self.rgb_image = cv2.resize(self.rgb_image, self.target_size, interpolation=cv2.INTER_LINEAR) # Resize RGB image
+        self.depth_image = cv2.resize(self.depth_image, self.target_size, interpolation=cv2.INTER_NEAREST) # Resize depth image
 
         # Publishers
         self.publisher = self.create_publisher(Point, 'voxel_centers', 10)
@@ -63,49 +82,96 @@ class VoxelGridService(Node):
         transformation_matrix[:3, :3] = rotation  # Set the rotation
         transformation_matrix[:3, 3] = translation  # Set the translation
 
-        # Convert points to homogeneous coordinates (Nx4)
-        homogeneous_points = np.hstack((pcd_points, np.ones((pcd_points.shape[0], 1))))
+        pcd = o3d.geometry.PointCloud()
+        pcd.points = o3d.utility.Vector3dVector(pcd_points)
+        pcd.transform(transformation_matrix)  # Apply the transformation
 
-        # Apply the transformation
-        transformed_points = homogeneous_points @ transformation_matrix.T
+        return np.asarray(pcd.points)
 
-        # Return only the 3D points
-        return transformed_points[:, :3]
+    def voxelize_point_cloud(self, voxel_size, transform):
+        rgb_image = cv2.cvtColor(self.rgb_image, cv2.COLOR_BGR2RGB)
+        # Use the entire depth image without segmentation
+        rgb_pc = o3d.geometry.Image(rgb_image)
+        depth_pc = o3d.geometry.Image(self.depth_image)
 
-    def voxelize_point_cloud(self, file_path, voxel_size, transform):
-        # Load the point cloud
-        pcd = o3d.io.read_point_cloud(file_path)
-
-        # # Translation vector (new origin relative to old origin)
-        # translation = np.array([0, 0.25, 0.45])
-        translation = [
-            transform.transform.translation.x,
-            transform.transform.translation.y,
-            transform.transform.translation.z,
-        ]
-
-        # Transform the points
-        transformed_points = self.transform_points(pcd.points, self.R, translation)
-
-        pcd.points = o3d.utility.Vector3dVector(transformed_points)  # Convert back to Open3D format
+        # Create RGBD image (ensure RGB format for correct visualization)
+        rgbd_image = o3d.geometry.RGBDImage.create_from_color_and_depth(
+            rgb_pc, depth_pc, convert_rgb_to_intensity=False
+        )
+        # Point cloud with Azure camera intrinsics
+        pcd = o3d.geometry.PointCloud.create_from_rgbd_image(
+            rgbd_image,
+            o3d.camera.PinholeCameraIntrinsic(
+                width=self.target_size[0], height=self.target_size[1],
+                fx=self.fx, fy=self.fy, cx=self.cx, cy=self.cy
+            )
+        )
 
         # Perform voxelization
         voxel_grid = o3d.geometry.VoxelGrid.create_from_point_cloud(pcd, voxel_size=voxel_size)
 
-        # Get the voxel data
+        # Extract voxel centers
         voxels = voxel_grid.get_voxels()
-        
-        # Extract voxel centers and their indices
-        voxel_centers, voxel_indices = zip(*[(voxel_grid.get_voxel_center_coordinate(voxel.grid_index), voxel.grid_index) for voxel in voxels])
+        # voxel_centers = np.array([voxel_grid.get_voxel_center_coordinate(voxel.grid_index) for voxel in voxels])
+
+
+        ###################### ATTEMPTING TO GET A BLEND OF COLORS FOR THE VOXELS ########################
+        # Retrieve point colors and coordinates
+        point_colors = np.asarray(pcd.colors)
+        point_coords = np.asarray(pcd.points)
+        voxel_centers = []
+        voxel_colors = []
+
+        # Create a mapping of voxel indices to points
+        voxel_map = {}
+        for idx, point in enumerate(point_coords):
+            voxel_index = tuple(voxel_grid.get_voxel(point))  # Convert to tuple
+            if voxel_index not in voxel_map:
+                voxel_map[voxel_index] = []
+            voxel_map[voxel_index].append(idx)
+
+        # Calculate the center and blended color for each voxel
+        for voxel_index, point_indices in voxel_map.items():
+            voxel_center = voxel_grid.get_voxel_center_coordinate(voxel_index)
+            voxel_centers.append(voxel_center)
+
+            # Blend colors of points in the voxel
+            voxel_color = np.mean(point_colors[point_indices], axis=0)
+            voxel_colors.append(voxel_color)
+
+        voxel_centers = np.array(voxel_centers)
+        voxel_colors = np.array(voxel_colors)
+        # voxel_colors = []
+
+        #################################################################################################
+
+
+        # Convert the quaternion into a rotation matrix using tf2
+        quaternion = np.array([
+            transform.transform.rotation.x,
+            transform.transform.rotation.y,
+            transform.transform.rotation.z,
+            transform.transform.rotation.w
+        ])
+        rot_matrix = R.from_quat(quaternion).as_matrix()
+
+        # Translation vector
+        translation = np.array([
+            transform.transform.translation.x,
+            transform.transform.translation.y,
+            transform.transform.translation.z
+        ])
+
+        # Apply the transformation to voxel centers
+        transformed_voxel_centers = (rot_matrix @ voxel_centers.T).T + translation
 
         # Filter points within the specified range
-        points = np.array(voxel_centers)
-        voxel_centers = np.array([
-            point for point in points
+        transformed_voxel_centers = np.array([
+            point for point in transformed_voxel_centers
             if self.y_lower_threshold <= point[1] <= self.y_upper_threshold
         ])
 
-        return voxel_centers, voxel_indices
+        return transformed_voxel_centers, voxel_colors
 
     def voxel_grid_callback(self, request, response):
         try:
@@ -123,10 +189,13 @@ class VoxelGridService(Node):
                 return response
 
             # Voxelize the point cloud
-            voxel_centers, _ = self.voxelize_point_cloud(self.point_cloud_path, voxel_size, transform)
+            voxel_centers, voxel_colors = self.voxelize_point_cloud(voxel_size, transform)
 
             # Populate the response
             response.voxel_centers = [Point(x=float(v[0]), y=float(v[1]), z=float(v[2])) for v in voxel_centers]
+            response.voxel_colors = [
+                ColorRGBA(r=float(c[0]), g=float(c[1]), b=float(c[2]), a=1.0) for c in voxel_colors
+            ]
 
             # Publish voxel centers
             for center in voxel_centers:

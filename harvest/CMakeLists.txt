@@ -31,6 +31,7 @@ install(PROGRAMS
   scripts/record.py
   scripts/apple_prediction_test.py
   scripts/orchard_templating.py
+  scripts/apple_reachability_rviz.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

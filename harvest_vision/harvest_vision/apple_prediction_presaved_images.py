@@ -329,7 +329,7 @@ class ApplePredictionPreSaved(Node):
             for (x, y, z), (b, g, r) in zip(points, colors)
         ]
 
-        # Create ROS PointCloud2 message
+        # Create ROS PointCloud2 message 
         header = Header()
         header.stamp = self.get_clock().now().to_msg()
         header.frame_id = 'camera_link'  # Replace with your frame

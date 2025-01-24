@@ -67,6 +67,9 @@
                         filename="package://ur5e_custom_hardware/meshes/03_mk3_full_assembly_coarse.STL"
                         scale="0.001 0.001 0.001" />
                 </geometry>
+                <material name="ur5_blue">
+                    <color rgba="0.45 0.62 0.9 1" />
+                </material>
             </visual>
         </link>
 
@@ -75,7 +78,7 @@
             <parent link="base_link" />
             <child link="camera_link" />
             <!-- <origin xyz="0.00 0.00 0.5" rpy="0 0 0" /> -->
-            <origin xyz="0.00 0.00 0.5" rpy="-1.57079 0 0" />
+            <origin xyz="0.00 -0.1 0.5" rpy="-1.57079 0 0" />
         </joint>
 
         <link name="camera_link">
