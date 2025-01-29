@@ -52,6 +52,19 @@ planner_configs:
     max_nearest_neighbors: 10  # use k nearest neighbors. default: 10
   PRMstarkConfigDefault:
     type: geometric::PRMstar
+  SemiPersistentLazyPRMstar: # reuses roadmap during lifetime of node but doesn't save/load roadmap to/from disk
+    type: geometric::LazyPRMstar
+    multi_query_planning_enabled: 1
+    store_planner_data: 1
+    load_planner_data: 0
+  SemiPersistentLazyPRM: # reuses roadmap during lifetime of node but doesn't save/load roadmap to/from disk
+      type: geometric::LazyPRM
+      multi_query_planning_enabled: 1
+      store_planner_data: 1
+      load_planner_data: 0
+      range: 0.5
+      goal_bias: 0.2
+      max_nearest_neighbors: 50
 ur_manipulator:
   planner_configs:
     - SBLkConfigDefault
@@ -65,6 +78,8 @@ ur_manipulator:
     - TRRTkConfigDefault
     - PRMkConfigDefault
     - PRMstarkConfigDefault
+    - SemiPersistentLazyPRM
+    - SemiPersistentLazyPRMstar
   ##Note: commenting the following line lets moveit chose RRTConnect as default planner rather than LBKPIECE
-  #projection_evaluator: joints(shoulder_pan_joint,shoulder_lift_joint)
+  projection_evaluator: joints(shoulder_pan_joint,shoulder_lift_joint)
   longest_valid_segment_fraction: 0.01

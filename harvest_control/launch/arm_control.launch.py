@@ -12,6 +12,17 @@ def generate_launch_description():
     package_name = 'harvest_control'
 
     declared_arguments = []
+
+    ### UR driver and MoveIt arguments
+    declared_arguments.append(DeclareLaunchArgument('ur_type', default_value="ur5e", 
+                                  description="Type of Universal Robot."))
+    declared_arguments.append(DeclareLaunchArgument('robot_ip', default_value="yyy.yyy.yyy.yyy", 
+                                  description="IP address of the robot."))
+    declared_arguments.append(DeclareLaunchArgument('use_fake_hardware', default_value="true", 
+                                  description="Use fake hardware for the UR robot."))
+    declared_arguments.append(DeclareLaunchArgument('launch_rviz', default_value="true", 
+                                  description="Launch RViz for visualization."))
+
     ### harvest node parameter
     # The pick pattern is dependent on the controller selected with the below parameter
     declared_arguments.append(DeclareLaunchArgument("pick_pattern", default_value="pull-twist", 
@@ -45,10 +56,25 @@ def generate_launch_description():
 
 
     return LaunchDescription(declared_arguments + [
-        
-        # IncludeLaunchDescription(PythonLaunchDescriptionSource(ur_driver_launch_path)),
-        # IncludeLaunchDescription(PythonLaunchDescriptionSource(ur_moveit_launch_path)),
+        # Include UR driver launch
+        IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(ur_driver_launch_path),
+            launch_arguments={
+                'ur_type': LaunchConfiguration('ur_type'),
+                'robot_ip': LaunchConfiguration('robot_ip'),
+                'use_fake_hardware': LaunchConfiguration('use_fake_hardware'),
+                'launch_rviz': LaunchConfiguration('launch_rviz'),
+            }.items(),
+        ),
 
+        # Include UR MoveIt launch
+        IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(ur_moveit_launch_path),
+            launch_arguments={
+                'ur_type': LaunchConfiguration('ur_type'),
+                'launch_rviz': LaunchConfiguration('launch_rviz'),
+            }.items(),
+        ),
 
         # Launch the coordinate_to_trajectory_node
         Node(
@@ -62,41 +88,41 @@ def generate_launch_description():
                     ]
         ),
 
-        # Node(
-        #     package='harvest_control',
-        #     executable='event_detector.py',
-        #     name='event_detector',
-        # ),
+        Node(
+            package='harvest_control',
+            executable='event_detector.py',
+            name='event_detector',
+        ),
 
-        # Node(
-        #     package='harvest_control',
-        #     executable='force_filter.py',
-        #     name='forcefilter',
-        # ),
+        Node(
+            package='harvest_control',
+            executable='force_filter.py',
+            name='forcefilter',
+        ),
 
-        # Node(
-        #     package='harvest_control',
-        #     executable='heuristic_controller.py',
-        #     name='pick_controller',
-        # ),
+        Node(
+            package='harvest_control',
+            executable='heuristic_controller.py',
+            name='pick_controller',
+        ),
 
-        # Node(
-        #     package='harvest_control',
-        #     executable='linear_controller.py',
-        #     name='linear_controller',
-        # ),
+        Node(
+            package='harvest_control',
+            executable='linear_controller.py',
+            name='linear_controller',
+        ),
 
-        # Node(
-        #     package='harvest_control',
-        #     executable='pose_listener.py',
-        #     name='tf_listener',
-        # ),
+        Node(
+            package='harvest_control',
+            executable='pose_listener.py',
+            name='tf_listener',
+        ),
 
-        # Node(
-        #     package='harvest_control',
-        #     executable='pressure_averager.py',
-        #     name='pressure_averager',
-        # ),
+        Node(
+            package='harvest_control',
+            executable='pressure_averager.py',
+            name='pressure_averager',
+        ),
 
         Node(
             package='harvest_control',
@@ -113,7 +139,7 @@ def generate_launch_description():
         # Launch C++ node
         Node(
             package='harvest_control',
-            executable='move_arm_action_based',
+            executable='move_arm',
             name='move_arm_node',
             parameters=[
                     {"max_accel": LaunchConfiguration("max_accel"),
