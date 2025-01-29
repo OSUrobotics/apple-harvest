@@ -1,7 +1,6 @@
 import yaml
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.patches import Wedge
 
 # Function to extract the required data
 def extract_reachable_apple_data(file_path, dir="/home/marcus/orchard_template_ws/results_data/"):
@@ -128,142 +127,6 @@ def get_branch_position(branch_radii, angle_deg, length, span='x'):
         y2 = y0 + dy * length
         return x1_0, x2_0, x1_1, x2_1, y1, y2  
 
-# def plot_norm_apple_reachability(data_filenames, side_branch_idx=1, radii_threshold=0.3, figsize=(10, 6), branch_alpha=0.2, turtle_green=(150/255, 207/255, 103/255), light_purple=(150/255, 81/255, 206/255)):
-#     total_unreached_coords = []
-#     total_reached_coords = []
-#     total_unreached_via_ur5 = []
-#     for i, filename in enumerate(data_filenames):
-#         apple_data = extract_reachable_apple_data(filename)
-
-#         apple_coordinates = apple_data['apple_coords']
-#         unreached_idx_templating = apple_data['unreached_idx_templating']
-#         side_branch_locations = apple_data['side_branch_locations']
-
-#         # Filter apple coordinates based on UR5e reachable radius
-#         unreached_idx_via_ur5 = filter_apple_coords_ur5_reachability(apple_coordinates)
-
-#         # Normalize apple coordinates
-#         normalized_coords, distances_yz = norm_apple_coord_to_branch(side_branch_locations[side_branch_idx], apple_coordinates)
-
-#         # Create the mask for the radii threshold
-#         radii_threshold_mask = distances_yz <= radii_threshold
-
-#         # Apply the mask to unreached_idx_templating to filter out invalid indices
-#         valid_unreached_mask = radii_threshold_mask[unreached_idx_templating]
-#         filtered_unreached_idx_templating = np.array(unreached_idx_templating)[valid_unreached_mask]
-
-#         # Extract unreached and reached coordinates
-#         unreached_coords = normalized_coords[np.isin(range(len(normalized_coords)), filtered_unreached_idx_templating)] # "is unreached"
-#         reached_coords = normalized_coords[~np.isin(range(len(normalized_coords)), filtered_unreached_idx_templating)] # "is reached"
-#         unreached_coords_via_ur5 = normalized_coords[np.isin(range(len(normalized_coords)), unreached_idx_via_ur5)]
-        
-#         # Apply the radii threshold mask to the reached coordinates only
-#         reached_coords = reached_coords[radii_threshold_mask[~np.isin(range(len(normalized_coords)), filtered_unreached_idx_templating)]]
-
-#         # Append the coordinates to the total list
-#         total_unreached_coords.append(unreached_coords)
-#         total_reached_coords.append(reached_coords)
-#         total_unreached_via_ur5.append(unreached_coords_via_ur5)
-
-#     total_unreached_coords = np.vstack(total_unreached_coords)
-#     total_reached_coords = np.vstack(total_reached_coords)
-#     total_unreached_via_ur5 = np.vstack(total_unreached_via_ur5)
-
-#     # Combine all arrays to find the global min/max y-values
-#     all_coords = np.vstack([total_unreached_coords, total_reached_coords, total_unreached_via_ur5])
-#     y_vals = all_coords[:, 1] 
-#     y_min, y_max = np.min(y_vals), np.max(y_vals)
-
-#     # Compute the scatter plot dot sizes based on the depth values
-#     def compute_sizes(coords, depth_min, depth_max):
-#         depth_vals = coords[:, 1] 
-#         sizes = ((depth_max - depth_vals) / (depth_max - depth_min)) * 150 + 20  # Scale and shift sizes
-#         return sizes
-
-#     # Scatter plot sizes
-#     reached_sizes = compute_sizes(total_reached_coords, y_min, y_max)
-#     unreached_sizes = compute_sizes(total_unreached_coords, y_min, y_max)
-#     unreached_ur5_sizes = compute_sizes(total_unreached_via_ur5, y_min, y_max)
-
-#     # Create the plot
-#     # fig, (ax1, ax2) = plt.subplots(1, 2, figsize=figsize, sharey=False)
-#     # Create the plot with gridspec
-#     fig = plt.figure(figsize=figsize)
-#     gs = fig.add_gridspec(1, 4)
-#     ax1 = fig.add_subplot(gs[0, :3])  # First subplot spans the first two columns
-#     ax2 = fig.add_subplot(gs[0, 3])   # Second subplot occupies the third column
-
-#     ### DATA FOR LEFTMOST PLOT ###
-#     x1, x2, y1_0, y2_0, y1_1, y2_1 = get_branch_position(0.04, 0, 2.0, span='x')
-#     ax1.plot([x1, x2], [y1_0, y2_0], linestyle='-', color='brown', alpha=branch_alpha) #, label=f'Side Branch')
-#     ax1.plot([x1, x2], [y1_1, y2_1], linestyle='-', color='brown', alpha=branch_alpha)
-#     ax1.fill_between([x1, x2], [y1_0, y2_0], [y1_1, y2_1], color='brown', alpha=branch_alpha)
-
-#     x1_0, x2_0, x1_1, x2_1, y1, y2 = get_branch_position(0.08, 90, 1.0, span='y')
-#     ax1.plot([x1_0, x2_0], [y1, y2], '-', color='brown', alpha=branch_alpha) #, label=f'Leader Branch')
-#     ax1.plot([x1_1, x2_1], [y1, y2], '-', color='brown', alpha=branch_alpha)
-#     ax1.fill_between([x1_0, x1_1], 0.04, y2, color='brown', alpha=branch_alpha)
-#     ax1.fill_between([x1_0, x1_1], -0.04, y1, color='brown', alpha=branch_alpha, label=f'Branches')
-
-#     # Plot reachable coordinates
-#     ax1.scatter(total_reached_coords[:, 0], total_reached_coords[:, 2], s=reached_sizes, color=turtle_green, label='Reachable Apples')
-    
-#     # Plot unreachable coordinates
-#     ax1.scatter(total_unreached_coords[:, 0], total_unreached_coords[:, 2], s=unreached_sizes, color=light_purple, label='Unreachable Apples')
-#     # ax1.scatter(total_unreached_via_ur5[:, 0], total_unreached_via_ur5[:, 2], s=unreached_ur5_sizes, color='orange', label='Unreachable via UR5')
-
-#     # Label the axes
-#     ax1.set_xlabel('x')
-#     ax1.set_ylabel('z')
-
-#     # Set axes aspect equal
-#     ax1.set_aspect('equal')
-
-#     # Set the axis limits
-#     ax1.set_xlim(-0.75, 0.75)
-#     ax1.set_ylim(-radii_threshold, radii_threshold)
-#     ax1.grid(True)
-#     ax1.legend(loc='upper left')
-#     ax1.set_title('Front View')
-
-#     ### DATA FOR RIGHTMOST PLOT ###
-#     # Convert angle to radians
-#     angle_deg = 90 + 18.435
-#     x1_0, x2_0, x1_1, x2_1, y1, y2 = get_branch_position(0.08, angle_deg, 1.0, span='y')
-
-#     # Plotting the line
-#     ax2.plot([x1_0, x2_0], [y1, y2], '-', color='brown', alpha=branch_alpha, label=f'Leader Branch')
-#     ax2.plot([x1_1, x2_1], [y1, y2], '-', color='brown', alpha=branch_alpha)
-#     ax2.fill_betweenx([y1, y2], [x1_0, x2_0], [x1_1, x2_1], color='brown', alpha=branch_alpha)
-
-#     # Plot a circle at the origin point with the target radius (side branch)
-#     circle = plt.Circle((0, 0), 0.04, color='brown', fill=False, linestyle='-', linewidth=2, alpha=branch_alpha+0.1, label='Side Branch')
-#     ax2.add_patch(circle)
-
-#     # Plot reachable coordinates
-#     ax2.scatter(total_reached_coords[:, 1], total_reached_coords[:, 2], color=turtle_green, label='Reachable Apples')
-    
-#     # Plot unreachable coordinates
-#     ax2.scatter(total_unreached_coords[:, 1], total_unreached_coords[:, 2], color=light_purple, label='Unreachable Apples')
-#     # ax2.scatter(total_unreached_via_ur5[:, 1], total_unreached_via_ur5[:, 2], s=unreached_ur5_sizes, color='orange', label='Unreachable via UR5')
-
-#     # Label the axes
-#     ax2.set_xlabel('y')
-#     ax2.set_ylabel('z')
-
-#     # Set the axis limits
-#     ax2.set_xlim(-radii_threshold, radii_threshold)
-#     ax2.set_ylim(-radii_threshold, radii_threshold)
-#     ax2.set_title('Side View')
-
-#     ax2.set_aspect('equal')
-
-#     # Add a legend
-#     ax2.grid(True)
-
-#     # Show the plot
-#     plt.tight_layout()
-#     plt.show()
 def plot_norm_apple_reachability(data_filenames, side_branch_idx=1, radii_threshold=0.3, figsize=(10, 6), branch_alpha=0.2, turtle_green=(150/255, 207/255, 103/255), light_purple=(150/255, 81/255, 206/255)):
     total_unreached_coords = []
     total_reached_coords = []
@@ -322,36 +185,38 @@ def plot_norm_apple_reachability(data_filenames, side_branch_idx=1, radii_thresh
     unreached_ur5_sizes = compute_sizes(total_unreached_via_ur5, y_min, y_max)
 
     ### FIRST FIGURE: FRONT VIEW ###
-    fig1, ax1 = plt.subplots(figsize=figsize)
+    # fig1, ax1 = plt.subplots(figsize=figsize)
+    fig1, ax1 = plt.subplots()
 
     x1, x2, y1_0, y2_0, y1_1, y2_1 = get_branch_position(0.04, 0, 2.0, span='x')
     ax1.plot([x1, x2], [y1_0, y2_0], linestyle='-', color='brown', alpha=branch_alpha-0.1)
     ax1.plot([x1, x2], [y1_1, y2_1], linestyle='-', color='brown', alpha=branch_alpha-0.1)
-    # ax1.fill_between([x1, x2], [y1_0, y2_0], [y1_1, y2_1], color='brown', alpha=branch_alpha)
+    ax1.fill_between([x1, x2], [y1_0, y2_0], [y1_1, y2_1], color='brown', alpha=branch_alpha)
 
     x1_0, x2_0, x1_1, x2_1, y1, y2 = get_branch_position(0.08, 90, 1.0, span='y')
     ax1.plot([x1_0, x2_0], [y1, y2], '-', color='brown', alpha=branch_alpha-0.1)
     ax1.plot([x1_1, x2_1], [y1, y2], '-', color='brown', alpha=branch_alpha-0.1)
-    # ax1.fill_between([x1_0, x1_1], 0.04, y2, color='brown', alpha=branch_alpha)
-    # ax1.fill_between([x1_0, x1_1], -0.04, y1, color='brown', alpha=branch_alpha, label=f'Branches')
+    ax1.fill_between([x1_0, x1_1], 0.04, y2, color='brown', alpha=branch_alpha)
+    ax1.fill_between([x1_0, x1_1], -0.04, y1, color='brown', alpha=branch_alpha, label=f'Branches')
 
     ax1.scatter(total_reached_coords[:, 0], total_reached_coords[:, 2], s=reached_sizes, color=turtle_green, label='Reachable Apples')
     ax1.scatter(total_unreached_coords[:, 0], total_unreached_coords[:, 2], s=unreached_sizes, color=light_purple, label='Unreachable Apples')
 
-    ax1.set_xlabel('x')
-    ax1.set_ylabel('z')
+    ax1.set_xlabel('x', fontsize=16)
+    ax1.set_ylabel('z', fontsize=16)
     ax1.set_xlim(-0.75, 0.75)
     ax1.set_ylim(-radii_threshold, radii_threshold)
     ax1.set_aspect('equal')
     ax1.grid(True)
-    ax1.legend(loc='upper left')
-    # ax1.set_title('Front View')
+    ax1.legend(loc='upper left', fontsize=14)
+    ax1.tick_params(axis='both', which='major', labelsize=14)
 
     plt.tight_layout()
     plt.show()
 
     ### SECOND FIGURE: SIDE VIEW ###
-    fig2, ax2 = plt.subplots(figsize=figsize)
+    # fig2, ax2 = plt.subplots(figsize=figsize)
+    fig2, ax2 = plt.subplots()
 
     angle_deg = 90 + 18.435
     x1_0, x2_0, x1_1, x2_1, y1, y2 = get_branch_position(0.08, angle_deg, 1.0, span='y')
@@ -366,14 +231,14 @@ def plot_norm_apple_reachability(data_filenames, side_branch_idx=1, radii_thresh
     ax2.scatter(total_reached_coords[:, 1], total_reached_coords[:, 2], color=turtle_green, label='Reachable Apples')
     ax2.scatter(total_unreached_coords[:, 1], total_unreached_coords[:, 2], color=light_purple, label='Unreachable Apples')
 
-    ax2.set_xlabel('y')
-    ax2.set_ylabel('z')
+    ax2.set_xlabel('y', fontsize=16)
+    ax2.set_ylabel('z', fontsize=16)
     ax2.set_xlim(-radii_threshold, radii_threshold)
     ax2.set_ylim(-radii_threshold, radii_threshold)
     ax2.set_aspect('equal')
     ax2.grid(True)
-    # ax2.legend(loc='upper left')
-    # ax2.set_title('Side View')
+    # ax2.legend(loc='upper left', fontsize=12)
+    ax2.tick_params(axis='both', which='major', labelsize=14)
 
     plt.tight_layout()
     plt.show()
@@ -428,11 +293,11 @@ def plot_reachability_histogram(data_filenames, turtle_green=(150/255, 207/255, 
     plt.bar(x_indices, apples_reached_template, width=bar_width, label="Apples Reached (Templating)", color=turtle_green)
     plt.bar(x_indices + bar_width, apples_reached_voxel, width=bar_width, label="Apples Reached (Voxelization)", color=light_blue)
 
-    plt.xlabel("Tree Index", fontsize=12)
-    plt.ylabel("Number of Apples", fontsize=12)
-    plt.title("Number of Apples Found: Total vs. Templating vs. Voxelization", fontsize=14)
-    plt.xticks(ticks=x_indices, labels=[f'Tree {i+1}' for i in x_indices])
-    plt.legend(fontsize=10)
+    plt.xlabel("Tree Index", fontsize=16)
+    plt.ylabel("Number of Apples", fontsize=16)
+    plt.title("Number of Apples Found: Total vs. Templating vs. Voxelization", fontsize=16)
+    plt.xticks(ticks=x_indices, labels=[f'{i+1}' for i in x_indices], fontsize=16)
+    plt.legend(fontsize=14)
     plt.grid(axis='y', linestyle='--', alpha=0.7)
     plt.tight_layout()
     plt.show()

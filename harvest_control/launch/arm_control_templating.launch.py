@@ -57,25 +57,25 @@ def generate_launch_description():
 
 
     return LaunchDescription(declared_arguments + [
-        # # Include UR driver launch
-        # IncludeLaunchDescription(
-        #     PythonLaunchDescriptionSource(ur_driver_launch_path),
-        #     launch_arguments={
-        #         'ur_type': LaunchConfiguration('ur_type'),
-        #         'robot_ip': LaunchConfiguration('robot_ip'),
-        #         'use_fake_hardware': LaunchConfiguration('use_fake_hardware'),
-        #         'launch_rviz': LaunchConfiguration('launch_rviz'),
-        #     }.items(),
-        # ),
+        # Include UR driver launch
+        IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(ur_driver_launch_path),
+            launch_arguments={
+                'ur_type': LaunchConfiguration('ur_type'),
+                'robot_ip': LaunchConfiguration('robot_ip'),
+                'use_fake_hardware': LaunchConfiguration('use_fake_hardware'),
+                'launch_rviz': LaunchConfiguration('launch_rviz'),
+            }.items(),
+        ),
 
-        # # Include UR MoveIt launch
-        # IncludeLaunchDescription(
-        #     PythonLaunchDescriptionSource(ur_moveit_launch_path),
-        #     launch_arguments={
-        #         'ur_type': LaunchConfiguration('ur_type'),
-        #         'launch_rviz': LaunchConfiguration('launch_rviz'),
-        #     }.items(),
-        # ),
+        # Include UR MoveIt launch
+        IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(ur_moveit_launch_path),
+            launch_arguments={
+                'ur_type': LaunchConfiguration('ur_type'),
+                'launch_rviz': LaunchConfiguration('launch_rviz'),
+            }.items(),
+        ),
 
         # Launch the generate_trellis_collision_obj_node
         Node(
