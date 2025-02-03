@@ -12,13 +12,11 @@ There are currently two main control schemes: apple harvesting (real or simulate
 *Currently only tested in simulation*
 
 1. In the first terminal:
-
 ```bash
 ros2 launch harvest_control arm_control_templating.launch.py ur_type:=ur5e robot_ip:=yyy.yyy.yyy.yyy use_fake_hardware:=true launch_rviz:=true
 ```
 
 2. In a second terminal run the vision:
-
 ```bash
 ros2 launch harvest launch_vision_templating.launch.py
 ```
@@ -28,24 +26,18 @@ ros2 launch harvest launch_vision_templating.launch.py
 ros2 run harvest orchard_templating.py
 ```
 
-
 #### Apple Harvesting:
-
-1. In the first terminal (sim vs. real):
-
+1. In the first terminal (real or sim):
 ```bash
 ros2 launch harvest_control arm_control.launch.py ur_type:=ur5e robot_ip:=yyy.yyy.yyy.yyy use_fake_hardware:=true launch_rviz:=true
 ```
-
 OR
-With UR5e plugged into computer, ensure the pendant is set to *remote* mode!
-
 ```bash
 ros2 launch harvest_control arm_control.launch.py ur_type:=ur5e robot_ip:=169.254.177.230 launch_rviz:=true headless_mode:=true
 ```
 
 2. In a second terminal run the vision:
-(need to ensure palm camera connects to proper idx if using real hardware):
+(need to ensure palm camera connects to proper idx):
 ```bash
 ros2 launch harvest launch_vision.launch.py
 ```
