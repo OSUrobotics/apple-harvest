@@ -28,6 +28,8 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/RecordTopics.srv"
   "srv/GetGripperPose.srv"
   "srv/UpdateTrellisPosition.srv"
+  "srv/VoxelGrid.srv"
+  "srv/FinalApproachLinear.srv"
   DEPENDENCIES 
   std_msgs
   geometry_msgs
