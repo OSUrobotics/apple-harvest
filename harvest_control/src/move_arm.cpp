@@ -224,7 +224,7 @@ void MoveArmNode::move_to_pose(const std::shared_ptr<harvest_interfaces::srv::Mo
     moveit::planning_interface::MoveGroupInterface::Plan goal;
     if (move_group_.plan(goal))
     {
-        // this->move_group_.execute(goal);
+        this->move_group_.execute(goal);
         response->result = true;
 
         // Save the reverse trajectory as Float32MultiArray
