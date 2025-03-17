@@ -26,7 +26,7 @@ class ManualAppleLocations(Node):
             self.get_logger().info('Get gripper pose service not available, waiting...')
 
         self.apple_locations = []
-        self.base_dir = '/media/imml/LaCie/prosser_data_prosser_2024/day_2/apple_locations/'
+        self.base_dir = '/home/imml/demoData/'
 
         self.get_logger().info('Manual apple locations node running')
 

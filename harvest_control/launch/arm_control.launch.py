@@ -85,6 +85,12 @@ def generate_launch_description():
             executable='pull_twist_controller.py',
             name='pull_twist_controller',
         ),
+
+        Node(
+            package='harvest_control',
+            executable='trellis_wire_scan.py',
+            name='trellis_wire_scans',
+        ),
         
         # Launch C++ node
         Node(

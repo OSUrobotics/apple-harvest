@@ -27,6 +27,7 @@ install(PROGRAMS
   scripts/launch_param_test.py
   scripts/start_harvest.py
   scripts/record.py
+  scripts/start_harvest_demo.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
