@@ -16,14 +16,11 @@ class PickController(Node):
     def __init__(self):
         
         super().__init__('pick_controller')
-
-        #set this manually
-        self.derivative_control = False
         
         self.goal= 0.0 #N
         self.max_velocity = 0.2 # * 0.6 m/s
         self.vel_cmd = Vector3() # * 0.6 m/s
-        self.min_tension = 5.0
+        self.min_tension = 10.0
 
         self.wrench_subscription = self.create_subscription(WrenchStamped, '/filtered_wrench', self.process_force_meas, 10)
         self.pose_subscription = self.create_subscription(TransformStamped,'/tool_pose', self.configure_self, 10)
@@ -38,7 +35,7 @@ class PickController(Node):
         # self.ee_weight = 2.09 # WUR to set (or can uncomment and use set_ee_weight)
         self.ee_weight = 0.0
         self.force_from_gravity = np.array([0.0, 0.0, 0.0])
-        self.preferred_pull = np.array([0.0, 0.0, -1.0])
+        self.preferred_pull = np.array([0.0, -0.7, -0.7])
         self.last_t = np.array([0.0,0.0,0.0])
 
         self.running = False
@@ -47,7 +44,7 @@ class PickController(Node):
         self.start_service = self.create_service(Empty, 'start_controller', self.start)
         self.stop_service = self.create_service(Empty, 'stop_controller', self.stop)
         
-        self.R = np.identity(4)
+        self.R = np.identity(3)
 
         self.cli = self.create_client(SetParameters, '/servo_node/set_parameters')
         while not self.cli.wait_for_service(timeout_sec=1.0):
@@ -82,7 +79,7 @@ class PickController(Node):
     def process_force_meas(self, msg):
         
         wrench = msg.wrench 
-
+        
         current_force = np.array([wrench.force.x, wrench.force.y,
                                   wrench.force.z]) - self.force_from_gravity
 
@@ -138,16 +135,11 @@ class PickController(Node):
         # self.get_logger().info("I think the force is {} N".format(f))
         
         if f >= self.min_tension:
-            if not self.derivative_control:
-                u = e_f
-                if (np.abs(e_f) <= 1): #np.abs(e_f) <= 0.02 * self.goal) or 
-                    u = 0.0
-            else:
-                u = e_f + 0.5* (e_f - self.e_f_prev)
+            u = e_f / self.goal
 
             # self.get_logger().info("I think the force error is {}".format(u))
-            new_dir = np.tanh(u) * n_hat + (1-np.tanh(np.abs(u))) * t_hat
-            new = self.max_velocity * new_dir / np.linalg.norm(new_dir)
+            new_dir = np.tanh(u)**3 * n_hat + (1-np.tanh(np.abs(u))**3) * t_hat
+            new = self.max_velocity*new_dir
         else:
             # self.get_logger().info("Trying to tension...")
             new = self.max_velocity*self.preferred_pull 
@@ -162,6 +154,7 @@ class PickController(Node):
 
         new_tangent = np.cross(force, np.cross(self.preferred_pull, force))
         self.last_t = new_tangent/np.linalg.norm(new_tangent)
+        
       
     def choose_tangent(self, force):
 
@@ -185,6 +178,7 @@ class PickController(Node):
         self.force_from_gravity = np.transpose(np.matmul(self.R, np.transpose([0,0,-1*self.ee_weight])))
 
         self.preferred_pull = -1 * np.array(position_vec) / np.linalg.norm(position_vec)
+        # self.get_logger().info("preferred direction: {}".format(self.preferred_pull))
         #option later to use unrotated lever arm and rotated force to get torque
         
 

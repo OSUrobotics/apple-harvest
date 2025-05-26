@@ -180,7 +180,7 @@ class LocalPlanner(Node):
         vel_vec.twist.linear.y = transformed_vector.pose.position.y
 
         # If we are within picking distance then stop, otherwise move forward 
-        if distance < .1:
+        if distance < .2:
             vel_vec.twist.linear.z = 0.0
             vel_vec.twist.linear.x = 0.0
             vel_vec.twist.linear.y = 0.0
@@ -200,7 +200,8 @@ class LocalPlanner(Node):
             height = rgb.height
 
             # Get apple bounding boxes from yolo model
-            results = self.model(image, conf=self.yolo_conf, device='cuda', verbose=False)[0]
+            # results = self.model(image, conf=self.yolo_conf, device='cuda', verbose=False)[0]
+            results = self.model(image, conf=self.yolo_conf, verbose=False)[0]
             apple_centers = []
             z_dist = []
             for i in results:

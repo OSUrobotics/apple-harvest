@@ -9,9 +9,9 @@ from launch.substitutions import TextSubstitution
 
 def generate_launch_description():
     declared_arguments = []
-    ### apple_prediction node parameters
-    # Segmentation model is trained on open source datasets and can give slightly more accurate 3D reconstruction results. 
-    # detection models are trained on Prosser data and may be more robust to field conditions.
+    # ### apple_prediction node parameters
+    # # Segmentation model is trained on open source datasets and can give slightly more accurate 3D reconstruction results. 
+    # # detection models are trained on Prosser data and may be more robust to field conditions.
     declared_arguments.append(DeclareLaunchArgument("prediction_model", default_value="best_segmentation.pt", 
                                   description="Yolo model used, can specify any model in the harvest_vision/yolo_models directory."))
     declared_arguments.append(DeclareLaunchArgument("prediction_yolo_conf", default_value="0.85", 
@@ -43,7 +43,7 @@ def generate_launch_description():
                                   description="Device number for palm RGB camer in gripper."))
 
     ### getting paths to yolo_networks
-    declared_arguments.append(DeclareLaunchArgument('prediction_model_path', default_value=[PathJoinSubstitution([FindPackageShare("harvest_vision"), "yolo_networks", LaunchConfiguration("prediction_model")])]))
+    # declared_arguments.append(DeclareLaunchArgument('prediction_model_path', default_value=[PathJoinSubstitution([FindPackageShare("harvest_vision"), "yolo_networks", LaunchConfiguration("prediction_model")])]))
     declared_arguments.append(DeclareLaunchArgument('vservo_model_path', default_value=[PathJoinSubstitution([FindPackageShare("harvest_vision"), "yolo_networks", LaunchConfiguration("vservo_model")])]))
     
     ### Nodes
@@ -84,7 +84,7 @@ def generate_launch_description():
                 ])
     
     return LaunchDescription(declared_arguments + [
-                             apple_prediction_node, 
+                            #  apple_prediction_node, 
                              vservo_node, 
                              palm_camera_node,
     ])
