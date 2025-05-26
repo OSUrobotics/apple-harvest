@@ -78,7 +78,6 @@ install(PROGRAMS
   scripts/pull_twist_controller.py
   scripts/trellis_wire_scan.py
   scripts/get_manual_apple_locations.py
-  scripts/generate_trellis_collision_obj.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

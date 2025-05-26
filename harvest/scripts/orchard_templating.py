@@ -17,7 +17,8 @@ from moveit_msgs.msg import PlanningSceneComponents
 from rcl_interfaces.srv import GetParameters
 
 # Interfaces
-from harvest_interfaces.srv import ApplePrediction, VoxelGrid, MoveToPose, UpdateTrellisPosition, SendTrajectory, FinalApproachLinear
+from harvest_interfaces.srv import ApplePrediction, VoxelGrid, MoveToPose, SendTrajectory
+from tree_template_interfaces.srv import UpdateTrellisPosition
 
 # Python 
 import numpy as np
@@ -75,10 +76,6 @@ class OrchardTemplating(Node):
         while not self.move_arm_to_pose_client.wait_for_service(timeout_sec=1.0):
             self.get_logger().info("Move arm to pose service not available, waiting...")
 
-        self.arm_final_approach_linear_client = self.create_client(FinalApproachLinear, "/final_approach_linear",callback_group=m_callback_group)
-        while not self.arm_final_approach_linear_client.wait_for_service(timeout_sec=1.0):
-            self.get_logger().info("Final linear approach service not available, waiting...")
-
         self.start_move_arm_to_home_client = self.create_client(Trigger, "/move_arm_to_home", callback_group=m_callback_group)
         while not self.start_move_arm_to_home_client.wait_for_service(timeout_sec=1.0):
             self.get_logger().info("Start move arm to home service not available, waiting...")
@@ -102,13 +99,6 @@ class OrchardTemplating(Node):
             self.get_logger().info(f"Retrieved parameter: {self.vision_experiment}")
 
             # Update trellis_base_position after retrieving vision_experiment
-            # trellis_tempate_params = {
-            #     'a': [-0.07, 1.105, -0.19], 'b': [-0.07, 1.05, -0.14],
-            #     'c': [-0.1, 1.0, -0.17], 'd': [-0.04, 1.21, -0.17],
-            #     'e': [-0.15, 1.02, -0.22], 'f': [-0.05, 1.05, -0.15],
-            #     'g': [-0.09, 1.16, -0.16], 'h': [-0.08, 1.11, -0.18],
-            #     'i': [-0.085, 1.03, -0.15], 'j': [-0.05, 1.12, -0.19]
-            # }
             offset = 0.1  # Example offset value
             trellis_tempate_params = {
                 'a': [-0.07, 1.105 - offset, -0.19], 'b': [-0.07, 1.05 - offset, -0.14],
@@ -348,15 +338,6 @@ class OrchardTemplating(Node):
             self.get_logger().warn(f'Failed to moved home')
 
         return self.future.result()
-    
-    def final_linear_approach(self, distance):
-        request = FinalApproachLinear.Request()
-        request.distance = distance
-
-        # Use async call
-        future = self.arm_final_approach_linear_client.call_async(request)
-        rclpy.spin_until_future_complete(self, future) 
-        return future.result()
 
     def save_metadata(self):
         # Combine the dictionaries into a list or another structure if necessary

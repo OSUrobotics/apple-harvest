@@ -37,7 +37,6 @@ private:
     rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr arm_to_home_service_;
     rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr arm_to_config_service_;
     rclcpp::Service<harvest_interfaces::srv::MoveToPose>::SharedPtr arm_to_pose_service_;
-    rclcpp::Service<harvest_interfaces::srv::FinalApproachLinear>::SharedPtr arm_approach_linear_service_;
 
     rclcpp::Subscription<geometry_msgs::msg::TransformStamped>::SharedPtr gripper_tip_subscription_;
     geometry_msgs::msg::TransformStamped current_gripper_pose_;
@@ -77,8 +76,6 @@ private:
                         std::shared_ptr<std_srvs::srv::Trigger::Response> response);
     void move_to_pose(const std::shared_ptr<harvest_interfaces::srv::MoveToPose::Request> request,
                       const std::shared_ptr<harvest_interfaces::srv::MoveToPose::Response> response);
-    void final_approach_linear(const std::shared_ptr<harvest_interfaces::srv::FinalApproachLinear::Request> request,
-                        const std::shared_ptr<harvest_interfaces::srv::FinalApproachLinear::Response> response);
     void gripper_tip_callback(const geometry_msgs::msg::TransformStamped::SharedPtr msg);
 };
 
@@ -104,9 +101,6 @@ MoveArmNode::MoveArmNode()
 
     arm_to_pose_service_ = this->create_service<harvest_interfaces::srv::MoveToPose>(
         "move_arm_to_pose", std::bind(&MoveArmNode::move_to_pose, this, _1, _2));
-
-    arm_approach_linear_service_ = this->create_service<harvest_interfaces::srv::FinalApproachLinear>(
-        "final_approach_linear", std::bind(&MoveArmNode::final_approach_linear, this, _1, _2));
 
     // Set up parameters
     double max_accel = this->get_parameter("max_accel").as_double();
@@ -252,83 +246,6 @@ void MoveArmNode::move_to_pose(const std::shared_ptr<harvest_interfaces::srv::Mo
     {
         RCLCPP_ERROR(this->get_logger(), "Planning failed!");
         response->result = false;
-    }
-}
-
-// void MoveArmNode::final_approach_linear(const std::shared_ptr<harvest_interfaces::srv::FinalApproachLinear::Request> request,
-//                                         const std::shared_ptr<harvest_interfaces::srv::FinalApproachLinear::Response> response)
-// {
-//     // Convert the stored TransformStamped to PoseStamped
-//     geometry_msgs::msg::PoseStamped current_pose;
-//     current_pose.header = current_gripper_pose_.header;  // Preserve the frame and timestamp
-//     current_pose.pose.position.x = current_gripper_pose_.transform.translation.x;
-//     current_pose.pose.position.y = current_gripper_pose_.transform.translation.y;
-//     current_pose.pose.position.z = current_gripper_pose_.transform.translation.z;
-//     current_pose.pose.orientation = current_gripper_pose_.transform.rotation;
-
-//     // Create a new pose for the final approach
-//     geometry_msgs::msg::PoseStamped target_pose = current_pose;
-//     target_pose.pose.position.z += request->distance;  // Move along the z-axis
-
-//     // Set the target pose for the MoveGroup
-//     this->move_group_.setPoseTarget(target_pose, "gripper_link");
-
-//     moveit::planning_interface::MoveGroupInterface::Plan plan;
-//     if (move_group_.plan(plan) && move_group_.execute(plan))
-//     {
-//         RCLCPP_INFO(this->get_logger(), "Final approach executed.");
-//         response->success = true;
-//         // response->message = "Final approach completed.";
-//     }
-//     else
-//     {
-//         RCLCPP_ERROR(this->get_logger(), "Failed to execute final approach.");
-//         response->success = false;
-//         // response->message = "Final approach failed.";
-//     }
-// }
-void MoveArmNode::final_approach_linear(const std::shared_ptr<harvest_interfaces::srv::FinalApproachLinear::Request> request,
-                                        const std::shared_ptr<harvest_interfaces::srv::FinalApproachLinear::Response> response)
-{
-    // Convert the current gripper pose to PoseStamped
-    geometry_msgs::msg::PoseStamped current_pose;
-    current_pose.header.frame_id = "base_link";  // Ensure the frame is correct
-    current_pose.pose.position.x = current_gripper_pose_.transform.translation.x;
-    current_pose.pose.position.y = current_gripper_pose_.transform.translation.y;
-    current_pose.pose.position.z = current_gripper_pose_.transform.translation.z;
-    current_pose.pose.orientation = current_gripper_pose_.transform.rotation;
-
-    // Define waypoints for Cartesian path
-    std::vector<geometry_msgs::msg::Pose> waypoints;
-    waypoints.push_back(current_pose.pose);  // Start from the current pose
-
-    // Define the target pose by moving along the Z-axis
-    geometry_msgs::msg::Pose target_pose = current_pose.pose;
-    target_pose.position.y += request->distance;  // Move linearly along Z-axis
-
-    waypoints.push_back(target_pose);
-
-    // Plan the Cartesian path
-    moveit_msgs::msg::RobotTrajectory trajectory;
-    const double jump_threshold = 0.0;   // Disable jump threshold
-    const double eef_step = 0.002;        // Small step size for smoothness
-
-    double fraction = move_group_.computeCartesianPath(waypoints, eef_step, jump_threshold, trajectory);
-
-    if (fraction > 0.95)  // Check if most of the path was planned successfully
-    {
-        // Execute the Cartesian path
-        moveit::planning_interface::MoveGroupInterface::Plan plan;
-        plan.trajectory_ = trajectory;
-
-        move_group_.execute(plan);
-        RCLCPP_INFO(this->get_logger(), "Successfully executed linear Cartesian approach.");
-        response->success = true;
-    }
-    else
-    {
-        RCLCPP_ERROR(this->get_logger(), "Failed to compute Cartesian path. Only %f%% was planned.", fraction * 100);
-        response->success = false;
     }
 }
 
