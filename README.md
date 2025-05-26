@@ -1,50 +1,59 @@
-To run apple locatization and path query
+# Robotic Apple Harvesting Control
 
-With UR5e plugged into computer, ensure the pendant is set to *remote* mode!
+This repository contains code to detect and localize apples from RGB-D data and operate a UR5e manipulator. This can be done with both real hardware or simulated data.
 
-1. In the first terminal: (sim vs. real):
+The vision code has only been setup for running a Realsense d435i (real hardware) or a Microsoft Azure Kinect (simulated data).
 
+There are currently two main control schemes: apple harvesting (real or simulated) and tree templating (tested only in simulation). The apple harvesting pipeline includes nodes for additional UR controllers and data recording, while the tree templating method runs a minimal set of nodes for control in simulation.
+
+### To run apple locatization and path planning
+
+#### Tree Templating:
+*Currently only tested in simulation*
+
+1. In the first terminal:
 ```bash
-ros2 launch ur_robot_driver ur_control_custom_hw.launch.py ur_type:=ur5e robot_ip:=yyy.yyy.yyy.yyy use_fake_hardware:=true launch_rviz:=true
+ros2 launch harvest_control arm_control_templating.launch.py ur_type:=ur5e robot_ip:=yyy.yyy.yyy.yyy use_fake_hardware:=true launch_rviz:=true
 ```
 
+2. In a second terminal run the vision:
+```bash
+ros2 launch harvest launch_vision_templating.launch.py
+```
+
+3. In a third terminal run the control script to execute actions from the running nodes:
+```bash
+ros2 run harvest orchard_templating.py
+```
+
+#### Apple Harvesting:
+1. In the first terminal (real or sim):
+```bash
+ros2 launch harvest_control arm_control.launch.py ur_type:=ur5e robot_ip:=yyy.yyy.yyy.yyy use_fake_hardware:=true launch_rviz:=true
+```
 OR
-
 ```bash
-ros2 launch ur_robot_driver ur_control_custom_hw.launch.py ur_type:=ur5e robot_ip:=169.254.177.230 launch_rviz:=true headless_mode:=true
+ros2 launch harvest_control arm_control.launch.py ur_type:=ur5e robot_ip:=169.254.177.230 launch_rviz:=true headless_mode:=true
 ```
 
-2. In the second terminal:
+2. In a second terminal run the vision:
+(need to ensure palm camera connects to proper idx):
 ```bash
-ros2 launch ur_moveit_config ur_moveit_custom_hw.launch.py ur_type:=ur5e launch_rviz:=true
+ros2 launch harvest launch_vision.launch.py
 ```
 
-3. In a third terminal:
+3. In a third terminal run the control script to execute actions from the running nodes:
 ```bash
-ros2 launch harvest_control arm_control.launch.py
+ros2 run harvest start_harvest.py
 ```
 
-4. In fourth terminal run the vision (need to ensure palm camera connects to proper idx):
-```bash
-ros2 launch harvest launch_vision.launch.py prediction_distance_max:=1.5 vservo_yolo_conf:=0.5 vservo_max_vel:=0.4 palm_camera_device_num:=8
-```
 
-5. To send the robot to home configuration:
-```bash
-ros2 service call /move_arm_to_home std_srvs/srv/Trigger
-```
-
-6. To set desired a desired end-effector x,y,z coorinate:
-```bash
-ros2 service call /coordinate_to_trajectory harvest_interfaces/srv/CoordinateToTrajectory "{coordinate: {x: 0.2, y: 0.5, z: 0.8}}"
-```
-
-7. To send the robot to home configuration by reversing the approach trajectory:
-```bash
-ros2 service call /return_home_trajectory std_srvs/srv/Trigger 
-```
-
-8. To set a voxel mask for tree and wire locations: Valid inputs are tree_pos 1-5, each shifting the tree location from left to right. If 0 is entered, it will remove the tree mask and maintain the wire mask. Any values outside of this range, it will default to no voxel mask.
-```bash
-ros2 service call /voxel_mask harvest_interfaces/srv/VoxelMask "{tree_pos: 1}"
-```
+### Details
+- The default kinematics plug-in is `KDLKinematicsPlugin`
+- Each of the three launch files have specific parameters that can be updated for the desired usecase. Each parameter having documentation within the associcated launch file.
+- `start_harvest.py` is a client that was used for physical hardware trials. If different functionality is desired, a new client control script will need to be written.
+- If running in simulation with presaved vision data:
+    - Saved vision data files are stored in `harvest_vision/data/`, under the directory `prosser_a/`
+    - Where the letter after prosser_ is considered the **vision_experiment** parameter when launching the vision package
+    - If adding a new data directory, the `setup.py` file will need to be updated
+    - Within this directory are three files needed for experiments: `color_raw.png`, `depth_to_color.png`, and `pointcloud.ply`

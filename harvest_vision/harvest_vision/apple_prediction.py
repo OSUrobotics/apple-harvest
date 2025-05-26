@@ -48,6 +48,8 @@ class ApplePredictionRS(Node):
         self.model_path = self.get_parameter("prediction_model_path").get_parameter_value().string_value
         self.scan_data_path = self.get_parameter("scan_data_path").get_parameter_value().string_value
 
+        self.get_logger().info(self.scan_data_path)
+
         ### YOLO SETUP
         self.model = YOLO(self.model_path)  # pretrained YOLOv8n model
         if self.model: 

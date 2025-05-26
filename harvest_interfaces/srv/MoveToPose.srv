@@ -2,3 +2,4 @@ geometry_msgs/Point position
 geometry_msgs/Quaternion orientation
 ---
 bool result
+std_msgs/Float32MultiArray reverse_traj

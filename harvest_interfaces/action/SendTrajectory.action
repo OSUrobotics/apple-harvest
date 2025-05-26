@@ -1,0 +1,14 @@
+# SendTrajectory.action
+
+# Goal
+std_msgs/Float32MultiArray waypoints
+
+---
+
+# Result
+bool success
+
+---
+
+# Feedback
+float32 progress

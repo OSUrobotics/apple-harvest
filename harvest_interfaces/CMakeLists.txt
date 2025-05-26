@@ -16,6 +16,8 @@ find_package(geometry_msgs REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
   "action/EventDetection.action"
+  "action/SendTrajectory.action"
+
   "srv/ApplePrediction.srv"
   "srv/SendTrajectory.srv"
   "srv/CoordinateToTrajectory.srv"
@@ -25,6 +27,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/SetValue.srv"
   "srv/RecordTopics.srv"
   "srv/GetGripperPose.srv"
+  "srv/VoxelGrid.srv"
   DEPENDENCIES 
   std_msgs
   geometry_msgs

@@ -4,47 +4,34 @@ import numpy as np
 import os
 import json
 
-# from pyb_scripts.pyb_utils import PybUtils
-# from pyb_scripts.load_objects import LoadObjects
-# from pyb_scripts.load_robot import LoadRobot
-
 import rclpy
 import rclpy.logging
 from rclpy.node import Node
 from rclpy.executors import SingleThreadedExecutor
 from ament_index_python.packages import get_package_share_directory
+from rclpy.action import ActionClient
 
 from geometry_msgs.msg import Point
 from visualization_msgs.msg import Marker, MarkerArray
 from std_msgs.msg import Float32MultiArray, MultiArrayDimension
 from std_srvs.srv import Empty, Trigger
-from harvest_interfaces.srv import CoordinateToTrajectory, SendTrajectory, VoxelMask, ApplePrediction, TrajectoryBetweenPoints
+from harvest_interfaces.srv import CoordinateToTrajectory, VoxelMask, ApplePrediction
+from harvest_interfaces.action import SendTrajectory
 
 
 class CoordinateToTrajectoryService(Node):
     def __init__(self):
         super().__init__('trajectory_query_node')
-
-        # # Start pybullet env
-        # self.pyb = PybUtils(self, renders=False)
-        # self.object_loader = LoadObjects(self.pyb.con)
-
-        # self.robot_home_pos = [np.pi/2, -3*np.pi/4, np.pi/2, -3*np.pi/4, -np.pi/2, 0]
-        # self.robot = LoadRobot(self.pyb.con, 
-        #                        '/home/marcus/IMML/manipulator_codesign/urdf/ur5e/ur5e.urdf', 
-        #                        [0, 0, 0], 
-        #                        self.pyb.con.getQuaternionFromEuler([0, 0, 0]), 
-        #                        self.robot_home_pos, 
-        #                        collision_objects=self.object_loader.collision_objects)
         
         # Create the service
         self.coord_to_traj_srv = self.create_service(CoordinateToTrajectory, 'coordinate_to_trajectory', self.coord_to_traj_callback)
-        self.traj_between_points_srv = self.create_service(TrajectoryBetweenPoints, 'trajectory_between_points', self.traj_between_points_callback)
         self.return_home_traj_srv = self.create_service(Trigger, 'return_home_trajectory', self.return_home_traj_callback)
         self.voxel_mask = self.create_service(VoxelMask, 'voxel_mask', self.voxel_mask_callback)
 
+        # Create the action client
+        self.send_traj_client = ActionClient(self, SendTrajectory, 'send_arm_trajectory')
+
         # Create the service client
-        self.client = self.create_client(SendTrajectory, 'execute_arm_trajectory')
         self.apple_pred_client = self.create_client(ApplePrediction, 'sort_apple_predictions')
 
         # Create a publisher for MarkerArray
@@ -202,59 +189,6 @@ class CoordinateToTrajectoryService(Node):
 
         return response
     
-    def traj_between_points_callback(self, request, response):
-        # Extract the requested coordinates
-        start_point_msg = request.start_coordinate
-        x_start = start_point_msg.x
-        y_start = start_point_msg.y
-        z_start = start_point_msg.z
-        start_point = np.array([x_start, y_start, z_start])
-
-        end_point_msg = request.end_coordinate
-        x_end = end_point_msg.x
-        y_end = end_point_msg.y
-        z_end = end_point_msg.z
-        end_point = np.array([x_end, y_end, z_end])
-
-        # Extract presaved joint config to closest voxel to target start and end points
-        _, _, voxel_idx_start = self.trajectory_to_closest_voxel(start_point)
-        traj_for_return_home, _, voxel_idx_end = self.trajectory_to_closest_voxel(end_point)
-
-        start_joint_config = self.target_configurations[voxel_idx_start, :]
-        end_joint_config = self.target_configurations[voxel_idx_end, :]
-
-        self.robot.reset_joint_positions(start_joint_config)
-        ee_start_point, ee_start_ori = self.robot.get_link_state(self.robot.end_effector_index)
-
-        self.robot.reset_joint_positions(end_joint_config)
-        ee_end_point, ee_end_ori = self.robot.get_link_state(self.robot.end_effector_index)
-
-        ee_start_pose = np.concatenate((ee_start_point, ee_start_ori))
-        ee_end_pose = np.concatenate((ee_end_point, ee_end_ori))
-
-        # traj = self.robot.peck_traj_gen(start_joint_config, ee_start_pose, end_joint_config, ee_end_pose, self.y_peck_distance, self.num_configs_in_traj)
-        traj = self.robot.peck_traj_gen(self.current_joint_config, ee_start_pose, end_joint_config, ee_end_pose, self.y_peck_distance, self.num_configs_in_traj)
-
-        # Package the trajectory as a message
-        self.package_traj_msg(traj)
-
-        # Assign the response
-        response.success = True
-
-        if response.success:
-            # Send trajectory message to MoveIt
-            # self.trigger_arm_mover(self.traj_msg)
-
-            self.current_joint_config = traj[-1]
-
-            # Stage the reverse the traj
-            self.package_traj_msg(traj_for_return_home, reverse_traj=True)
-        
-        else:
-            self.get_logger().warn('Failed to trigger arm mover. Not moving the arm...')
-
-        return response
-    
     def return_home_traj_callback(self, request, response):
         if self.traj_msg == None:
             self.get_logger().warn('No current return trajectory. Not moving the arm')
@@ -295,18 +229,40 @@ class CoordinateToTrajectoryService(Node):
         self.traj_msg = float32_array
 
     def trigger_arm_mover(self, trajectory):
-        if not self.client.service_is_ready():
-            self.get_logger().info('Waiting for execute_arm_trajectory service to be available...')
-            self.client.wait_for_service()
+        # Wait for the action server to be available
+        self.send_traj_client.wait_for_server()
 
-        request = SendTrajectory.Request()
-        request.waypoints = trajectory  # Pass the entire Float32MultiArray message
+        goal_msg = SendTrajectory.Goal()
+        goal_msg.waypoints = trajectory  # Pass the entire Float32MultiArray message
 
-        # Use async call
-        future = self.client.call_async(request)
-        # rclpy.spin_until_future_complete(self, future) 
-        future.add_done_callback(self.handle_trajectory_response)
-        # return future.result()
+         # Send the goal to the action server
+        self._send_goal_future = self.send_traj_client.send_goal_async(
+            goal_msg,
+            feedback_callback=self.feedback_callback  # Define feedback handling
+        )
+        
+        self._send_goal_future.add_done_callback(self.goal_response_callback)
+    
+    def goal_response_callback(self, future):
+        goal_handle = future.result()
+        if not goal_handle.accepted:
+            self.get_logger().info('Goal rejected')
+            return
+
+        self.get_logger().info('Goal accepted, waiting for result...')
+        self._result_future = goal_handle.get_result_async()
+        self._result_future.add_done_callback(self.result_callback)
+
+    def result_callback(self, future):
+        result = future.result().result
+        if result.success:
+            self.get_logger().info('Trajectory execution succeeded')
+        else:
+            self.get_logger().info('Trajectory execution failed')
+
+    def feedback_callback(self, feedback):
+        # Handle the feedback (e.g., print the progress)
+        self.get_logger().info(f"Progress: {feedback.feedback.progress}")
 
     def handle_trajectory_response(self, future):
         try:

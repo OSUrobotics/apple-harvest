@@ -1,0 +1,15 @@
+# === requirements.txt for apple-harvest ===
+
+# Core packages (from harvest, harvest_control, and harvest_vision)
+numpy
+pyyaml
+matplotlib
+scipy
+opencv-python
+cv-bridge
+filterpy
+ultralytics
+torch
+pyrealsense2
+open3d
+setuptools
