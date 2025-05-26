@@ -7,7 +7,7 @@ from rclpy.executors import MultiThreadedExecutor
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 # Interfaces
 from rcl_interfaces.msg import Parameter, ParameterValue, ParameterType
-from rcl_interfaces.srv import SetParameters, GetParameters, ListParameters
+from rcl_interfaces.srv import SetParameters
 from std_srvs.srv import Trigger, Empty
 from geometry_msgs.msg import Point
 from harvest_interfaces.srv import ApplePrediction, CoordinateToTrajectory, SendTrajectory, RecordTopics, GetGripperPose, SetValue
@@ -28,159 +28,104 @@ class StartHarvest(Node):
 
     def __init__(self):
         super().__init__("start_harvest_node")
-        m_callback_group = MutuallyExclusiveCallbackGroup()
+        self.cb_group = MutuallyExclusiveCallbackGroup()
 
-        # Parameters
-        self.PICK_PATTERN = 'force-heuristic' 
-        self.EVENT_SENSITIVITY = 0.43 # a sensitivity of 1.0 will detect any deviation from perfection as failure
-        
-        self.recording_startup_delay = 0.5 # Seconds
+        # Declare parameters with defaults
+        self.declare_parameter('pick_pattern', 'force-heuristic')
+        self.declare_parameter('event_sensitivity', 0.43)
+        self.declare_parameter('recording_startup_delay', 0.5)
+        self.declare_parameter('base_data_dir', '/media/imml/LaCie/prosser_data_prosser_2024/day_2/')
+        self.declare_parameter('enable_recording', True)
+        self.declare_parameter('enable_visual_servo', True)
+        self.declare_parameter('enable_apple_prediction', True)
 
+        # Retrieve parameter values
+        self.PICK_PATTERN = self.get_parameter('pick_pattern').get_parameter_value().string_value
+        self.EVENT_SENSITIVITY = self.get_parameter('event_sensitivity').get_parameter_value().double_value
+        self.recording_startup_delay = self.get_parameter('recording_startup_delay').get_parameter_value().double_value
+        self.base_data_dir = self.get_parameter('base_data_dir').get_parameter_value().string_value
+        self.enable_recording = self.get_parameter('enable_recording').get_parameter_value().bool_value
+        self.enable_visual_servo = self.get_parameter('enable_visual_servo').get_parameter_value().bool_value
+        self.enable_apple_prediction = self.get_parameter('enable_apple_prediction').get_parameter_value().bool_value
+
+        # Helper clients
+        self.start_record_client = self.make_client(RecordTopics, 'record_topics')
+        self.stop_record_client = self.make_client(Trigger, 'stop_recording')
+        self.get_gripper_pose_client = self.make_client(GetGripperPose, 'get_gripper_pose')
+        self.switch_controller_client = self.make_client(SwitchController, '/controller_manager/switch_controller')
+        self.start_servo_client = self.make_client(Trigger, '/servo_node/start_servo')
+        self.configure_servo_cli = self.make_client(SetParameters, '/servo_node/set_parameters')
+        self.start_vservo_client = self.make_client(Trigger, '/start_visual_servo')
+        self.start_apple_prediction_client = self.make_client(ApplePrediction, '/apple_prediction')
+        self.start_move_arm_to_home_client = self.make_client(Trigger, '/move_arm_to_home')
+        self.coord_to_traj_client = self.make_client(CoordinateToTrajectory, 'coordinate_to_trajectory')
+        self.trigger_arm_mover_client = self.make_client(SendTrajectory, 'execute_arm_trajectory')
+        self.grasp_controller_client = self.make_client(Trigger, 'grasp_apple')
+        self.release_controller_client = self.make_client(Trigger, 'release_apple')
+        self.start_controller_cli = self.make_client(Empty, 'start_controller')
+        self.stop_controller_cli = self.make_client(Empty, 'stop_controller')
+        self.pull_twist_start_cli = self.make_client(Empty, 'pull_twist/start_controller')
+        self.pull_twist_stop_cli = self.make_client(Empty, 'pull_twist/stop_controller')
+        self.linear_pull_start_cli = self.make_client(Empty, 'linear/start_controller')
+        self.linear_pull_stop_cli = self.make_client(Empty, 'linear/stop_controller')
+        self.set_goal_cli = self.make_client(SetValue, 'set_goal')
+        self._event_client = ActionClient(self, EventDetection, 'event_detection')
+
+        self.status = GoalStatus.STATUS_EXECUTING
+
+        # Initialize metadata and topics
+        self.init_metadata_and_topics()
+
+    def make_client(self, srv_type, name):
+        client = self.create_client(srv_type, name, callback_group=self.cb_group)
+        while not client.wait_for_service(timeout_sec=1.0):
+            self.get_logger().info(f"Waiting for service '{name}', retrying...")
+        return client
+
+    def init_metadata_and_topics(self):
         # METADATA
-        # TODO: What sort of metadata do we want??? ##################################################
-        self.trellis_wire_positions = {
-            "bottom_left_coord": None,
-            "bottom_right_coord": None,
-            "top_right_coord": None,
-            "top_left_coord": None
-        }
-
-        self.apple_coorindates = {}
+        self.trellis_wire_positions = {k: None for k in [
+            'bottom_left_coord','bottom_right_coord','top_right_coord','top_left_coord'
+        ]}
+        self.apple_coordinates = {}
         self.pick_pattern = {'pick controller': self.PICK_PATTERN}
-        
-        # TODO: Add in realsense recording capabilities
-        self.prediction_topics = ['/apple_markers',]
-        self.approach_trajectory_topics = ['/apple_markers',]
-        self.visual_servo_topics = ['/gripper/rgb_palm_camera/image_raw',
-                                    '/joint_states',
-                                    '/servo_node/delta_twist_cmds']
-        self.pressure_servo_topics = ['/gripper/pressure',
-                                    '/gripper/distance',
-                                    '/gripper/motor/current',
-                                    '/gripper/motor/position',
-                                    '/gripper/motor/velocity',
-                                    '/joint_states',
-                                    '/force_torque_sensor_broadcaster/wrench',
-                                    '/servo_node/delta_twist_cmds']
-        self.pick_controller_topics = ['/gripper/pressure',
-                                    '/gripper/distance',
-                                    '/joint_states',
-                                    '/tool_pose',
-                                    '/force_torque_sensor_broadcaster/wrench',
-                                    '/servo_node/delta_twist_cmds']
-        
-        # Base data save directory
-        self.base_data_dir = '/media/imml/LaCie/prosser_data_prosser_2024/day_2/'
+
+        # Recording topics
+        self.prediction_topics = ['/apple_markers']
+        self.approach_trajectory_topics = ['/apple_markers']
+        self.visual_servo_topics = ['/gripper/rgb_palm_camera/image_raw','/joint_states','/servo_node/delta_twist_cmds']
+        self.pressure_servo_topics = [
+            '/gripper/pressure','/gripper/distance','/gripper/motor/current',
+            '/gripper/motor/position','/gripper/motor/velocity','/joint_states',
+            '/force_torque_sensor_broadcaster/wrench','/servo_node/delta_twist_cmds'
+        ]
+        self.pick_controller_topics = [
+            '/gripper/pressure','/gripper/distance','/joint_states',
+            '/tool_pose','/force_torque_sensor_broadcaster/wrench','/servo_node/delta_twist_cmds'
+        ]
+
+        # Batch directories
         self.batch_dir, self.batch_number = self.create_new_batch_directory(self.base_data_dir)
 
-        # Individual stage directories
+        # File prefixes
         self.prediction_file_name_prefix = 'prediction'
         self.approach_trajectory_file_name_prefix = 'approach_trajectory'
         self.visual_servo_file_name_prefix = 'visual_servo'
         self.pressure_servo_file_name_prefix = 'pressure_servo'
         self.pick_controller_file_name_prefix = 'pick_controller'
 
-        # Get presaved apple locations
-        path_to_search = self.base_data_dir + 'apple_locations/'
-        latest_dir = self.get_latest_directory(search_path=path_to_search)
+        # Load pre-saved apple locations
+        apple_loc_path = os.path.join(self.base_data_dir, 'apple_locations/')
+        latest_dir = self.get_latest_directory(search_path=apple_loc_path)
         if latest_dir:
             self.get_logger().info(f"Reading apple locations from: {latest_dir}/apple_locations.csv")
             self.pre_saved_apple_locations = self.read_apple_locations(latest_dir)
-            
             if self.pre_saved_apple_locations is not None:
                 self.get_logger().info('Found presaved apple location data')
             else:
                 self.get_logger().info("No data found.")
         else:
             self.get_logger().info("No directories found matching the pattern.")
-
-        # Client for recorded listed ros topics
-        self.start_record_client = self.create_client(RecordTopics, "record_topics", callback_group=m_callback_group)
-        while not self.start_record_client.wait_for_service(timeout_sec=1.0):
-            self.get_logger().info("Start recorder service not available, waiting...")
-
-        self.stop_record_client = self.create_client(Trigger, 'stop_recording', callback_group=m_callback_group)
-        while not self.stop_record_client.wait_for_service(timeout_sec=1.0):
-            self.get_logger().info("Stop recorder service not available, waiting...")
-
-        self.get_gripper_pose_client = self.create_client(GetGripperPose, 'get_gripper_pose', callback_group=m_callback_group)
-        while not self.get_gripper_pose_client.wait_for_service(timeout_sec=1.0):
-            self.get_logger().info('Get gripper pose service not available, waiting...')
-
-        # Client for switching controller to joint_trajcectory_controller
-        self.switch_controller_client = self.create_client(SwitchController, "/controller_manager/switch_controller", callback_group=m_callback_group)
-        while not self.switch_controller_client.wait_for_service(timeout_sec=1.0):
-            self.get_logger().info("Switch controller service not available, waiting...")
-
-        # Service to activate servo mode on arm
-        self.start_servo_client = self.create_client(Trigger, "/servo_node/start_servo", callback_group=m_callback_group)
-        while not self.start_servo_client.wait_for_service(timeout_sec=1.0):
-            self.get_logger().info("Start moveit servo service not available, waiting...")
-
-        # Service to change planning frame of servo mode
-        self.configure_servo_cli = self.create_client(SetParameters, '/servo_node/set_parameters')
-        while not self.configure_servo_cli.wait_for_service(timeout_sec=1.0):
-            self.get_logger().info('service not available, waiting again...')
-
-        # Service to start visual servo
-        self.start_vservo_client = self.create_client(Trigger, "/start_visual_servo", callback_group=m_callback_group)
-        while not self.start_vservo_client.wait_for_service(timeout_sec=1.0):
-            self.get_logger().info("Start visual servo service not available, waiting...")
-
-        # Service to start visual servo
-        self.start_apple_prediction_client = self.create_client(ApplePrediction, "/apple_prediction", callback_group=m_callback_group)
-        while not self.start_apple_prediction_client.wait_for_service(timeout_sec=1.0):
-            self.get_logger().info("Start visual servo service not available, waiting...")        
-
-        # Service to move arm to home
-        self.start_move_arm_to_home_client = self.create_client(Trigger, "/move_arm_to_home", callback_group=m_callback_group)
-        while not self.start_move_arm_to_home_client.wait_for_service(timeout_sec=1.0):
-            self.get_logger().info("Start move arm to home service not available, waiting...")
-
-        self.coord_to_traj_client = self.create_client(CoordinateToTrajectory, 'coordinate_to_trajectory', callback_group=m_callback_group)
-        while not self.coord_to_traj_client.wait_for_service(timeout_sec=1.0):
-            self.get_logger().info('Waiting for coordinate_to_trajectory to be available...')
-
-        self.trigger_arm_mover_client = self.create_client(SendTrajectory, 'execute_arm_trajectory', callback_group=m_callback_group)
-        while not self.trigger_arm_mover_client.wait_for_service(timeout_sec=1.0):
-            self.get_logger().info('Waiting for execute_arm_trajectory to be available...')
-
-        # Services provided by "grasp_controller.py"
-        self.grasp_controller_client = self.create_client(Trigger, 'grasp_apple', callback_group=m_callback_group)
-        while not self.grasp_controller_client.wait_for_service(timeout_sec=1.0):
-            self.get_logger().info('Waiting for grasp_apple service to be available...')
-        
-        self.release_controller_client = self.create_client(Trigger, 'release_apple', callback_group=m_callback_group)
-        while not self.release_controller_client.wait_for_service(timeout_sec=1.0):
-            self.get_logger().info('Waiting for release_apple service to be available...')
-
-        
-        # Interfaces for Miranda's pick controllers 
-        self.start_controller_cli = self.create_client(Empty, 'start_controller')
-        self.wait_for_srv(self.start_controller_cli)
-
-        self.stop_controller_cli = self.create_client(Empty, 'stop_controller')
-        self.wait_for_srv(self.stop_controller_cli)
-
-        self.pull_twist_start_cli = self.create_client(Empty, 'pull_twist/start_controller')
-        self.wait_for_srv(self.pull_twist_start_cli)
-
-        self.pull_twist_stop_cli = self.create_client(Empty, 'pull_twist/stop_controller')
-        self.wait_for_srv(self.pull_twist_stop_cli)
-
-        self.linear_pull_start_cli = self.create_client(Empty, 'linear/start_controller')
-        self.wait_for_srv(self.linear_pull_start_cli)
-
-        self.linear_pull_stop_cli = self.create_client(Empty, 'linear/stop_controller')
-        self.wait_for_srv(self.linear_pull_stop_cli)
-
-        self.set_goal_cli = self.create_client(SetValue, 'set_goal')
-        self.wait_for_srv(self.set_goal_cli)
-
-        self._event_client = ActionClient(self, EventDetection, 'event_detection')
-
-
-        self.status = GoalStatus.STATUS_EXECUTING
 
     def create_new_batch_directory(self, base_directory):
         # Ensure the base directory exists
@@ -415,41 +360,44 @@ class StartHarvest(Node):
     
     def configure_controller(self):
         
-        pick_force = 10.0
+        pick_force = 15.0
         
         set_goal_req = SetValue.Request()
         set_goal_req.val = pick_force
         self.future = self.set_goal_cli.call_async(set_goal_req)
         rclpy.spin_until_future_complete(self, self.future)
 
-    
     def pick_controller(self):
         req = Empty.Request()
-        stop_time = 15
+        stop_time = 10
         if self.PICK_PATTERN == 'force-heuristic':
             self.configure_controller()
             self.future = self.start_controller_cli.call_async(req)
             rclpy.spin_until_future_complete(self, self.future)
-            while self.status != GoalStatus.STATUS_SUCCEEDED: #full disclosure, no idea if this works or if it gums up ROS
-               pass
+            #while self.status != GoalStatus.STATUS_SUCCEEDED: #full disclosure, no idea if this works or if it gums up ROS
+            #   pass
+            time.sleep(stop_time)
+            
             self.future = self.stop_controller_cli.call_async(req)
             rclpy.spin_until_future_complete(self, self.future)
             
         elif self.PICK_PATTERN == 'pull-twist':
             self.future = self.pull_twist_start_cli.call_async(req)
             rclpy.spin_until_future_complete(self, self.future)
-            while self.status != GoalStatus.STATUS_SUCCEEDED:
-               pass
-            #self.future = self.pull_twist_stop_cli.call_async(req)
-            #rclpy.spin_until_future_complete(self, self.future)
+            # while self.status != GoalStatus.STATUS_SUCCEEDED:
+            #    pass
+            time.sleep(stop_time)
+            self.future = self.pull_twist_stop_cli.call_async(req)
+            rclpy.spin_until_future_complete(self, self.future)
             
         elif self.PICK_PATTERN == 'linear-pull':
             self.future = self.linear_pull_start_cli.call_async(req)
             rclpy.spin_until_future_complete(self, self.future)
-            while self.status != GoalStatus.STATUS_SUCCEEDED:
-               pass
-            #self.future = self.linear_pull_stop_cli.call_async(req)
-            #rclpy.spin_until_future_complete(self, self.future)
+            # while self.status != GoalStatus.STATUS_SUCCEEDED:
+            #    pass
+            time.sleep(stop_time)
+            self.future = self.linear_pull_stop_cli.call_async(req)
+            rclpy.spin_until_future_complete(self, self.future)
             
         else:
             self.get_logger().info(f'No valid control scheme set')
@@ -472,7 +420,7 @@ class StartHarvest(Node):
         # Combine the dictionaries into a list or another structure if necessary
         data = {
             'trellis_wire_positions': copy.deepcopy(self.trellis_wire_positions),
-            'apple_coordinates': copy.deepcopy(self.apple_coorindates),
+            'apple_coordinates': copy.deepcopy(self.apple_coordinates),
             'pick_controller': self.PICK_PATTERN
         }
 
@@ -482,105 +430,84 @@ class StartHarvest(Node):
 
         self.get_logger().info("YAML file saved successfully.")    
 
-    def start(self): 
-        # # Stage 0: Scan trellis wire coordinates by freedriving UR5 to four locations
-        # self.scan_trellis_pts()
+    def run_stage(self, topics, prefix, servo_frame=None, use_servo=True, action_fn=None):
+        if self.enable_recording:
+            self.start_recording(topics, prefix)
+            time.sleep(self.recording_startup_delay)
+        # Engage servo or trajectory
+        self.switch_controller(servo=use_servo)
+        if use_servo:
+            self.start_servo()
+        if servo_frame:
+            self.configure_servo(servo_frame)
+        if action_fn:
+            action_fn()
+        # Return to trajectory and stop recording
+        self.switch_controller(servo=not use_servo)
+        if self.enable_recording:
+            self.stop_recording()
 
+    def start(self): 
         # Stage 1: Reset arm to home position
         self.get_logger().info(f'Resetting arm to home position')
         self.go_to_home()
 
-        # # Stage 2: Request apple location prediction
-        # self.get_logger().info(f'Sending request to predict apple centerpoint locations in scene.')
-        # apple_poses = self.start_apple_prediction()
-        # # Save the apple poses in a dictionary for metadata
-        # self.apple_coorindates = {f'apple_{index + 1}': [pose.position.x, pose.position.y, pose.position.z] for index, pose in enumerate(apple_poses.poses)}
-
-        # self.get_logger().info(f'3D scan found {len(self.apple_coorindates.values)} apples!')
-        # input('Manually count apples! ')
+        # Stage 2: Request apple location prediction
+        if self.enable_apple_prediction:
+            self.get_logger().info('Predicting apple locations')
+            apple_poses = self.start_apple_prediction()
+        else:
+            self.get_logger().info('Skipping apple prediction, using pre-saved locations')
+            apple_poses = self.pre_saved_apple_locations
+        self.apple_coordinates = {f'apple_{i+1}': [p.position.x,p.position.y,p.position.z]
+                                    for i,p in enumerate(apple_poses.poses)}
+        self.get_logger().info(f'Found {len(self.apple_coordinates.values)} apples!')
 
         # Loop over apple locations
-        # for i in apple_poses.poses:
-        for iteration, i in enumerate(self.pre_saved_apple_locations):
+        for idx, coord in enumerate(apple_poses.poses):
             # Update base directory for new apple location
-            base_dir = self.batch_dir + f'apple_{iteration}/'
+            base_dir = self.batch_dir + f'apple_{idx}/'
 
             # Stage 3: Approach apple
-            # self.start_recording(self.approach_trajectory_topics, base_dir + self.approach_trajectory_file_name_prefix)
-            # time.sleep(self.recording_startup_delay)
-            self.get_logger().info(f'Starting initial apple approach.')
-            waypoints = self.call_coord_to_traj(i)
+            self.get_logger().info(f'Approaching apple')
+            waypoints = self.call_coord_to_traj(coord)
             self.trigger_arm_mover(waypoints)
-            self.get_logger().info(f'Initial apple approach complete')
-            # self.stop_recording()
 
-            # Stage 4: Start visual servo
-            self.start_recording(self.visual_servo_topics, base_dir + self.visual_servo_file_name_prefix)
-            time.sleep(self.recording_startup_delay)
-            self.get_logger().info(f'Switching controller to forward_position_controller.')
-            self.switch_controller(servo=True, sim=False)
-            self.get_logger().info(f'Starting servo node.')
-            self.start_servo()
-            self.get_logger().info(f'Starting visual servoing to center of apple')
-            self.start_visual_servo()
-            self.get_logger().info(f'Switching controller back to scaled_joint_trajectory_controller.')
-            self.switch_controller(servo=False, sim=False)
-            self.stop_recording()
+            # Stage 4: visual servo
+            if self.enable_visual_servo:
+                self.run_stage(self.visual_servo_topics, base_dir + self.visual_servo_file_name_prefix,
+                               use_servo=True, action_fn=self.start_visual_servo)
 
-            # Stage 5: Start final approach and pressure servo
-            self.start_recording(self.pressure_servo_topics, base_dir + self.pressure_servo_file_name_prefix)
-            time.sleep(self.recording_startup_delay)
-            self.get_logger().info(f'Switching controller to forward_position_controller.')
-            self.switch_controller(servo=True, sim=False)
-            self.get_logger().info(f'Starting servo node.')
-            self.start_servo()
-            self.get_logger().info(f'Configuring servo planning in base_link frame')
-            self.configure_servo('base_link')
-            self.get_logger().info(f'Starting apple grasp.')
-            self.grasp_controller()
-            self.get_logger().info(f'Switching controller back to scaled_joint_trajectory_controller.')
-            self.switch_controller(servo=False, sim=False)
-            self.stop_recording()            
+            # Stage 5: pressure servo + grasp
+            self.run_stage(
+                self.pressure_servo_topics,
+                base_dir + self.pressure_servo_file_name_prefix,
+                servo_frame='base_link',
+                use_servo=True,
+                action_fn=self.grasp_controller
+            )           
 
-            time.sleep(1.5)
+            # Stage 6: pick controller
+            def pick_action():
+                self.start_detection()
+                self.pick_controller()
+                self.start_detection()
+                self.configure_servo('tool0')
 
-            # Stage 6: Start event detection and pick controller
-            self.start_recording(self.pick_controller_topics, base_dir + self.pick_controller_file_name_prefix)
-            time.sleep(self.recording_startup_delay)
-            self.get_logger().info('Starting event detection.')
-            self.start_detection()
-            self.get_logger().info(f'Starting pick controller')
-            self.get_logger().info(f'Switching controller to forward_position_controller.')
-            self.switch_controller(servo=True, sim=False)
-            self.get_logger().info(f'Starting servo node.')
-            self.start_servo()
-            self.get_logger().info(f'Configuring servo planning in base_link frame')
-            self.configure_servo('base_link')
-            self.get_logger().info(f'Activating {self.PICK_PATTERN} controller')
-            self.pick_controller()
+            self.run_stage(
+                self.pick_controller_topics,
+                base_dir + self.pick_controller_file_name_prefix,
+                servo_frame='base_link',
+                use_servo=True,
+                action_fn=pick_action
+            )
 
-            time.sleep(0.25)
-
-            self.get_logger().info('Starting event detection.')
-            self.start_detection()
-            self.get_logger().info(f'Configuring servo planning in tool0 frame')
-            self.configure_servo('tool0')
-            self.get_logger().info(f'Switching controller back to scaled_joint_trajectory_controller.')
-            self.switch_controller(servo=False, sim=False)
-            self.stop_recording()
-
-            # Stage 7: Return arm to home position
-            self.get_logger().info(f'Resetting arm to home position')
+            # Stage 7: home & release & save
             self.go_to_home()
-
-            # Stage 8: Release apple
-            self.get_logger().info(f'Releasing apple.')
             self.release_controller()
-
-            # Stage 9: Save batch metadata - final stage
             self.save_metadata()
-            
-        self.get_logger().info(f'Batch Complete.')
+
+        self.get_logger().info('Batch Complete')
 
 def main(args=None):
     rclpy.init(args=args)
