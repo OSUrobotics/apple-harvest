@@ -77,10 +77,10 @@ def generate_launch_description():
             }.items(),
         ),
 
-        # Launch the generate_trellis_collision_obj_node
+        # Launch the generate_trellis_collision_obj_node from external package
         Node(
-            package='harvest_control',
-            executable='generate_trellis_collision_obj.py',
+            package='tree_template',
+            executable='tree_template',
             name='update_trellis_position',
             parameters=[
                     {"leader_branch_radii": LaunchConfiguration("leader_branch_radii"),
