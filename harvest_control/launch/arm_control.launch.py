@@ -72,6 +72,7 @@ def generate_launch_description():
             PythonLaunchDescriptionSource(ur_moveit_launch_path),
             launch_arguments={
                 'ur_type': LaunchConfiguration('ur_type'),
+                'robot_ip': LaunchConfiguration('robot_ip'),
                 'launch_rviz': LaunchConfiguration('launch_rviz'),
             }.items(),
         ),
@@ -130,11 +131,11 @@ def generate_launch_description():
             name='pull_twist_controller',
         ),
 
-        Node(
-            package='harvest_control',
-            executable='trellis_wire_scan.py',
-            name='gripper_pose_service',
-        ),
+        # Node(
+        #     package='harvest_control',
+        #     executable='get_manual_apple_locations.py',
+        #     name='manual_apple_locations_node',
+        # ),
         
         # Launch C++ node
         Node(

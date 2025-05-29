@@ -16,7 +16,7 @@ import time
 import os
 import yaml
 import copy
-
+# TODO: need to update this (used to rely on trellis position script)
 class ManualAppleLocations(Node):
     def __init__(self):
         super().__init__("manual_apple_locations_node")

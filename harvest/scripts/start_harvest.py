@@ -9,7 +9,7 @@ from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 from rcl_interfaces.msg import Parameter, ParameterValue, ParameterType
 from rcl_interfaces.srv import SetParameters
 from std_srvs.srv import Trigger, Empty
-from geometry_msgs.msg import Point
+from geometry_msgs.msg import Point, Pose, PoseArray
 from harvest_interfaces.srv import ApplePrediction, CoordinateToTrajectory, SendTrajectory, RecordTopics, GetGripperPose, SetValue
 from controller_manager_msgs.srv import SwitchController
 from rclpy.action import ActionClient
@@ -23,18 +23,40 @@ import os
 import yaml
 import copy
 import re
+from pathlib import Path
+
+def get_data_storage_dir():
+    # 1. Find this file’s folder:
+    current_dir = Path(__file__).resolve().parent
+    # 2. Climb up to the workspace root (ros2_ws)
+    #    scripts → harvest → apple-harvest → src → ros2_ws
+    #    so we need to go up 4 levels:
+    workspace_root = current_dir.parents[3]  
+    # 3. Define your data directory alongside src/
+    data_dir = workspace_root / 'data'
+
+    # 4. Create it if it doesn’t already exist
+    data_dir.mkdir(parents=True, exist_ok=True)
+
+    data_dir = str(data_dir)
+
+    print(f"Using data directory: {data_dir}")
+
+    return data_dir
 
 class StartHarvest(Node):
-
     def __init__(self):
         super().__init__("start_harvest_node")
         self.cb_group = MutuallyExclusiveCallbackGroup()
+
+        # Get storage directory
+        self.storage_directory = get_data_storage_dir()
 
         # Declare parameters with defaults
         self.declare_parameter('pick_pattern', 'force-heuristic')
         self.declare_parameter('event_sensitivity', 0.43)
         self.declare_parameter('recording_startup_delay', 0.5)
-        self.declare_parameter('base_data_dir', '/media/imml/LaCie/prosser_data_prosser_2024/day_2/')
+        self.declare_parameter('base_data_dir', self.storage_directory)
         self.declare_parameter('enable_recording', True)
         self.declare_parameter('enable_visual_servo', True)
         self.declare_parameter('enable_apple_prediction', True)
@@ -51,7 +73,7 @@ class StartHarvest(Node):
         # Helper clients
         self.start_record_client = self.make_client(RecordTopics, 'record_topics')
         self.stop_record_client = self.make_client(Trigger, 'stop_recording')
-        self.get_gripper_pose_client = self.make_client(GetGripperPose, 'get_gripper_pose')
+        # self.get_gripper_pose_client = self.make_client(GetGripperPose, 'get_gripper_pose')
         self.switch_controller_client = self.make_client(SwitchController, '/controller_manager/switch_controller')
         self.start_servo_client = self.make_client(Trigger, '/servo_node/start_servo')
         self.configure_servo_cli = self.make_client(SetParameters, '/servo_node/set_parameters')
@@ -59,7 +81,7 @@ class StartHarvest(Node):
         self.start_apple_prediction_client = self.make_client(ApplePrediction, '/apple_prediction')
         self.start_move_arm_to_home_client = self.make_client(Trigger, '/move_arm_to_home')
         self.coord_to_traj_client = self.make_client(CoordinateToTrajectory, 'coordinate_to_trajectory')
-        self.trigger_arm_mover_client = self.make_client(SendTrajectory, 'execute_arm_trajectory')
+        self.trigger_arm_mover_client = self.make_client(SendTrajectory, 'send_arm_trajectory')
         self.grasp_controller_client = self.make_client(Trigger, 'grasp_apple')
         self.release_controller_client = self.make_client(Trigger, 'release_apple')
         self.start_controller_cli = self.make_client(Empty, 'start_controller')
@@ -116,16 +138,7 @@ class StartHarvest(Node):
 
         # Load pre-saved apple locations
         apple_loc_path = os.path.join(self.base_data_dir, 'apple_locations/')
-        latest_dir = self.get_latest_directory(search_path=apple_loc_path)
-        if latest_dir:
-            self.get_logger().info(f"Reading apple locations from: {latest_dir}/apple_locations.csv")
-            self.pre_saved_apple_locations = self.read_apple_locations(latest_dir)
-            if self.pre_saved_apple_locations is not None:
-                self.get_logger().info('Found presaved apple location data')
-            else:
-                self.get_logger().info("No data found.")
-        else:
-            self.get_logger().info("No directories found matching the pattern.")
+        self.pre_saved_apple_locations = self.read_apple_locations(apple_loc_path)
 
     def create_new_batch_directory(self, base_directory):
         # Ensure the base directory exists
@@ -191,15 +204,11 @@ class StartHarvest(Node):
             return None
 
     def read_apple_locations(self, directory):
-        csv_file_path = os.path.join(directory, 'apple_locations.csv')
-        
-        # Load the data using NumPy, skipping the header
-        try:
-            data = np.loadtxt(csv_file_path, delimiter=',', skiprows=1)
-            return data
-        except OSError as e:
-            print(f"Error reading {csv_file_path}: {e}")
-            return None
+        csv_file = Path(directory) / 'apple_locations.csv'
+        data = np.loadtxt(str(csv_file), delimiter=',', skiprows=0)
+        if data.ndim == 1:
+            data = data[np.newaxis, :]
+        return data  # shape is now (N, 3)
 
     def get_current_gripper_pose(self):
         request = GetGripperPose.Request()
@@ -279,13 +288,13 @@ class StartHarvest(Node):
         if servo:
             if not sim:
                 self.request.activate_controllers = ["forward_position_controller"] 
-                self.request.deactivate_controllers = ["scaled_joint_trajectory_controller"]
+                self.request.deactivate_controllers = ["joint_trajectory_controller"]
             else:
                 self.request.activate_controllers = ["forward_position_controller"] 
                 self.request.deactivate_controllers = ["joint_trajectory_controller"]
         else:
             if not sim:
-                self.request.activate_controllers = ["scaled_joint_trajectory_controller"]
+                self.request.activate_controllers = ["joint_trajectory_controller"]
                 self.request.deactivate_controllers = ["forward_position_controller"]
             else:
                 self.request.activate_controllers = ["joint_trajectory_controller"]
@@ -431,8 +440,10 @@ class StartHarvest(Node):
         self.get_logger().info("YAML file saved successfully.")    
 
     def run_stage(self, topics, prefix, servo_frame=None, use_servo=True, action_fn=None):
+        stage_name = prefix if isinstance(prefix, str) else str(prefix)
+        print(f"--- Running stage: {stage_name} ---")
         if self.enable_recording:
-            self.start_recording(topics, prefix)
+            self.start_recording(topics, self.base_data_dir + prefix)
             time.sleep(self.recording_startup_delay)
         # Engage servo or trajectory
         self.switch_controller(servo=use_servo)
@@ -458,10 +469,14 @@ class StartHarvest(Node):
             apple_poses = self.start_apple_prediction()
         else:
             self.get_logger().info('Skipping apple prediction, using pre-saved locations')
-            apple_poses = self.pre_saved_apple_locations
+            apple_poses = PoseArray()
+            apple_poses.poses = [
+                Pose(position=Point(x=row[0], y=row[1], z=row[2]))
+                for row in self.pre_saved_apple_locations
+            ]
         self.apple_coordinates = {f'apple_{i+1}': [p.position.x,p.position.y,p.position.z]
                                     for i,p in enumerate(apple_poses.poses)}
-        self.get_logger().info(f'Found {len(self.apple_coordinates.values)} apples!')
+        self.get_logger().info(f'Found {len(apple_poses.poses)} apples!')
 
         # Loop over apple locations
         for idx, coord in enumerate(apple_poses.poses):
@@ -469,19 +484,19 @@ class StartHarvest(Node):
             base_dir = self.batch_dir + f'apple_{idx}/'
 
             # Stage 3: Approach apple
-            self.get_logger().info(f'Approaching apple')
+            self.get_logger().info(f'Approaching apple {idx}')
             waypoints = self.call_coord_to_traj(coord)
             self.trigger_arm_mover(waypoints)
 
             # Stage 4: visual servo
             if self.enable_visual_servo:
-                self.run_stage(self.visual_servo_topics, base_dir + self.visual_servo_file_name_prefix,
+                self.run_stage(self.visual_servo_topics, self.visual_servo_file_name_prefix,
                                use_servo=True, action_fn=self.start_visual_servo)
 
             # Stage 5: pressure servo + grasp
             self.run_stage(
                 self.pressure_servo_topics,
-                base_dir + self.pressure_servo_file_name_prefix,
+                self.pressure_servo_file_name_prefix,
                 servo_frame='base_link',
                 use_servo=True,
                 action_fn=self.grasp_controller
@@ -489,14 +504,14 @@ class StartHarvest(Node):
 
             # Stage 6: pick controller
             def pick_action():
-                self.start_detection()
+                # self.start_detection()
                 self.pick_controller()
-                self.start_detection()
+                # self.start_detection()
                 self.configure_servo('tool0')
 
             self.run_stage(
                 self.pick_controller_topics,
-                base_dir + self.pick_controller_file_name_prefix,
+                self.pick_controller_file_name_prefix,
                 servo_frame='base_link',
                 use_servo=True,
                 action_fn=pick_action
