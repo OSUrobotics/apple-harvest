@@ -23,16 +23,12 @@ ament_python_install_package(${PROJECT_NAME})
 
 # Install Python executables
 install(PROGRAMS
-  scripts/visual_servo_test.py
-  scripts/launch_param_test.py
   scripts/start_harvest.py
-  scripts/start_harvest_no_vision.py
-  scripts/start_harvest_just_gripper.py
   scripts/start_harvest_demo.py
   scripts/record.py
-  scripts/apple_prediction_test.py
   scripts/orchard_templating.py
-  scripts/apple_reachability_rviz.py
+  tests/apple_prediction_test.py
+  tests/visual_servo_test.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

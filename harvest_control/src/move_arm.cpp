@@ -1,5 +1,4 @@
 #include <rclcpp/rclcpp.hpp>
-#include "harvest_interfaces/srv/final_approach_linear.hpp"
 #include "harvest_interfaces/srv/move_to_pose.hpp"
 #include "harvest_interfaces/srv/send_trajectory.hpp"
 #include "trajectory_msgs/msg/joint_trajectory.hpp"
@@ -45,20 +44,20 @@ private:
     std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
 
     moveit::planning_interface::MoveGroupInterface move_group_;
-    // std::vector<double> home_joint_positions = {
-    //     M_PI / 2,
-    //     -M_PI / 2,
-    //     2 * M_PI / 3,
-    //     5 * M_PI / 6,
-    //     -M_PI / 2,
-    //     0};
     std::vector<double> home_joint_positions = {
         M_PI / 2,
-        -2.36,
+        -M_PI / 2,
         2 * M_PI / 3,
-        3.40,
+        5 * M_PI / 6,
         -M_PI / 2,
         0};
+    // std::vector<double> home_joint_positions = {
+    //     M_PI / 2,
+    //     -2.36,
+    //     2 * M_PI / 3,
+    //     3.40,
+    //     -M_PI / 2,
+    //     0};
 
     std::vector<double> scan_joint_positions = {
         M_PI / 2,

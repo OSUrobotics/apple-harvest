@@ -43,7 +43,7 @@ def generate_launch_description():
                                   description="Device number for palm RGB camer in gripper."))
 
     ### getting paths to yolo_networks
-    # declared_arguments.append(DeclareLaunchArgument('prediction_model_path', default_value=[PathJoinSubstitution([FindPackageShare("harvest_vision"), "yolo_networks", LaunchConfiguration("prediction_model")])]))
+    declared_arguments.append(DeclareLaunchArgument('prediction_model_path', default_value=[PathJoinSubstitution([FindPackageShare("harvest_vision"), "yolo_networks", LaunchConfiguration("prediction_model")])]))
     declared_arguments.append(DeclareLaunchArgument('vservo_model_path', default_value=[PathJoinSubstitution([FindPackageShare("harvest_vision"), "yolo_networks", LaunchConfiguration("vservo_model")])]))
     
     ### Nodes
@@ -84,7 +84,7 @@ def generate_launch_description():
                 ])
     
     return LaunchDescription(declared_arguments + [
-                            #  apple_prediction_node, 
+                             apple_prediction_node, 
                              vservo_node, 
                              palm_camera_node,
     ])

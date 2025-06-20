@@ -6,7 +6,7 @@ controller_names:
 scaled_joint_trajectory_controller:
   action_ns: follow_joint_trajectory
   type: FollowJointTrajectory
-  default: true
+  default: false
   joints:
     - shoulder_pan_joint
     - shoulder_lift_joint
@@ -19,7 +19,7 @@ scaled_joint_trajectory_controller:
 joint_trajectory_controller:
   action_ns: follow_joint_trajectory
   type: FollowJointTrajectory
-  default: false
+  default: true
   joints:
     - shoulder_pan_joint
     - shoulder_lift_joint

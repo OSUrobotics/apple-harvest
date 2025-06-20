@@ -8,9 +8,6 @@ from launch_ros.actions import Node
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 
 def generate_launch_description():
-    # Get the path to the installed Python scripts in the C++ package
-    package_name = 'harvest_control'
-
     declared_arguments = []
 
     ### UR driver and MoveIt arguments
@@ -18,7 +15,7 @@ def generate_launch_description():
                                   description="Type of Universal Robot."))
     declared_arguments.append(DeclareLaunchArgument('robot_ip', default_value="yyy.yyy.yyy.yyy", 
                                   description="IP address of the robot."))
-    declared_arguments.append(DeclareLaunchArgument('use_fake_hardware', default_value="true", 
+    declared_arguments.append(DeclareLaunchArgument('use_fake_hardware', default_value="false", 
                                   description="Use fake hardware for the UR robot."))
     declared_arguments.append(DeclareLaunchArgument('launch_rviz', default_value="true", 
                                   description="Launch RViz for visualization."))
@@ -72,6 +69,7 @@ def generate_launch_description():
             PythonLaunchDescriptionSource(ur_moveit_launch_path),
             launch_arguments={
                 'ur_type': LaunchConfiguration('ur_type'),
+                'robot_ip': LaunchConfiguration('robot_ip'),
                 'launch_rviz': LaunchConfiguration('launch_rviz'),
             }.items(),
         ),
@@ -129,12 +127,6 @@ def generate_launch_description():
             executable='pull_twist_controller.py',
             name='pull_twist_controller',
         ),
-
-        Node(
-            package='harvest_control',
-            executable='trellis_wire_scan.py',
-            name='gripper_pose_service',
-        ),
         
         # Launch C++ node
         Node(
@@ -147,5 +139,11 @@ def generate_launch_description():
                      "traj_time_step": LaunchConfiguration("traj_time_step"),
                       }
                     ]
+        ),
+
+        Node(
+            package='harvest',
+            executable='record.py',
+            name='record_topics_node',
         ),
     ])

@@ -67,17 +67,15 @@ ament_python_install_package(${PROJECT_NAME})
 # Install Python executables
 install(PROGRAMS
   scripts/coordinate_to_trajectory.py
-  scripts/coordinate_to_trajectory_client.py
-  scripts/visual_servo.py
   scripts/event_detector.py
   scripts/force_filter.py
+  scripts/get_manual_apple_locations.py
   scripts/heuristic_controller.py
   scripts/linear_controller.py
   scripts/pose_listener.py
   scripts/pressure_averager.py
   scripts/pull_twist_controller.py
-  scripts/trellis_wire_scan.py
-  scripts/get_manual_apple_locations.py
+  scripts/visual_servo.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
