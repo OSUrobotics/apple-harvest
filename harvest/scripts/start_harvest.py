@@ -51,6 +51,12 @@ class StartHarvest(Node):
 
         # Get storage directory
         self.storage_directory = get_data_storage_dir()
+        self.batch_dir = self.storage_directory + '/batch/'
+        self.batch_number = 0
+
+        # Load pre-saved apple locations
+        apple_loc_path = os.path.join(self.storage_directory, 'apple_locations/')
+        self.pre_saved_apple_locations = self.read_apple_locations(apple_loc_path)
 
         # Declare parameters with defaults
         self.declare_parameter('pick_pattern', 'force-heuristic')
@@ -60,6 +66,8 @@ class StartHarvest(Node):
         self.declare_parameter('enable_recording', True)
         self.declare_parameter('enable_visual_servo', True)
         self.declare_parameter('enable_apple_prediction', True)
+        self.declare_parameter('enable_pressure_servo', True)    
+        self.declare_parameter('enable_picking', True)           
 
         # Retrieve parameter values
         self.PICK_PATTERN = self.get_parameter('pick_pattern').get_parameter_value().string_value
@@ -69,34 +77,42 @@ class StartHarvest(Node):
         self.enable_recording = self.get_parameter('enable_recording').get_parameter_value().bool_value
         self.enable_visual_servo = self.get_parameter('enable_visual_servo').get_parameter_value().bool_value
         self.enable_apple_prediction = self.get_parameter('enable_apple_prediction').get_parameter_value().bool_value
+        self.enable_pressure_servo = self.get_parameter('enable_pressure_servo').get_parameter_value().bool_value 
+        self.enable_picking = self.get_parameter('enable_picking').get_parameter_value().bool_value        
 
         # Helper clients
-        self.start_record_client = self.make_client(RecordTopics, 'record_topics')
-        self.stop_record_client = self.make_client(Trigger, 'stop_recording')
-        # self.get_gripper_pose_client = self.make_client(GetGripperPose, 'get_gripper_pose')
         self.switch_controller_client = self.make_client(SwitchController, '/controller_manager/switch_controller')
         self.start_servo_client = self.make_client(Trigger, '/servo_node/start_servo')
         self.configure_servo_cli = self.make_client(SetParameters, '/servo_node/set_parameters')
-        self.start_vservo_client = self.make_client(Trigger, '/start_visual_servo')
-        self.start_apple_prediction_client = self.make_client(ApplePrediction, '/apple_prediction')
         self.start_move_arm_to_home_client = self.make_client(Trigger, '/move_arm_to_home')
         self.coord_to_traj_client = self.make_client(CoordinateToTrajectory, 'coordinate_to_trajectory')
         self.trigger_arm_mover_client = self.make_client(SendTrajectory, 'send_arm_trajectory')
-        self.grasp_controller_client = self.make_client(Trigger, 'grasp_apple')
-        self.release_controller_client = self.make_client(Trigger, 'release_apple')
-        self.start_controller_cli = self.make_client(Empty, 'start_controller')
-        self.stop_controller_cli = self.make_client(Empty, 'stop_controller')
-        self.pull_twist_start_cli = self.make_client(Empty, 'pull_twist/start_controller')
-        self.pull_twist_stop_cli = self.make_client(Empty, 'pull_twist/stop_controller')
-        self.linear_pull_start_cli = self.make_client(Empty, 'linear/start_controller')
-        self.linear_pull_stop_cli = self.make_client(Empty, 'linear/stop_controller')
-        self.set_goal_cli = self.make_client(SetValue, 'set_goal')
-        self._event_client = ActionClient(self, EventDetection, 'event_detection')
+        # self.get_gripper_pose_client = self.make_client(GetGripperPose, 'get_gripper_pose')
 
-        self.status = GoalStatus.STATUS_EXECUTING
+        # Conditional clients
+        if self.enable_recording:
+            self.start_record_client = self.make_client(RecordTopics, 'record_topics')
+            self.stop_record_client = self.make_client(Trigger, 'stop_recording')
+            # Initialize metadata and topics
+            self.init_metadata_and_topics()
+        if self.enable_visual_servo:
+            self.start_vservo_client = self.make_client(Trigger, '/start_visual_servo')
+        if self.enable_apple_prediction:
+            self.start_apple_prediction_client = self.make_client(ApplePrediction, '/apple_prediction')
+        if self.enable_pressure_servo:
+            self.grasp_controller_client = self.make_client(Trigger, 'grasp_apple')
+            self.release_controller_client = self.make_client(Trigger, 'release_apple')
+        if self.enable_picking:
+            self.start_controller_cli = self.make_client(Empty, 'start_controller')
+            self.stop_controller_cli = self.make_client(Empty, 'stop_controller')
+            self.pull_twist_start_cli = self.make_client(Empty, 'pull_twist/start_controller')
+            self.pull_twist_stop_cli = self.make_client(Empty, 'pull_twist/stop_controller')
+            self.linear_pull_start_cli = self.make_client(Empty, 'linear/start_controller')
+            self.linear_pull_stop_cli = self.make_client(Empty, 'linear/stop_controller')
+            self.set_goal_cli = self.make_client(SetValue, 'set_goal')
+            self._event_client = ActionClient(self, EventDetection, 'event_detection')
+            self.status = GoalStatus.STATUS_EXECUTING
 
-        # Initialize metadata and topics
-        self.init_metadata_and_topics()
 
     def make_client(self, srv_type, name):
         client = self.create_client(srv_type, name, callback_group=self.cb_group)
@@ -105,10 +121,6 @@ class StartHarvest(Node):
         return client
 
     def init_metadata_and_topics(self):
-        # METADATA
-        self.trellis_wire_positions = {k: None for k in [
-            'bottom_left_coord','bottom_right_coord','top_right_coord','top_left_coord'
-        ]}
         self.apple_coordinates = {}
         self.pick_pattern = {'pick controller': self.PICK_PATTERN}
 
@@ -135,10 +147,6 @@ class StartHarvest(Node):
         self.visual_servo_file_name_prefix = 'visual_servo'
         self.pressure_servo_file_name_prefix = 'pressure_servo'
         self.pick_controller_file_name_prefix = 'pick_controller'
-
-        # Load pre-saved apple locations
-        apple_loc_path = os.path.join(self.base_data_dir, 'apple_locations/')
-        self.pre_saved_apple_locations = self.read_apple_locations(apple_loc_path)
 
     def create_new_batch_directory(self, base_directory):
         # Ensure the base directory exists
@@ -216,16 +224,6 @@ class StartHarvest(Node):
         future = self.get_gripper_pose_client.call_async(request)
         rclpy.spin_until_future_complete(self, future) 
         return future.result().point
-    
-    def scan_trellis_pts(self):
-        for key in self.trellis_wire_positions:
-            input(f"--- Place probe at wire {key} location, hit ENTER when ready.")
-            point_msg = self.get_current_gripper_pose()
-            print(point_msg)
-            x = point_msg.x
-            y = point_msg.y
-            z = point_msg.z
-            self.trellis_wire_positions[key] = [x, y, z]
 
     def wait_for_srv(self, srv):
         #service waiter because Miranda is lazy :3
@@ -426,10 +424,13 @@ class StartHarvest(Node):
         return self.future.result()
     
     def save_metadata(self):
+        coord_list = [
+            [float(x), float(y), float(z)]
+            for (x, y, z) in self.apple_coordinates.values()
+        ]
         # Combine the dictionaries into a list or another structure if necessary
         data = {
-            'trellis_wire_positions': copy.deepcopy(self.trellis_wire_positions),
-            'apple_coordinates': copy.deepcopy(self.apple_coordinates),
+            'apple_coordinates': coord_list,
             'pick_controller': self.PICK_PATTERN
         }
 
@@ -490,38 +491,44 @@ class StartHarvest(Node):
 
             # Stage 4: visual servo
             if self.enable_visual_servo:
-                self.run_stage(self.visual_servo_topics, self.visual_servo_file_name_prefix,
-                               use_servo=True, action_fn=self.start_visual_servo)
+                self.run_stage(self.visual_servo_topics, 
+                               base_dir + self.visual_servo_file_name_prefix,
+                               use_servo=True, 
+                               action_fn=self.start_visual_servo
+                )
 
             # Stage 5: pressure servo + grasp
-            self.run_stage(
-                self.pressure_servo_topics,
-                self.pressure_servo_file_name_prefix,
-                servo_frame='base_link',
-                use_servo=True,
-                action_fn=self.grasp_controller
-            )           
+            if self.enable_pressure_servo:
+                self.run_stage(
+                    self.pressure_servo_topics,
+                    base_dir + self.pressure_servo_file_name_prefix,
+                    servo_frame='base_link',
+                    use_servo=True,
+                    action_fn=self.grasp_controller
+                )           
 
             # Stage 6: pick controller
-            def pick_action():
-                # self.start_detection()
-                self.pick_controller()
-                # self.start_detection()
-                self.configure_servo('tool0')
+            if self.enable_picking:
+                def pick_action():
+                    # self.start_detection()
+                    self.pick_controller()
+                    self.configure_servo('tool0')
 
-            self.run_stage(
-                self.pick_controller_topics,
-                self.pick_controller_file_name_prefix,
-                servo_frame='base_link',
-                use_servo=True,
-                action_fn=pick_action
-            )
+                self.run_stage(
+                    self.pick_controller_topics,
+                    base_dir + self.pick_controller_file_name_prefix,
+                    servo_frame='base_link',
+                    use_servo=True,
+                    action_fn=pick_action
+                )
 
             # Stage 7: home & release & save
             self.go_to_home()
-            self.release_controller()
-            self.save_metadata()
+            if self.enable_pressure_servo:
+                self.release_controller()
 
+        if self.enable_recording:
+            self.save_metadata()
         self.get_logger().info('Batch Complete')
 
 def main(args=None):
