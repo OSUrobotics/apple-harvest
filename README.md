@@ -27,7 +27,7 @@ There are currently two main control schemes: apple harvesting (real or simulate
     ```
     B. If getting manual apple locations, run position recording in another script (free-drive the robot to probe apple locations):
     ```bash
-    ros2 run harvest manual_apple_locations.py --ros-args \
+    ros2 run harvest_control get_manual_apple_locations.py --ros-args \
       -p output_directory:=/absolute/path/to/data
     ```
 
