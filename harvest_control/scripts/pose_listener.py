@@ -47,6 +47,8 @@ class TfListener(Node):
             self.tool_pub.publish(trans)
         except LookupException as e:
             self.get_logger().error(f'Failed to get transform {self.tool_frame}: {e}')
+        except Exception as e:
+            self.get_logger().error(f'Failed badly to get transform {self.tool_frame}: {e}')
 
         # Publish gripper_tip transform
         try:
@@ -55,6 +57,8 @@ class TfListener(Node):
             self.gripper_pub.publish(trans)
         except LookupException as e:
             self.get_logger().error(f'Failed to get transform {self.gripper_tip_frame}: {e}')
+        except Exception as e:
+            self.get_logger().error(f'Failed badly to get transform {self.gripper_tip_frame}: {e}')
 
     def handle_get_gripper_pose(self, request, response):
         # Lookup the gripper tip transform
