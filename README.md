@@ -42,3 +42,6 @@ ros2 service call /return_home_trajectory std_srvs/srv/Empty
 ros2 service call /voxel_mask harvest_interfaces/srv/VoxelMask "{tree_pos: 1}"
 ```
 
+
+Note: Need to clone Alejo's gripper repository https://github.com/velasale/apple_gripper and make sure to clone that repository as well as this one
+Note 2: Need to clone Keegan's apple vision repository
