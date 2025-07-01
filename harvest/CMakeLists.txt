@@ -24,7 +24,6 @@ ament_python_install_package(${PROJECT_NAME})
 # Install Python executables
 install(PROGRAMS
   scripts/start_harvest.py
-  scripts/start_harvest_demo.py
   scripts/record.py
   scripts/orchard_templating.py
   tests/apple_prediction_test.py
