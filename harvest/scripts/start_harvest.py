@@ -213,7 +213,7 @@ class StartHarvest(Node):
 
     def read_apple_locations(self, directory):
         csv_file = Path(directory) / 'apple_locations.csv'
-        data = np.loadtxt(str(csv_file), delimiter=',', skiprows=0)
+        data = np.loadtxt(str(csv_file), delimiter=',', skiprows=1)
         if data.ndim == 1:
             data = data[np.newaxis, :]
         return data  # shape is now (N, 3)
@@ -486,10 +486,13 @@ class StartHarvest(Node):
 
             # Stage 3: Approach apple
             self.get_logger().info(f'Approaching apple {idx}')
+            
             waypoints = self.call_coord_to_traj(coord)
             self.trigger_arm_mover(waypoints)
 
             # Stage 4: visual servo
+            self.get_logger().info(f'Approaching apple {idx}')
+
             if self.enable_visual_servo:
                 self.run_stage(self.visual_servo_topics, 
                                base_dir + self.visual_servo_file_name_prefix,
