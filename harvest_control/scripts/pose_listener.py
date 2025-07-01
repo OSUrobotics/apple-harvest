@@ -56,6 +56,8 @@ class TfListener(Node):
             self.gripper_pub.publish(trans)
         except LookupException as e:
             self.get_logger().error(f'Failed to get transform {self.gripper_tip_frame}: {e}')
+        except Exception as e:
+            self.get_logger().error(f'urdf not processed yet, failing {e}')
 
     def handle_get_gripper_pose(self, request, response):
         # Lookup the gripper tip transform
