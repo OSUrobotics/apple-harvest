@@ -41,21 +41,12 @@ class TfListener(Node):
 
     def timer_callback(self):
         # Publish tool0 transform
-        """
         try:
             trans = self._tf_buffer.lookup_transform(
                 self.source, self.tool_frame, rclpy.time.Time())
             self.tool_pub.publish(trans)
         except LookupException as e:
-            self.get_logger().error(f'Failed to get transform {self.tool_frame}: {e}')
-	"""
-        # Publish gripper_tip transform
-        try:
-            trans = self._tf_buffer.lookup_transform(
-                self.source, self.gripper_tip_frame, rclpy.time.Time())
-            self.gripper_pub.publish(trans)
-        except LookupException as e:
-            self.get_logger().error(f'Failed to get transform {self.gripper_tip_frame}: {e}')
+           self.get_logger().error(f'Failed to get transform {self.gripper_tip_frame}: {e}')
         except Exception as e:
             self.get_logger().error(f'urdf not processed yet, failing {e}')
 
