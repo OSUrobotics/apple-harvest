@@ -36,8 +36,12 @@ class TfListener(Node):
         )
         self.get_logger().info('GetGripperPose service ready')
 
+        # Timer period (e.g., 2 seconds)
+        delay_start = 2
+
         # Timer to periodically publish TF
         self.timer = self.create_timer(0.1, self.timer_callback)
+        self.get_clock().sleep_for(rclpy.duration.Duration(seconds=delay_start))
 
     def timer_callback(self):
         # Publish tool0 transform

@@ -43,7 +43,7 @@
 #include "rclcpp_lifecycle/node_interfaces/lifecycle_node_interface.hpp"
 #include "rclcpp/time.hpp"
 #include "rclcpp/duration.hpp"
-#include "scaled_joint_trajectory_controller_parameters.hpp"
+#include <scaled_joint_trajectory_controller_parameters.hpp>
 
 namespace ur_controllers
 {
