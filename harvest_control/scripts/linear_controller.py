@@ -7,14 +7,13 @@ from geometry_msgs.msg import Vector3, TwistStamped
 from std_msgs.msg import Bool
 from std_srvs.srv import Empty
 
-
 class LinController(Node):
     
     def __init__(self):
         
         super().__init__('linear_controller')
         
-        self.max_velocity = 0.1 # * 0.6 m/s
+        self.max_velocity = 0.2 #0.1 # * 0.6 m/s
         self.vel_cmd = Vector3() # * 0.6 m/s
 
         self.publisher = self.create_publisher(TwistStamped, '/servo_node/delta_twist_cmds', 10)
@@ -24,7 +23,7 @@ class LinController(Node):
         
         self.running = False
         self.iter = 0
-        self.max_iter = 1500
+        self.max_iter = 5000    #1500
 
         self.approach_service = self.create_service(Empty, 'linear/approach', self.approach)
         self.pull_service = self.create_service(Empty, 'linear/start_controller', self.pull)
@@ -50,7 +49,7 @@ class LinController(Node):
     def pull(self, request, response):
 
         self.dir = -1.0
-        self.max_iter = 1000
+        self.max_iter = 5000        # Originally 1000
         self.running = True
         return response
 

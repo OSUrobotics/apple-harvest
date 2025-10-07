@@ -10,7 +10,7 @@ from rcl_interfaces.msg import Parameter, ParameterValue, ParameterType
 from rcl_interfaces.srv import SetParameters
 from std_srvs.srv import Trigger, Empty
 from geometry_msgs.msg import Point, Pose, PoseArray
-from harvest_interfaces.srv import ApplePrediction, CoordinateToTrajectory, SendTrajectory, RecordTopics, GetGripperPose, SetValue
+from harvest_interfaces.srv import ApplePrediction, CoordinateToTrajectory, SendTrajectory, RecordTopics, GetGripperPose, SetValue, MoveToPose
 from controller_manager_msgs.srv import SwitchController
 from rclpy.action import ActionClient
 from action_msgs.msg import GoalStatus
@@ -68,6 +68,7 @@ class StartHarvest(Node):
         self.declare_parameter('enable_apple_prediction', True)
         self.declare_parameter('enable_pressure_servo', True)    
         self.declare_parameter('enable_picking', True)           
+        self.declare_parameter('optimal_trajectory', True)
 
         # Retrieve parameter values
         self.PICK_PATTERN = self.get_parameter('pick_pattern').get_parameter_value().string_value
@@ -78,7 +79,8 @@ class StartHarvest(Node):
         self.enable_visual_servo = self.get_parameter('enable_visual_servo').get_parameter_value().bool_value
         self.enable_apple_prediction = self.get_parameter('enable_apple_prediction').get_parameter_value().bool_value
         self.enable_pressure_servo = self.get_parameter('enable_pressure_servo').get_parameter_value().bool_value 
-        self.enable_picking = self.get_parameter('enable_picking').get_parameter_value().bool_value        
+        self.enable_picking = self.get_parameter('enable_picking').get_parameter_value().bool_value 
+        self.use_optimal_trajectory = self.get_parameter('optimal_trajectory').get_parameter_value().bool_value 
 
         # Helper clients
         self.switch_controller_client = self.make_client(SwitchController, '/controller_manager/switch_controller')
@@ -87,6 +89,7 @@ class StartHarvest(Node):
         self.start_move_arm_to_home_client = self.make_client(Trigger, '/move_arm_to_home')
         self.coord_to_traj_client = self.make_client(CoordinateToTrajectory, 'coordinate_to_trajectory')
         self.trigger_arm_mover_client = self.make_client(SendTrajectory, 'send_arm_trajectory')
+        self.trigger_move_arm_to_pose_client =  self.make_client(MoveToPose, 'move_arm_to_pose')
         # self.get_gripper_pose_client = self.make_client(GetGripperPose, 'get_gripper_pose')
 
         # Conditional clients
@@ -104,7 +107,9 @@ class StartHarvest(Node):
             self.release_controller_client = self.make_client(Trigger, 'release_apple')
         if self.enable_picking:
             self.start_controller_cli = self.make_client(Empty, 'start_controller')
+            self.start_stiffness_controller_cli = self.make_client(Empty, 'start_stiffness_controller')
             self.stop_controller_cli = self.make_client(Empty, 'stop_controller')
+            self.stop_stiffness_controller_cli = self.make_client(Empty, 'stop_stiffness_controller')
             self.pull_twist_start_cli = self.make_client(Empty, 'pull_twist/start_controller')
             self.pull_twist_stop_cli = self.make_client(Empty, 'pull_twist/stop_controller')
             self.linear_pull_start_cli = self.make_client(Empty, 'linear/start_controller')
@@ -298,6 +303,11 @@ class StartHarvest(Node):
                 self.request.activate_controllers = ["joint_trajectory_controller"]
                 self.request.deactivate_controllers = ["forward_position_controller"]
         self.request.timeout = rclpy.duration.Duration(seconds=5.0).to_msg()
+
+        
+        # TODO: Commit this Alejo's change
+        self.request.strictness = SwitchController.Request.BEST_EFFORT  # Use STRICT or BEST_EFFORT
+
         self.future = self.switch_controller_client.call_async(self.request)
         rclpy.spin_until_future_complete(self, self.future)
         return self.future.result()
@@ -359,6 +369,16 @@ class StartHarvest(Node):
         rclpy.spin_until_future_complete(self, future) 
         return future.result()
     
+    def trigger_move_arm_to_pose(self, apple_pose):
+        request = MoveToPose.Request()
+        request.orientation = apple_pose.orientation
+        request.position = apple_pose.position
+        request.position.y = request.position.y - 0.3
+
+        future = self.trigger_move_arm_to_pose_client.call_async(request)
+        rclpy.spin_until_future_complete(self, future) 
+        return future.result()
+    
     def event_detection(self):
         # Start event detection
         req = Empty.Request()
@@ -367,7 +387,7 @@ class StartHarvest(Node):
     
     def configure_controller(self):
         
-        pick_force = 15.0
+        pick_force = 20.0
         
         set_goal_req = SetValue.Request()
         set_goal_req.val = pick_force
@@ -398,6 +418,7 @@ class StartHarvest(Node):
             rclpy.spin_until_future_complete(self, self.future)
             
         elif self.PICK_PATTERN == 'linear-pull':
+            stop_time = 10
             self.future = self.linear_pull_start_cli.call_async(req)
             rclpy.spin_until_future_complete(self, self.future)
             # while self.status != GoalStatus.STATUS_SUCCEEDED:
@@ -406,6 +427,15 @@ class StartHarvest(Node):
             self.future = self.linear_pull_stop_cli.call_async(req)
             rclpy.spin_until_future_complete(self, self.future)
             
+        elif self.PICK_PATTERN == 'stiffness-seeking':
+            stop_time = 5
+            self.future = self.start_stiffness_controller_cli.call_async(req)
+            rclpy.spin_until_future_complete(self, self.future)
+            time.sleep(stop_time)
+            
+            self.future = self.stop_stiffness_controller_cli.call_async(req)
+            rclpy.spin_until_future_complete(self, self.future)
+        
         else:
             self.get_logger().info(f'No valid control scheme set')
     
@@ -487,12 +517,19 @@ class StartHarvest(Node):
             # Stage 3: Approach apple
             self.get_logger().info(f'Approaching apple {idx}')
             input('Hit enter to start with this apple')
+
+            self.get_logger().info(f'apple coordinate is {coord}')
             
-            waypoints = self.call_coord_to_traj(coord)
-            self.trigger_arm_mover(waypoints)
+            if self.use_optimal_trajectory:
+                waypoints = self.call_coord_to_traj(coord)
+                self.trigger_arm_mover(waypoints)
+            else:
+                self.trigger_move_arm_to_pose(coord)
 
             # Stage 4: visual servo
+            # input('hit enter to start visual servoing')
             self.get_logger().info(f'Approaching apple {idx}')
+
 
             if self.enable_visual_servo:
                 self.run_stage(self.visual_servo_topics, 
@@ -502,7 +539,7 @@ class StartHarvest(Node):
                 )
 
             # Stage 5: pressure servo + grasp
-            input('Done with visual servoing, hit enter to start pressure servoing')
+            #input('Done with visual servoing, hit enter to start pressure servoing')
             if self.enable_pressure_servo:
                 self.run_stage(
                     self.pressure_servo_topics,
@@ -513,7 +550,7 @@ class StartHarvest(Node):
                 )           
 
             # Stage 6: pick controller
-            input('Done with pressure= servoing, hit enter to start pick servoing')
+            #input('Done with pressure= servoing, hit enter to start pick servoing')
             if self.enable_picking:
                 def pick_action():
                     # self.start_detection()
@@ -529,7 +566,7 @@ class StartHarvest(Node):
                 )
 
             # Stage 7: home & release & save
-            input('Done with pick= servoing, hit enter to return home')
+            #input('Done with pick= servoing, hit enter to return home')
             self.go_to_home()
             if self.enable_pressure_servo:
                 self.release_controller()
