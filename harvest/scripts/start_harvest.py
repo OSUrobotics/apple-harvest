@@ -54,9 +54,9 @@ class StartHarvest(Node):
         self.batch_dir = self.storage_directory + '/batch/'
         self.batch_number = 0
 
-        # Load pre-saved apple locations
-        apple_loc_path = os.path.join(self.storage_directory, 'apple_locations/')
-        self.pre_saved_apple_locations = self.read_apple_locations(apple_loc_path)
+        # # Load pre-saved apple locations
+        # apple_loc_path = os.path.join(self.storage_directory, 'apple_locations/')
+        # self.pre_saved_apple_locations = self.read_apple_locations(apple_loc_path)
 
         # Declare parameters with defaults
         self.declare_parameter('pick_pattern', 'force-heuristic')
@@ -487,13 +487,10 @@ class StartHarvest(Node):
             # Stage 3: Approach apple
             self.get_logger().info(f'Approaching apple {idx}')
             input('Hit enter to start with this apple')
-            
             waypoints = self.call_coord_to_traj(coord)
             self.trigger_arm_mover(waypoints)
 
             # Stage 4: visual servo
-            self.get_logger().info(f'Approaching apple {idx}')
-
             if self.enable_visual_servo:
                 self.run_stage(self.visual_servo_topics, 
                                base_dir + self.visual_servo_file_name_prefix,
@@ -502,8 +499,8 @@ class StartHarvest(Node):
                 )
 
             # Stage 5: pressure servo + grasp
-            input('Done with visual servoing, hit enter to start pressure servoing')
             if self.enable_pressure_servo:
+                input('Done with visual servoing, hit enter to start pressure servoing')
                 self.run_stage(
                     self.pressure_servo_topics,
                     base_dir + self.pressure_servo_file_name_prefix,
@@ -513,8 +510,8 @@ class StartHarvest(Node):
                 )           
 
             # Stage 6: pick controller
-            input('Done with pressure= servoing, hit enter to start pick servoing')
             if self.enable_picking:
+                input('Done with pressure, hit enter to start pick servoing')
                 def pick_action():
                     # self.start_detection()
                     self.pick_controller()
@@ -529,7 +526,7 @@ class StartHarvest(Node):
                 )
 
             # Stage 7: home & release & save
-            input('Done with pick= servoing, hit enter to return home')
+            input('Done with pick, hit enter to return home')
             self.go_to_home()
             if self.enable_pressure_servo:
                 self.release_controller()

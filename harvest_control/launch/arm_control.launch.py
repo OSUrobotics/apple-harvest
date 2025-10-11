@@ -19,6 +19,10 @@ def generate_launch_description():
                                   description="Use fake hardware for the UR robot."))
     declared_arguments.append(DeclareLaunchArgument('launch_rviz', default_value="true", 
                                   description="Launch RViz for visualization."))
+    declared_arguments.append(DeclareLaunchArgument('description_package', default_value='robot_custom_hardware',
+                                  description='Package containing the URDF/Xacro'))
+    declared_arguments.append(DeclareLaunchArgument('description_file', default_value='ur_gripper.urdf.xacro',
+                                  description='Path (relative to description_package share) to the Xacro file'))
 
     ### harvest node parameter
     # The pick pattern is dependent on the controller selected with the below parameter
@@ -44,12 +48,12 @@ def generate_launch_description():
     ur_driver_launch_path = os.path.join(
         get_package_share_directory('ur_robot_driver'),
         'launch',
-        'ur_control_custom_hw.launch.py')
+        'ur_control.launch.py')
     
     ur_moveit_launch_path = os.path.join(
         get_package_share_directory('ur_moveit_config'),
         'launch',
-        'ur_moveit_custom_hw.launch.py')
+        'ur_moveit.launch.py')
 
 
     return LaunchDescription(declared_arguments + [
@@ -61,6 +65,8 @@ def generate_launch_description():
                 'robot_ip': LaunchConfiguration('robot_ip'),
                 'use_fake_hardware': LaunchConfiguration('use_fake_hardware'),
                 'launch_rviz': LaunchConfiguration('launch_rviz'),
+                'description_package': LaunchConfiguration('description_package'),
+                'description_file': LaunchConfiguration('description_file'),
             }.items(),
         ),
 
@@ -71,6 +77,8 @@ def generate_launch_description():
                 'ur_type': LaunchConfiguration('ur_type'),
                 'robot_ip': LaunchConfiguration('robot_ip'),
                 'launch_rviz': LaunchConfiguration('launch_rviz'),
+                'description_package': LaunchConfiguration('description_package'),
+                'description_file': LaunchConfiguration('description_file'),
             }.items(),
         ),
 

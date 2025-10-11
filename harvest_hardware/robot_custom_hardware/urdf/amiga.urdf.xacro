@@ -1,0 +1,96 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="https://ros.org/wiki/xacro" name="amiga">
+
+<xacro:macro name="amiga_macro" params="amiga_prefix:='amiga__' amiga_parent:='world' mesh_base_path">
+    <!-- ================== -->
+    <!--     Amiga Macro    -->
+    <!-- ================== -->
+    <material name="LightLightGrey">
+        <color rgba="0.941 0.941 0.941 1.0"/>
+    </material>
+    <xacro:property name="amiga_mass" value="40.0"/>
+    <xacro:property name="amiga_collision_box0_x" value='1.132'/>
+    <xacro:property name="amiga_collision_box0_y" value='0.800'/>
+    <xacro:property name="amiga_collision_box0_z" value='0.99810607'/>
+    <xacro:property name="amiga_collision_box1_x" value='${amiga_collision_box0_x}' />
+    <xacro:property name="amiga_collision_box1_y" value='0.6' />
+    <xacro:property name="amiga_collision_box1_z" value='0.2' />
+    <xacro:property name="amiga_collision_box2_x" value='0.25' />
+    <xacro:property name="amiga_collision_box2_y" value='0.25' />
+    <xacro:property name="amiga_collision_box2_z" value='0.25' />
+
+    <!-- <xacro:property name="amiga_tool0_mount_rotation" value="0.0 0.0 -${pi / 4 + pi}"/> -->
+    <xacro:property name="amiga_tool0_mount_rotation" value="0.0 0.0 0.0"/>
+
+    <!-- <xacro:property name="amiga_tool0_mount_position" value="-0.12825037 0.323256 0.99810607"/> -->
+    <xacro:property name="amiga_tool0_mount_position" value="-0.225 0.323256 ${0.99810607+0.1}"/>
+
+    <!-- ================== -->
+    <!--       Links        -->
+    <!-- ================== -->
+    <link name="${amiga_prefix}base"/>
+
+    <link name="${amiga_prefix}body">
+        <visual>
+            <origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.0"/>
+            <geometry>
+                <mesh filename="${mesh_base_path}base_mounts/frame_on_amiga_v2_simplified.stl"/>
+            </geometry>
+            <material name="LightLightGrey"/>
+        </visual>
+        <collision>
+            <origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 ${amiga_collision_box0_z / 2}"/>
+            <geometry>
+                <box size="${amiga_collision_box0_x} ${amiga_collision_box0_y} ${amiga_collision_box0_z}"/>
+            </geometry>
+        </collision>
+        <collision>
+            <origin rpy="0.0 0.0 0.0" xyz="0.0 -${amiga_collision_box1_y / 5} ${amiga_collision_box0_z}" />
+            <geometry>
+                <box size="${amiga_collision_box1_x} ${amiga_collision_box1_y} ${amiga_collision_box1_z}" />
+            </geometry>
+        </collision>
+        <collision>
+            <origin rpy="0.0 0.0 0.0" xyz="${amiga_collision_box0_x / 2 - amiga_collision_box2_x / 2} ${amiga_collision_box2_y / 3} ${amiga_collision_box0_z + amiga_collision_box1_z}" />
+            <geometry>
+                <box size="${amiga_collision_box2_x} ${amiga_collision_box2_y} ${amiga_collision_box2_z}" />
+            </geometry>
+        </collision>
+
+        <inertial>
+            <origin rpy="0 0 0" xyz="0.0 0.0 0.0"/>
+            <mass value="${amiga_mass}"/>
+            <inertia ixx="${1/12 * amiga_mass * (amiga_collision_box0_y**2 + amiga_collision_box0_z**2)}"
+                     ixz="0.0" 
+                     ixy="0.0"
+                     iyy="${1/12 * amiga_mass * (amiga_collision_box0_x**2 + amiga_collision_box0_z**2)}"
+                     iyz="0.0"
+                     izz="${1/12 * amiga_mass * (amiga_collision_box0_y**2 + amiga_collision_box0_x**2)}"
+            />
+        </inertial>
+    </link>
+
+    <link name="${amiga_prefix}tool0"/>
+
+    <!-- ================== -->
+    <!--       Joints       -->
+    <!-- ================== -->
+    <joint name="${amiga_parent}--${amiga_prefix}base" type ="fixed">
+        <origin rpy="0 0 0" xyz="0 0 0"/>
+        <parent link="${amiga_parent}"/>
+        <child link="${amiga_prefix}base"/>
+    </joint>
+    <joint name="${amiga_prefix}base--${amiga_prefix}body" type="fixed">
+        <origin rpy="0 0 0" xyz="0 0 0"/>
+        <parent link="${amiga_prefix}base"/>
+        <child link="${amiga_prefix}body"/>
+    </joint>
+    <joint name="${amiga_prefix}body--${amiga_prefix}tool0" type="fixed">
+        <origin rpy="${amiga_tool0_mount_rotation}" xyz="${amiga_tool0_mount_position}"/>
+        <parent link="${amiga_prefix}body"/>
+        <child link="${amiga_prefix}tool0"/>
+    </joint>
+
+</xacro:macro>
+
+</robot>
