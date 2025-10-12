@@ -37,7 +37,7 @@ class TfListener(Node):
         self.get_logger().info('GetGripperPose service ready')
 
         # Timer period (e.g., 2 seconds)
-        delay_start = 2
+        delay_start = 5
 
         # Timer to periodically publish TF
         self.timer = self.create_timer(0.1, self.timer_callback)
@@ -46,13 +46,13 @@ class TfListener(Node):
     def timer_callback(self):
         # Publish tool0 transform
         try:
-            trans = self._tf_buffer.lookup_transform(
-                self.source, self.tool_frame, rclpy.time.Time())
+            trans: TransformStamped = self._tf_buffer.lookup_transform(
+                self.source, self.tool_frame, rclpy.time.Time(), timeout=rclpy.duration.Duration(seconds=1.0))
             self.tool_pub.publish(trans)
         except LookupException as e:
-           self.get_logger().error(f'Failed to get transform {self.gripper_tip_frame}: {e}')
+           self.get_logger().warn(f'Failed to get transform: {e}')
         except Exception as e:
-            self.get_logger().error(f'urdf not processed yet, failing {e}')
+            self.get_logger().warn(f'urdf not processed yet, failing {e}')
 
     def handle_get_gripper_pose(self, request, response):
         # Lookup the gripper tip transform
@@ -66,7 +66,7 @@ class TfListener(Node):
                 z=trans.transform.translation.z
             )
         except LookupException as e:
-            self.get_logger().error(f'Failed service lookup: {e}')
+            self.get_logger().warn(f'Failed service lookup: {e}')
             # leave response.point at default (0,0,0)
         return response
 

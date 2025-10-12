@@ -1,5 +1,5 @@
 # Defined by Marcus Rosette for predefined trajectories
-shoulder_pan_joint: 1.57
+shoulder_pan_joint: 0.785
 shoulder_lift_joint: -2.36
 elbow_joint: 2.09
 wrist_1_joint: 3.40

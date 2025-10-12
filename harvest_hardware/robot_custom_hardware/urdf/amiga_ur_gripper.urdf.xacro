@@ -28,20 +28,21 @@
   <xacro:arg name="tool_tx_idle_chars" default="3.5"/>
   <xacro:arg name="tool_device_name" default="/tmp/ttyUR"/>
   <xacro:arg name="tool_tcp_port" default="54321"/>
-  <xacro:arg name="use_fake_hardware" default="false"/>
+  <xacro:arg name="use_fake_hardware" default="false"/> 
   <xacro:arg name="fake_sensor_commands" default="false"/>
   <xacro:arg name="sim_gazebo" default="false"/>
   <xacro:arg name="sim_ignition" default="false"/>
   <xacro:arg name="simulation_controllers" default=""/>
-  
-  <!-- initial positions in your pkg -->
   <xacro:arg name="initial_positions_file" default="$(find robot_custom_hardware)/config/initial_positions.yaml"/>
   <xacro:property name="initial_positions_file" default="$(arg initial_positions_file)"/>
 
-  <!-- Realsense args -->
-  <xacro:arg name="use_nominal_extrinsics" default="false" />
+  <!-- Amiga args -->
+  <xacro:arg name="amiga_prefix" default="amiga__"/>
 
-  <!-- CRITICAL: define the four args with the names the UR macro expects -->
+  <!-- Realsense args -->
+  <xacro:arg name="use_nominal_extrinsics" default="true" />
+
+  <!-- Define the four args with the names the UR macro expects -->
   <xacro:arg name="joint_limit_params" default="$(find robot_custom_hardware)/config/ur5e/joint_limits.yaml"/>
   <xacro:arg name="kinematics_params"  default="$(find robot_custom_hardware)/config/ur5e/default_kinematics.yaml"/>
   <xacro:arg name="physical_params"    default="$(find robot_custom_hardware)/config/ur5e/physical_parameters.yaml"/>
@@ -51,14 +52,13 @@
   <xacro:include filename="$(find robot_custom_hardware)/urdf/amiga.urdf.xacro"/>
   <xacro:include filename="$(find ur_description)/urdf/ur_macro.xacro"/>
   <xacro:include filename="$(find robot_custom_hardware)/urdf/gripper.urdf.xacro"/>
-  <xacro:include filename="$(find realsense2_description)/urdf/_d435i.urdf.xacro"/>
+  <xacro:include filename="$(find robot_custom_hardware)/urdf/_d435i.urdf.xacro"/>
 
   <!-- define world exactly once -->
   <link name="world"/>
 
   <!-- Instantiate Amiga, attached to world. 
-       NOTE: your amiga macro signature requires mesh_base_path; 
-       if it actually uses $(robot_custom_hardware) inside, define a property it expects. -->
+       NOTE: your amiga macro signature requires mesh_base_path -->
   <xacro:property name="robot_custom_hardware" value="package://robot_custom_hardware/"/>
   <xacro:amiga_macro amiga_prefix="$(arg amiga_prefix)" amiga_parent="world" mesh_base_path="package://robot_custom_hardware/meshes/"/>
 
@@ -113,8 +113,20 @@
 
   <xacro:gripper_macro/>
 
-  <xacro:sensor_d435i parent="base_link" use_nominal_extrinsics="$(arg use_nominal_extrinsics)">
-    <origin xyz="0.47625 -0.4907 0.4667" rpy="0 0 1.8852"/>
+  <!-- Realsense for apple locations -->
+  <xacro:sensor_d435i 
+    parent="$(arg amiga_prefix)base" 
+    prefix="mast_"
+    use_nominal_extrinsics="$(arg use_nominal_extrinsics)">
+    <origin xyz="0.3 -0.2 1.4667" rpy="0 0 1.8852"/>
+  </xacro:sensor_d435i>
+
+  <!-- Realsense for trunk detections -->
+  <xacro:sensor_d435i 
+    parent="$(arg amiga_prefix)base" 
+    prefix="base_"
+    use_nominal_extrinsics="$(arg use_nominal_extrinsics)">
+    <origin xyz="0.0 0.385 0.5588" rpy="0 0 1.57"/>
   </xacro:sensor_d435i>
 
 </robot>

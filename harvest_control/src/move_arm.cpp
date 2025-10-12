@@ -21,6 +21,7 @@
 #include <vector>
 #include <stdexcept>
 #include <cmath> // For M_PI
+#include <memory>
 
 using std::placeholders::_1;
 using std::placeholders::_2;
@@ -30,6 +31,7 @@ class MoveArmNode : public rclcpp::Node
 {
 public:
     MoveArmNode();
+    void init_moveit();
 
 private:
     rclcpp::Service<harvest_interfaces::srv::SendTrajectory>::SharedPtr arm_trajectory_service_;
@@ -43,7 +45,7 @@ private:
     std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
     std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
 
-    moveit::planning_interface::MoveGroupInterface move_group_;
+    std::unique_ptr<moveit::planning_interface::MoveGroupInterface> move_group_;
     std::vector<double> home_joint_positions = {
         M_PI / 2,
         -M_PI / 2,
@@ -81,8 +83,7 @@ private:
 MoveArmNode::MoveArmNode()
     : Node("move_arm_node", rclcpp::NodeOptions().automatically_declare_parameters_from_overrides(true)),
       tf_buffer_(std::make_shared<tf2_ros::Buffer>(this->get_clock())),
-      tf_listener_(std::make_shared<tf2_ros::TransformListener>(*tf_buffer_)),
-      move_group_(std::shared_ptr<rclcpp::Node>(std::move(this)), "ur_manipulator")
+      tf_listener_(std::make_shared<tf2_ros::TransformListener>(*tf_buffer_))
 {
     // Initialize the subscription to /gripper_tip
     gripper_tip_subscription_ = this->create_subscription<geometry_msgs::msg::TransformStamped>(
@@ -101,16 +102,28 @@ MoveArmNode::MoveArmNode()
     arm_to_pose_service_ = this->create_service<harvest_interfaces::srv::MoveToPose>(
         "move_arm_to_pose", std::bind(&MoveArmNode::move_to_pose, this, _1, _2));
 
+    RCLCPP_INFO(this->get_logger(), "Move arm server ready");
+}
+
+void MoveArmNode::init_moveit()
+{
+    // Now safe to use shared_from_this(); the object is owned by a std::shared_ptr
+    move_group_ = std::make_unique<moveit::planning_interface::MoveGroupInterface>(
+        shared_from_this(), "ur_manipulator"  // group must match SRDF/kinematics
+    );
+
+    // // Declare with defaults so we don’t crash if unset
+    // double max_accel = this->declare_parameter<double>("max_accel", 0.05);
+    // double max_vel   = this->declare_parameter<double>("max_vel",   0.05);
     // Set up parameters
     double max_accel = this->get_parameter("max_accel").as_double();
     double max_vel = this->get_parameter("max_vel").as_double();
 
-    // Set velocity and acceleration limits
-    // NEED TO RESET TO 0.05 FOR HARDWARE!!!
-    this->move_group_.setMaxAccelerationScalingFactor(max_accel);
-    this->move_group_.setMaxVelocityScalingFactor(max_vel);
 
-    RCLCPP_INFO(this->get_logger(), "Move arm server ready");
+    move_group_->setMaxAccelerationScalingFactor(max_accel);
+    move_group_->setMaxVelocityScalingFactor(max_vel);
+
+    RCLCPP_INFO(this->get_logger(), "MoveIt MoveGroupInterface initialized");
 }
 
 void MoveArmNode::gripper_tip_callback(const geometry_msgs::msg::TransformStamped::SharedPtr msg)
@@ -129,15 +142,15 @@ void MoveArmNode::move_to_home(const std::shared_ptr<std_srvs::srv::Trigger::Req
     (void)request; // Suppress unused parameter warning
 
     // Set the home configuration as the target for the MoveGroup
-    move_group_.setJointValueTarget(home_joint_positions);
+    move_group_->setJointValueTarget(home_joint_positions);
 
     // Plan and execute to move to the home position
     moveit::planning_interface::MoveGroupInterface::Plan plan;
-    bool success = static_cast<bool>(move_group_.plan(plan));
+    bool success = static_cast<bool>(move_group_->plan(plan));
 
     if (success)
     {
-        move_group_.execute(plan);
+        move_group_->execute(plan);
         RCLCPP_INFO(this->get_logger(), "Moved to home configuration.");
         response->success = true;
         response->message = "Successfully moved to home configuration.";
@@ -164,15 +177,15 @@ void MoveArmNode::move_to_config(const std::shared_ptr<std_srvs::srv::Trigger::R
         0};
 
     // Set the target configuration as the target for the MoveGroup
-    move_group_.setJointValueTarget(target_config);
+    move_group_->setJointValueTarget(target_config);
 
     // Plan and execute to move to the target position
     moveit::planning_interface::MoveGroupInterface::Plan plan;
-    bool success = static_cast<bool>(move_group_.plan(plan));
+    bool success = static_cast<bool>(move_group_->plan(plan));
 
     if (success)
     {
-        move_group_.execute(plan);
+        move_group_->execute(plan);
         RCLCPP_INFO(this->get_logger(), "Moved to target configuration.");
         response->success = true;
     }
@@ -187,7 +200,7 @@ void MoveArmNode::move_to_pose(const std::shared_ptr<harvest_interfaces::srv::Mo
                                const std::shared_ptr<harvest_interfaces::srv::MoveToPose::Response> response)
 {
     // Set the current state as the start
-    this->move_group_.setStartStateToCurrentState();
+    this->move_group_->setStartStateToCurrentState();
 
     // Make PoseStamped message
     tf2::Quaternion orientation;
@@ -200,24 +213,24 @@ void MoveArmNode::move_to_pose(const std::shared_ptr<harvest_interfaces::srv::Mo
     msg.pose.position.z = request->position.z;
 
     // Set pose and joint tolerances
-    this->move_group_.setPoseTarget(msg, "gripper_link");
-    // this->move_group_.setGoalOrientationTolerance(0.35);
-    this->move_group_.setGoalOrientationTolerance(1.05);
-    // this->move_group_.setGoalJointTolerance(0.001); // Minimize joint changes
+    this->move_group_->setPoseTarget(msg, "gripper_link");
+    // this->move_group_->setGoalOrientationTolerance(0.35);
+    this->move_group_->setGoalOrientationTolerance(1.05);
+    // this->move_group_->setGoalJointTolerance(0.001); // Minimize joint changes
 
     // Use an optimization-aware planner
-    // this->move_group_.setPlannerId("RRTstarkConfigDefault");
-    this->move_group_.setPlannerId("RRTConnectkConfigDefault");
-    // this->move_group_.setPlanningTime(20.0);
-    // this->move_group_.setNumPlanningAttempts(50);
-    this->move_group_.setPlanningTime(20.0);
-    this->move_group_.setNumPlanningAttempts(1000);
+    // this->move_group_->setPlannerId("RRTstarkConfigDefault");
+    this->move_group_->setPlannerId("RRTConnectkConfigDefault");
+    // this->move_group_->setPlanningTime(20.0);
+    // this->move_group_->setNumPlanningAttempts(50);
+    this->move_group_->setPlanningTime(20.0);
+    this->move_group_->setNumPlanningAttempts(1000);
 
     // Plan and execute
     moveit::planning_interface::MoveGroupInterface::Plan goal;
-    if (move_group_.plan(goal))
+    if (move_group_->plan(goal))
     {
-        this->move_group_.execute(goal);
+        this->move_group_->execute(goal);
         response->result = true;
 
         // Save the reverse trajectory as Float32MultiArray
@@ -302,8 +315,8 @@ void MoveArmNode::execute_trajectory(const std::shared_ptr<harvest_interfaces::s
 
     // Prepare the JointTrajectory message
     trajectory_msgs::msg::JointTrajectory joint_trajectory;
-    joint_trajectory.header.frame_id = move_group_.getPlanningFrame();
-    joint_trajectory.joint_names = move_group_.getJointNames();
+    joint_trajectory.header.frame_id = move_group_->getPlanningFrame();
+    joint_trajectory.joint_names = move_group_->getJointNames();
 
     trajectory_msgs::msg::JointTrajectoryPoint point;
     point.time_from_start.sec = 0;
@@ -341,7 +354,7 @@ void MoveArmNode::execute_trajectory(const std::shared_ptr<harvest_interfaces::s
     plan.trajectory_ = robot_trajectory;
 
     // Plan and execute the trajectory
-    bool plan_success = static_cast<bool>(move_group_.execute(plan));
+    bool plan_success = static_cast<bool>(move_group_->execute(plan));
     if (plan_success)
     {
         response->success = true;
@@ -357,6 +370,7 @@ int main(int argc, char *argv[])
 {
     rclcpp::init(argc, argv);
     auto move_service = std::make_shared<MoveArmNode>();
+    move_service->init_moveit();
     rclcpp::executors::MultiThreadedExecutor executor;
     executor.add_node(move_service);
     executor.spin();

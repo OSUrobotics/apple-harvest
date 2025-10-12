@@ -19,11 +19,8 @@
     <xacro:property name="amiga_collision_box2_y" value='0.25' />
     <xacro:property name="amiga_collision_box2_z" value='0.25' />
 
-    <!-- <xacro:property name="amiga_tool0_mount_rotation" value="0.0 0.0 -${pi / 4 + pi}"/> -->
-    <xacro:property name="amiga_tool0_mount_rotation" value="0.0 0.0 0.0"/>
-
-    <!-- <xacro:property name="amiga_tool0_mount_position" value="-0.12825037 0.323256 0.99810607"/> -->
-    <xacro:property name="amiga_tool0_mount_position" value="-0.225 0.323256 ${0.99810607+0.1}"/>
+    <xacro:property name="amiga_tool0_mount_rotation" value="0.0 0.0 ${pi / 4}"/>
+    <xacro:property name="amiga_tool0_mount_position" value="-0.225 0.323256 1.0"/>
 
     <!-- ================== -->
     <!--       Links        -->
@@ -38,7 +35,7 @@
             </geometry>
             <material name="LightLightGrey"/>
         </visual>
-        <collision>
+        <!-- <collision>
             <origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 ${amiga_collision_box0_z / 2}"/>
             <geometry>
                 <box size="${amiga_collision_box0_x} ${amiga_collision_box0_y} ${amiga_collision_box0_z}"/>
@@ -55,8 +52,13 @@
             <geometry>
                 <box size="${amiga_collision_box2_x} ${amiga_collision_box2_y} ${amiga_collision_box2_z}" />
             </geometry>
+        </collision> -->
+        <collision>
+            <origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.0"/>
+            <geometry>
+                <mesh filename="${mesh_base_path}base_mounts/frame_on_amiga_v2_simplified.stl"/>
+            </geometry>
         </collision>
-
         <inertial>
             <origin rpy="0 0 0" xyz="0.0 0.0 0.0"/>
             <mass value="${amiga_mass}"/>
