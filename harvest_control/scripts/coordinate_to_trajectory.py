@@ -48,9 +48,9 @@ class CoordinateToTrajectoryService(Node):
         # Load data
         tree_wire_filter_file = os.path.join(package_share_directory, 'resource', 'tree_wire_mask.json')
         self.load_tree_wire_filter_ranges(tree_wire_filter_file)
-        self.voxel_data = np.loadtxt(os.path.join(package_share_directory, 'resource', 'reachable_voxels_20251011_180439.csv'))
-        self.trajectories = np.load(os.path.join(package_share_directory, 'resource', 'reachable_paths_20251011_180438.npy'))
-        self.ik_data = np.loadtxt(os.path.join(package_share_directory, 'resource', 'voxel_ik_data_20251011_180437.csv'), delimiter=',', skiprows=1)
+        self.voxel_data = np.loadtxt(os.path.join(package_share_directory, 'resource', 'reachable_voxels_20251013_150156.csv'))
+        self.trajectories = np.load(os.path.join(package_share_directory, 'resource', 'reachable_paths_20251013_150156.npy'))
+        self.ik_data = np.loadtxt(os.path.join(package_share_directory, 'resource', 'voxel_ik_data_20251013_150156.csv'), delimiter=',', skiprows=1)
 
         # Extract the data
         self.trajectories_orig = np.copy(self.trajectories)
@@ -91,7 +91,7 @@ class CoordinateToTrajectoryService(Node):
         marker_array = MarkerArray()
         for i, apple in enumerate(apple_loc):
             marker = Marker()
-            marker.header.frame_id = 'base_link'  # Change this to your fixed frame
+            marker.header.frame_id = 'world'  # Change this to your fixed frame
             marker.header.stamp = self.get_clock().now().to_msg()
             marker.ns = 'apple'
             marker.id = i
@@ -123,7 +123,7 @@ class CoordinateToTrajectoryService(Node):
 
         for i, center in enumerate(self.voxel_centers):
             marker = Marker()
-            marker.header.frame_id = 'base_link'  # Change this to your fixed frame
+            marker.header.frame_id = 'world'
             marker.header.stamp = self.get_clock().now().to_msg()
             marker.ns = 'voxel'
             marker.id = i

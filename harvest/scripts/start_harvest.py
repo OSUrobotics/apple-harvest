@@ -54,9 +54,9 @@ class StartHarvest(Node):
         self.batch_dir = self.storage_directory + '/batch/'
         self.batch_number = 0
 
-        # # Load pre-saved apple locations
-        # apple_loc_path = os.path.join(self.storage_directory, 'apple_locations/')
-        # self.pre_saved_apple_locations = self.read_apple_locations(apple_loc_path)
+        # Load pre-saved apple locations
+        apple_loc_path = os.path.join(self.storage_directory, 'apple_locations/')
+        self.pre_saved_apple_locations = self.read_apple_locations(apple_loc_path)
 
         # Declare parameters with defaults
         self.declare_parameter('pick_pattern', 'force-heuristic')
@@ -137,6 +137,7 @@ class StartHarvest(Node):
             '/gripper/pressure','/gripper/distance','/joint_states',
             '/tool_pose','/force_torque_sensor_broadcaster/wrench','/servo_node/delta_twist_cmds'
         ]
+        self.pressure_servo_and_pick_controller_topics = list(set(self.pressure_servo_topics + self.pick_controller_topics))
 
         # Batch directories
         self.batch_dir, self.batch_number = self.create_new_batch_directory(self.base_data_dir)
@@ -147,6 +148,7 @@ class StartHarvest(Node):
         self.visual_servo_file_name_prefix = 'visual_servo'
         self.pressure_servo_file_name_prefix = 'pressure_servo'
         self.pick_controller_file_name_prefix = 'pick_controller'
+        self.final_approach_and_pick_file_name_prefix = 'final_approach_and_pick'
 
     def create_new_batch_directory(self, base_directory):
         # Ensure the base directory exists
@@ -213,7 +215,7 @@ class StartHarvest(Node):
 
     def read_apple_locations(self, directory):
         csv_file = Path(directory) / 'apple_locations.csv'
-        data = np.loadtxt(str(csv_file), delimiter=',', skiprows=1)
+        data = np.loadtxt(str(csv_file), delimiter=',')
         if data.ndim == 1:
             data = data[np.newaxis, :]
         return data  # shape is now (N, 3)
@@ -485,12 +487,12 @@ class StartHarvest(Node):
             base_dir = self.batch_dir + f'apple_{idx}/'
 
             # Stage 3: Approach apple
+            input(f'Hit enter to start with apple {idx}')
             self.get_logger().info(f'Approaching apple {idx}')
-            input('Hit enter to start with this apple')
             waypoints = self.call_coord_to_traj(coord)
             self.trigger_arm_mover(waypoints)
 
-            # Stage 4: visual servo
+            # Stage 4: visual servox
             if self.enable_visual_servo:
                 self.run_stage(self.visual_servo_topics, 
                                base_dir + self.visual_servo_file_name_prefix,
@@ -498,28 +500,46 @@ class StartHarvest(Node):
                                action_fn=self.start_visual_servo
                 )
 
-            # Stage 5: pressure servo + grasp
-            if self.enable_pressure_servo:
-                input('Done with visual servoing, hit enter to start pressure servoing')
-                self.run_stage(
-                    self.pressure_servo_topics,
-                    base_dir + self.pressure_servo_file_name_prefix,
-                    servo_frame='base_link',
-                    use_servo=True,
-                    action_fn=self.grasp_controller
-                )           
+            # # Stage 5: pressure servo + grasp
+            # if self.enable_pressure_servo:
+            #     input('Done with visual servoing, hit enter to start pressure servoing')
+            #     self.run_stage(
+            #         self.pressure_servo_topics,
+            #         base_dir + self.pressure_servo_file_name_prefix,
+            #         servo_frame='base_link',
+            #         use_servo=True,
+            #         action_fn=self.grasp_controller
+            #     )           
 
-            # Stage 6: pick controller
-            if self.enable_picking:
-                input('Done with pressure, hit enter to start pick servoing')
+            # # Stage 6: pick controller
+            # if self.enable_picking:
+            #     input('Done with pressure, hit enter to start pick servoing')
+            #     def pick_action():
+            #         # self.start_detection()
+            #         self.pick_controller()
+            #         self.configure_servo('tool0')
+
+            #     self.run_stage(
+            #         self.pick_controller_topics,
+            #         base_dir + self.pick_controller_file_name_prefix,
+            #         servo_frame='base_link',
+            #         use_servo=True,
+            #         action_fn=pick_action
+            #     )
+
+            # Stage 5 & 6: pressure servo + pick controller
+            if self.enable_pressure_servo or self.enable_picking:
+                input('Done with approach, hit enter to start pressure servoing and pick controller')
                 def pick_action():
-                    # self.start_detection()
-                    self.pick_controller()
+                    if self.enable_pressure_servo:
+                        self.grasp_controller()
+                    if self.enable_picking:
+                        self.pick_controller()
                     self.configure_servo('tool0')
 
                 self.run_stage(
-                    self.pick_controller_topics,
-                    base_dir + self.pick_controller_file_name_prefix,
+                    self.pressure_servo_and_pick_controller_topics,
+                    base_dir + self.final_approach_and_pick_file_name_prefix,
                     servo_frame='base_link',
                     use_servo=True,
                     action_fn=pick_action

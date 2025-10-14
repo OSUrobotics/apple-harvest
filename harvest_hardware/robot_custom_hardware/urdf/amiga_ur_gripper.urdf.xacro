@@ -113,12 +113,12 @@
 
   <xacro:gripper_macro/>
 
-  <!-- Realsense for apple locations -->
+  <!-- MAST Realsense for apple locations -->
   <xacro:sensor_d435i 
     parent="$(arg amiga_prefix)base" 
     prefix="mast_"
     use_nominal_extrinsics="$(arg use_nominal_extrinsics)">
-    <origin xyz="0.3 -0.2 1.4667" rpy="0 0 1.8852"/>
+    <origin xyz="0.4064 -0.1778 1.5113" rpy="0 0 1.8852"/>
   </xacro:sensor_d435i>
 
   <!-- Realsense for trunk detections -->
@@ -126,7 +126,7 @@
     parent="$(arg amiga_prefix)base" 
     prefix="base_"
     use_nominal_extrinsics="$(arg use_nominal_extrinsics)">
-    <origin xyz="0.0 0.385 0.5588" rpy="0 0 1.57"/>
+    <origin xyz="0.0 0.3937 0.555625" rpy="0 0 1.57"/>
   </xacro:sensor_d435i>
 
 </robot>

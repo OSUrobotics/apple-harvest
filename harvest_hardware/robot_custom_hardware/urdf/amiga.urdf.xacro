@@ -20,7 +20,7 @@
     <xacro:property name="amiga_collision_box2_z" value='0.25' />
 
     <xacro:property name="amiga_tool0_mount_rotation" value="0.0 0.0 ${pi / 4}"/>
-    <xacro:property name="amiga_tool0_mount_position" value="-0.225 0.323256 1.0"/>
+    <xacro:property name="amiga_tool0_mount_position" value="-0.092075 0.3048 1.04775"/>
 
     <!-- ================== -->
     <!--       Links        -->
@@ -35,24 +35,59 @@
             </geometry>
             <material name="LightLightGrey"/>
         </visual>
-        <!-- <collision>
-            <origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 ${amiga_collision_box0_z / 2}"/>
+        <!-- Linear Rail -->
+        <collision>
+            <origin rpy="0.0 0.0 0.0" xyz="0.0 0.29845 0.97"/>
             <geometry>
-                <box size="${amiga_collision_box0_x} ${amiga_collision_box0_y} ${amiga_collision_box0_z}"/>
+                <box size="1.2 0.2 0.15"/>
             </geometry>
         </collision>
-        <collision>
-            <origin rpy="0.0 0.0 0.0" xyz="0.0 -${amiga_collision_box1_y / 5} ${amiga_collision_box0_z}" />
+        <visual>
+            <origin rpy="0.0 0.0 0.0" xyz="0.0 0.29845 0.97"/>
             <geometry>
-                <box size="${amiga_collision_box1_x} ${amiga_collision_box1_y} ${amiga_collision_box1_z}" />
+                <box size="1.2 0.2 0.15"/>
+            </geometry>
+        </visual>
+        <!-- Mast -->
+        <collision>
+            <origin rpy="0.0 0.0 0.0" xyz="0.57 -0.15 1.03"/>
+            <geometry>
+                <box size="0.07 0.07 0.95"/>
             </geometry>
         </collision>
-        <collision>
-            <origin rpy="0.0 0.0 0.0" xyz="${amiga_collision_box0_x / 2 - amiga_collision_box2_x / 2} ${amiga_collision_box2_y / 3} ${amiga_collision_box0_z + amiga_collision_box1_z}" />
+        <visual>
+            <origin rpy="0.0 0.0 0.0" xyz="0.57 -0.15 1.03"/>
             <geometry>
-                <box size="${amiga_collision_box2_x} ${amiga_collision_box2_y} ${amiga_collision_box2_z}" />
+                <box size="0.07 0.07 0.95"/>
             </geometry>
-        </collision> -->
+        </visual>
+        <!-- GPS & Oak cameras -->
+        <collision>
+            <origin rpy="0.0 0.0 0.0" xyz="0.57 -0.15 1.6"/>
+            <geometry>
+                <box size="0.15 0.2 0.2"/>
+            </geometry>
+        </collision>
+        <visual>
+            <origin rpy="0.0 0.0 0.0" xyz="0.57 -0.15 1.6"/>
+            <geometry>
+                <box size="0.15 0.2 0.2"/>
+            </geometry>
+        </visual>
+        <!-- Amiga Brain -->
+        <collision>
+            <origin rpy="0.0 0.0 0.0" xyz="0.57 -0.315 1.25"/>
+            <geometry>
+                <box size="0.29 0.2 0.175"/>
+            </geometry>
+        </collision>
+        <visual>
+            <origin rpy="0.0 0.0 0.0" xyz="0.57 -0.315 1.25"/>
+            <geometry>
+                <box size="0.29 0.2 0.175"/>
+            </geometry>
+        </visual>
+        <!-- Base -->
         <collision>
             <origin rpy="0.0 0.0 0.0" xyz="0.0 0.0 0.0"/>
             <geometry>

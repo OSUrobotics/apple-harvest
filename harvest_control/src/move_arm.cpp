@@ -47,19 +47,12 @@ private:
 
     std::unique_ptr<moveit::planning_interface::MoveGroupInterface> move_group_;
     std::vector<double> home_joint_positions = {
-        M_PI / 2,
+        M_PI / 4,
         -M_PI / 2,
         2 * M_PI / 3,
         5 * M_PI / 6,
         -M_PI / 2,
         0};
-    // std::vector<double> home_joint_positions = {
-    //     M_PI / 2,
-    //     -2.36,
-    //     2 * M_PI / 3,
-    //     3.40,
-    //     -M_PI / 2,
-    //     0};
 
     std::vector<double> scan_joint_positions = {
         M_PI / 2,
@@ -129,11 +122,6 @@ void MoveArmNode::init_moveit()
 void MoveArmNode::gripper_tip_callback(const geometry_msgs::msg::TransformStamped::SharedPtr msg)
 {
     current_gripper_pose_ = *msg;
-
-//     RCLCPP_INFO(this->get_logger(), "Gripper tip pose received: [%f, %f, %f]",
-//                 current_gripper_pose_.pose.position.x,
-//                 current_gripper_pose_.pose.position.y,
-//                 current_gripper_pose_.pose.position.z);
 }
 
 void MoveArmNode::move_to_home(const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
@@ -206,7 +194,7 @@ void MoveArmNode::move_to_pose(const std::shared_ptr<harvest_interfaces::srv::Mo
     tf2::Quaternion orientation;
     orientation.setRPY(3.14 / 2, 3.14, 3.14);  // Set desired orientation
     geometry_msgs::msg::PoseStamped msg;
-    msg.header.frame_id = "base_link";
+    msg.header.frame_id = "world";
     msg.pose.orientation = tf2::toMsg(orientation);
     msg.pose.position.x = request->position.x;
     msg.pose.position.y = request->position.y;

@@ -19,7 +19,9 @@ def generate_launch_description():
                                   description="IP address of the robot."))
     declared_arguments.append(DeclareLaunchArgument('use_fake_hardware', default_value="false", 
                                   description="Use fake hardware for the UR robot."))
-    declared_arguments.append(DeclareLaunchArgument('launch_rviz', default_value="true", 
+    declared_arguments.append(DeclareLaunchArgument('launch_moveit_rviz', default_value="true", 
+                                  description="Launch RViz for MoveIt visualization."))
+    declared_arguments.append(DeclareLaunchArgument('launch_rviz', default_value="false", 
                                   description="Launch RViz for visualization."))
     declared_arguments.append(DeclareLaunchArgument('description_package', default_value='robot_custom_hardware',
                                   description='Package containing the URDF/Xacro'))
@@ -83,7 +85,7 @@ def generate_launch_description():
             launch_arguments={
                 'ur_type': LaunchConfiguration('ur_type'),
                 'robot_ip': LaunchConfiguration('robot_ip'),
-                'launch_rviz': LaunchConfiguration('launch_rviz'),
+                'launch_rviz': LaunchConfiguration('launch_moveit_rviz'),
                 'description_package': LaunchConfiguration('description_package'),
                 'description_file': LaunchConfiguration('description_file'),
             }.items(),
