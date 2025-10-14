@@ -76,6 +76,7 @@ install(PROGRAMS
   scripts/pressure_averager.py
   scripts/pull_twist_controller.py
   scripts/visual_servo.py
+  scripts/stiffness_controller.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
