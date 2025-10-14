@@ -22,6 +22,20 @@ from .sphere_ransac import Sphere
 import pyrealsense2 as rs
 
 
+def rs_get_color_intrinsics(pipeline_profile: rs.pipeline_profile):
+    # Find the active COLOR stream profile
+    color_stream = None
+    for s in pipeline_profile.get_streams():
+        if s.stream_type() == rs.stream.color:
+            color_stream = s.as_video_stream_profile()
+            break
+    if color_stream is None:
+        raise RuntimeError("No active color stream profile found")
+
+    intr = color_stream.get_intrinsics()
+    # intr contains: width, height, ppx(cx), ppy(cy), fx, fy, and distortion model/coeffs
+    return intr  # rs.intrinsics
+
 class ApplePredictionRS(Node):
     def __init__(self):
         '''Uses realsense 435i to get RGBD image, uses YOLO to segment apples and then creates pointcloud.
@@ -77,11 +91,23 @@ class ApplePredictionRS(Node):
         self.config.enable_stream(rs.stream.depth, 848, 480, rs.format.z16, 30)
         self.config.enable_stream(rs.stream.color, 848, 480, rs.format.bgr8, 30)
 
+        # Start once and keep it running while the node is alive
+        self.profile = self.pipeline.start(self.config)
+
+        # Depth will be aligned to color
+        self.align = rs.align(rs.stream.color)
+
+        # Cache intrinsics for the ACTIVE color stream
+        cintr = rs_get_color_intrinsics(self.profile)
+        self.o3d_intr = o3d.camera.PinholeCameraIntrinsic(
+            cintr.width, cintr.height, cintr.fx, cintr.fy, cintr.ppx, cintr.ppy
+        )
+
         ### Tf2
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
 
-        ### vARS
+        ### VARS
         self.debug_flag = False
         self.marker_counter = 0
         self.ransac_thresh = .0001  # UNITS: m - distance that is considered an inlier point and an outlier point in the sphere fit
@@ -119,16 +145,13 @@ class ApplePredictionRS(Node):
         transformed_poses = PoseArray()
         for i in apple_poses:
             origin = PoseStamped()
-            origin.header.frame_id = "camera_color_optical_frame"
+            origin.header.frame_id = "mast_camera_color_optical_frame"
             origin.pose.position.x = i[0]
             origin.pose.position.y = i[1]
             origin.pose.position.z = i[2]
-            origin.pose.orientation.x = 0.0
-            origin.pose.orientation.y = 0.0
-            origin.pose.orientation.z = 0.0
-            origin.pose.orientation.w = 1.0
+            origin.header.stamp = self.get_clock().now().to_msg()
             try:
-                new_pose = self.tf_buffer.transform(origin, "base_link", rclpy.duration.Duration(seconds=1))
+                new_pose = self.tf_buffer.transform(origin, "world", rclpy.duration.Duration(seconds=1))
                 transformed_poses.poses.append(new_pose.pose)
             except TransformException as e:
                 self.get_logger().info(f'Transform failed: {e}')
@@ -138,7 +161,7 @@ class ApplePredictionRS(Node):
         markers = MarkerArray()
         for i in range(len(apple_poses.poses)):
             marker = Marker()
-            marker.header.frame_id = "base_link"
+            marker.header.frame_id = "world"
             marker.header.stamp = self.get_clock().now().to_msg()
             marker.id = self.marker_counter
             marker.type = Marker.SPHERE
@@ -156,13 +179,9 @@ class ApplePredictionRS(Node):
             marker.pose.position.x = apple_poses.poses[i].position.x
             marker.pose.position.y = apple_poses.poses[i].position.y
             marker.pose.position.z = apple_poses.poses[i].position.z
-            marker.pose.orientation.x = 0.0
-            marker.pose.orientation.y = 0.0
-            marker.pose.orientation.z = 0.0
-            marker.pose.orientation.w = 1.0
             markers.markers.append(marker)
             self.marker_counter += 1
-            self.get_logger().info(f"Apple found at: [{apple_poses.poses[i].position.x}, {apple_poses.poses[i].position.y}, {apple_poses.poses[i].position.z}] with radius {apple_radii[i]}")
+            self.get_logger().info(f"Apple found at: [{np.round(apple_poses.poses[i].position.x, 3)}, {np.round(apple_poses.poses[i].position.y, 3)}, {np.round(apple_poses.poses[i].position.z, 3)}] with radius {np.round(apple_radii[i], 3)}")
         self.marker_pub.publish(markers)
 
 
@@ -202,37 +221,22 @@ class ApplePredictionRS(Node):
 
 
     def take_picture(self):
-        # returns a segmented 
-        # Start streaming
-        profile = self.pipeline.start(self.config)
-        align_to = rs.stream.color
-        align = rs.align(align_to)
-        flush_count = 0
+        # Grab a few frames to flush
+        flush = 0
         while True:
-            # Get frameset of color and depth
             frames = self.pipeline.wait_for_frames()
-            # Align the depth frame to color frame
-            aligned_frames = align.process(frames)
-            # Get aligned frames
-            aligned_depth_frame = aligned_frames.get_depth_frame() # aligned_depth_frame is a 640x480 depth image
-            # aligned_depth_frame = rs.spatial_filter().process(aligned_depth_frame)
-            color_frame = aligned_frames.get_color_frame()
-            # Validate that both frames are valid
-            if not aligned_depth_frame or not color_frame:
+            frames = self.align.process(frames)
+            depth = frames.get_depth_frame()
+            color = frames.get_color_frame()
+            if not depth or not color:
                 continue
-            # flush frames to make sure we get a good image
-            elif flush_count < 30:
-                flush_count += 1
+            if flush < 5:
+                flush += 1
                 continue
-            else:
-                # get images and get segmentation mask from YOLO
-                depth_image = np.asanyarray(aligned_depth_frame.get_data())
-                color_image = np.asanyarray(color_frame.get_data())
-                self.image_timestamp = str(self.get_clock().now().to_msg().sec)
-                break
-        # stop realsense pipeline
-        self.pipeline.stop()
-        return color_image, depth_image
+            depth_image = np.asanyarray(depth.get_data())
+            color_image = np.asanyarray(color.get_data())
+            self.image_timestamp = str(self.get_clock().now().to_msg().sec)
+            return color_image, depth_image
 
     def ransac_apple_estimation(self, pcd):
         center = None
@@ -244,7 +248,6 @@ class ApplePredictionRS(Node):
         return center, radius
 
     def get_apple_centers(self, rgb, depth, masks):
-        #TODO check that apple is far enough, check that apples have been identified. 
         apple_centers = []
         apple_radii = []
         visualization = []
@@ -252,16 +255,21 @@ class ApplePredictionRS(Node):
             # segment only the apple portions
             depth_segmented = np.where(mask, depth, 0)
             print(depth_segmented[depth_segmented>0])
-            if np.median(depth_segmented[depth_segmented>0] > self.distance_thresh * 1000):
+            if np.median(depth_segmented[depth_segmented>0]) > self.distance_thresh * 1000:
                 continue
             # create RGBD image (NEEDS TO BE IN RGB FORMAT NOT BGR TO LOOK RIGHT, doesnt super matter for anything other than visualization)
-            rgb_pc = o3d.geometry.Image(rgb)
-            depth_pc = o3d.geometry.Image(depth_segmented)
-            rgbd_image = o3d.geometry.RGBDImage.create_from_color_and_depth(rgb_pc, depth_pc, convert_rgb_to_intensity=False)
+            rgbd_image = o3d.geometry.RGBDImage.create_from_color_and_depth(
+                o3d.geometry.Image(rgb), 
+                o3d.geometry.Image(depth_segmented), 
+                depth_scale=1000.0,  # depth is in mm, convert to meters
+                convert_rgb_to_intensity=False
+            )
             # Creates pointcloud using camera intrinsics from Realsense 435i
             pcd = o3d.geometry.PointCloud.create_from_rgbd_image(
                 rgbd_image,
-                o3d.camera.PinholeCameraIntrinsic(width=848, height=480, fx=609.6989, fy=609.8549, cx=420.2079, cy=235.2782))
+                # o3d.camera.PinholeCameraIntrinsic(width=848, height=480, fx=609.6989, fy=609.8549, cx=420.2079, cy=235.2782)
+                self.o3d_intr
+            )
             center, radius = self.ransac_apple_estimation(np.array(pcd.points))
 
             if center and radius: 
@@ -283,7 +291,7 @@ class ApplePredictionRS(Node):
             try: 
                 rgb_pc = o3d.geometry.Image(rgb)
                 depth_pc = o3d.geometry.Image(depth)
-                rgbd_image = o3d.geometry.RGBDImage.create_from_color_and_depth(rgb_pc, depth_pc, convert_rgb_to_intensity=False)
+                rgbd_image = o3d.geometry.RGBDImage.create_from_color_and_depth(rgb_pc, depth_pc, depth_scale=1000.0, convert_rgb_to_intensity=False)
                 pcd = o3d.geometry.PointCloud.create_from_rgbd_image(
                     rgbd_image,
                     o3d.camera.PinholeCameraIntrinsic(width=848, height=480, fx=609.6989, fy=609.8549, cx=420.2079, cy=235.2782))

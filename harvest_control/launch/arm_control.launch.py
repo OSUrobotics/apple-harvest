@@ -6,6 +6,8 @@ from launch.substitutions import LaunchConfiguration
 from launch.actions import ExecuteProcess, IncludeLaunchDescription
 from launch_ros.actions import Node
 from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch_ros.actions import SetParameter
+
 
 def generate_launch_description():
     declared_arguments = []
@@ -17,8 +19,14 @@ def generate_launch_description():
                                   description="IP address of the robot."))
     declared_arguments.append(DeclareLaunchArgument('use_fake_hardware', default_value="false", 
                                   description="Use fake hardware for the UR robot."))
-    declared_arguments.append(DeclareLaunchArgument('launch_rviz', default_value="true", 
+    declared_arguments.append(DeclareLaunchArgument('launch_moveit_rviz', default_value="true", 
+                                  description="Launch RViz for MoveIt visualization."))
+    declared_arguments.append(DeclareLaunchArgument('launch_rviz', default_value="false", 
                                   description="Launch RViz for visualization."))
+    declared_arguments.append(DeclareLaunchArgument('description_package', default_value='robot_custom_hardware',
+                                  description='Package containing the URDF/Xacro'))
+    declared_arguments.append(DeclareLaunchArgument('description_file', default_value='amiga_ur_gripper.urdf.xacro',
+                                  description='Path (relative to description_package share) to the Xacro file'))
 
     ### harvest node parameter
     # The pick pattern is dependent on the controller selected with the below parameter
@@ -44,13 +52,18 @@ def generate_launch_description():
     ur_driver_launch_path = os.path.join(
         get_package_share_directory('ur_robot_driver'),
         'launch',
-        'ur_control_custom_hw.launch.py')
+        'ur_control.launch.py')
     
     ur_moveit_launch_path = os.path.join(
         get_package_share_directory('ur_moveit_config'),
         'launch',
-        'ur_moveit_custom_hw.launch.py')
-
+        'ur_moveit.launch.py')
+    
+    move_arm_sublaunch_path = os.path.join(
+        get_package_share_directory('harvest_control'),
+        'launch',
+        'arm_moveit_config.launch.py'
+    )
 
     return LaunchDescription(declared_arguments + [
         # Include UR driver launch
@@ -61,6 +74,8 @@ def generate_launch_description():
                 'robot_ip': LaunchConfiguration('robot_ip'),
                 'use_fake_hardware': LaunchConfiguration('use_fake_hardware'),
                 'launch_rviz': LaunchConfiguration('launch_rviz'),
+                'description_package': LaunchConfiguration('description_package'),
+                'description_file': LaunchConfiguration('description_file'),
             }.items(),
         ),
 
@@ -70,7 +85,23 @@ def generate_launch_description():
             launch_arguments={
                 'ur_type': LaunchConfiguration('ur_type'),
                 'robot_ip': LaunchConfiguration('robot_ip'),
-                'launch_rviz': LaunchConfiguration('launch_rviz'),
+                'launch_rviz': LaunchConfiguration('launch_moveit_rviz'),
+                'description_package': LaunchConfiguration('description_package'),
+                'description_file': LaunchConfiguration('description_file'),
+            }.items(),
+        ),
+
+        IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(move_arm_sublaunch_path),
+            launch_arguments={
+                'ur_type': LaunchConfiguration('ur_type'),
+                'robot_ip': LaunchConfiguration('robot_ip'),
+                'use_fake_hardware': LaunchConfiguration('use_fake_hardware'),
+                'description_package': LaunchConfiguration('description_package'),
+                'description_file': LaunchConfiguration('description_file'),
+                'max_accel': LaunchConfiguration('max_accel'),
+                'max_vel': LaunchConfiguration('max_vel'),
+                'traj_time_step': LaunchConfiguration('traj_time_step'),
             }.items(),
         ),
 
@@ -128,18 +159,18 @@ def generate_launch_description():
             name='pull_twist_controller',
         ),
         
-        # Launch C++ node
-        Node(
-            package='harvest_control',
-            executable='move_arm',
-            name='move_arm_node',
-            parameters=[
-                    {"max_accel": LaunchConfiguration("max_accel"),
-                     "max_vel": LaunchConfiguration("max_vel"),
-                     "traj_time_step": LaunchConfiguration("traj_time_step"),
-                      }
-                    ]
-        ),
+        # # Launch C++ node
+        # Node(
+        #     package='harvest_control',
+        #     executable='move_arm',
+        #     name='move_arm_node',
+        #     parameters=[
+        #             {"max_accel": LaunchConfiguration("max_accel"),
+        #              "max_vel": LaunchConfiguration("max_vel"),
+        #              "traj_time_step": LaunchConfiguration("traj_time_step"),
+        #               }
+        #             ]
+        # ),
 
         Node(
             package='harvest',

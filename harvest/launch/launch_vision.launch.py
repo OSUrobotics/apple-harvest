@@ -75,7 +75,7 @@ def generate_launch_description():
                 ])
 
     palm_camera_node = launch_ros.actions.Node(
-                package="ur5e_custom_hardware",
+                package="robot_custom_hardware",
                 executable="gripper_palm_camera",
                 name="gripper_palm_camera",
                 parameters=[
