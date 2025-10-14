@@ -49,7 +49,8 @@ class ManualAppleLocations(Node):
     def save_to_csv(self, directory):
         # build timestamped filename
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"apple_locations_{timestamp}.csv"
+        #filename = f"apple_locations_{timestamp}.csv"
+        filename = f"apple_locations.csv"
         csv_path = os.path.join(directory, filename)
 
         arr = np.array(self.apple_locations)
@@ -68,8 +69,10 @@ class ManualAppleLocations(Node):
             self.apple_locations.append([p.x, p.y, p.z])
 
         # Create directory and save to CSV
-        directory = self.create_directory()
-        csv_file = self.save_to_csv(directory)
+        logging_directory = self.create_directory()
+        csv_file = self.save_to_csv(logging_directory)
+        access_directory = "/home/grimmlins/ros2_ws/data/apple_locations"
+        _ = self.save_to_csv(access_directory)
         self.get_logger().info(f'Saved apple locations to {csv_file}')
 
 

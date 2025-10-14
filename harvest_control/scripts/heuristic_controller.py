@@ -141,7 +141,7 @@ class PickController(Node):
             new_dir = np.tanh(u)**3 * n_hat + (1-np.tanh(np.abs(u))**3) * t_hat
             new = self.max_velocity*new_dir
         else:
-            # self.get_logger().info("Trying to tension...")
+            #self.get_logger().info("Trying to tension...")
             new = self.max_velocity*self.preferred_pull 
                 
         self.vel_cmd.x = new[0]
