@@ -3,6 +3,7 @@
 import numpy as np
 import os
 import json
+from scipy.spatial import cKDTree
 
 import rclpy
 import rclpy.logging
@@ -39,7 +40,7 @@ class CoordinateToTrajectoryService(Node):
         self.apple_marker_publisher = self.create_publisher(MarkerArray, 'apple_markers_OLD', 10)
 
         # Set the timer to publish markers periodically
-        self.voxel_timer = self.create_timer(1.0, self.publish_voxel_markers)
+        # self.voxel_timer = self.create_timer(1.0, self.publish_voxel_markers)
         self.apple_timer = self.create_timer(1.0, self.publish_apple_markers)
 
         # Get the package share directory
@@ -48,15 +49,18 @@ class CoordinateToTrajectoryService(Node):
         # Load data
         tree_wire_filter_file = os.path.join(package_share_directory, 'resource', 'tree_wire_mask.json')
         self.load_tree_wire_filter_ranges(tree_wire_filter_file)
-        self.voxel_data = np.loadtxt(os.path.join(package_share_directory, 'resource', 'reachable_voxels_20251013_150156.csv'))
-        self.trajectories = np.load(os.path.join(package_share_directory, 'resource', 'reachable_paths_20251013_150156.npy'))
-        self.ik_data = np.loadtxt(os.path.join(package_share_directory, 'resource', 'voxel_ik_data_20251013_150156.csv'), delimiter=',', skiprows=1)
+        self.voxel_data = np.loadtxt(os.path.join(package_share_directory, 'resource', 'reachable_voxels_20251014_114828.csv'))
+        self.trajectories = np.load(os.path.join(package_share_directory, 'resource', 'reachable_paths_20251014_114825.npy'))
+        self.ik_data = np.loadtxt(os.path.join(package_share_directory, 'resource', 'voxel_ik_data_20251014_114825.csv'), delimiter=',', skiprows=1)
 
         # Extract the data
         self.trajectories_orig = np.copy(self.trajectories)
         self.voxel_centers = self.voxel_data[:, :3]
+        self.voxel_centers = self.voxel_centers.astype(np.float32, copy=False)
         self.voxel_centers_orig = np.copy(self.voxel_centers)
         self.target_configurations = self.ik_data[:, :6]
+
+        self.voxel_kdtree = cKDTree(self.voxel_centers.astype(np.float32), leafsize=64)
 
         # Parameters
         # self.num_configs_in_traj = len(self.trajectories)
@@ -118,37 +122,37 @@ class CoordinateToTrajectoryService(Node):
 
         self.apple_marker_publisher.publish(marker_array)
 
-    def publish_voxel_markers(self):
-        marker_array = MarkerArray()
+    # def publish_voxel_markers(self):
+    #     marker_array = MarkerArray()
 
-        for i, center in enumerate(self.voxel_centers):
-            marker = Marker()
-            marker.header.frame_id = 'world'
-            marker.header.stamp = self.get_clock().now().to_msg()
-            marker.ns = 'voxel'
-            marker.id = i
-            marker.action = Marker.ADD
+    #     for i, center in enumerate(self.voxel_centers):
+    #         marker = Marker()
+    #         marker.header.frame_id = 'world'
+    #         marker.header.stamp = self.get_clock().now().to_msg()
+    #         marker.ns = 'voxel'
+    #         marker.id = i
+    #         marker.action = Marker.ADD
             
-            # Create and set the Point object
-            point = Point()
-            point.x = center[0]
-            point.y = center[1]
-            point.z = center[2]
-            marker.pose.position = point
+    #         # Create and set the Point object
+    #         point = Point()
+    #         point.x = center[0]
+    #         point.y = center[1]
+    #         point.z = center[2]
+    #         marker.pose.position = point
 
-            marker.type = Marker.CUBE
-            marker.pose.orientation.w = 1.0
-            marker.scale.x = 0.09  # Size of the cube
-            marker.scale.y = 0.09
-            marker.scale.z = 0.09
-            marker.color.r = 0.0 
-            marker.color.g = 0.0
-            marker.color.b = 1.0  # Blue color
-            marker.color.a = 0.6  # Fully opaque
+    #         marker.type = Marker.CUBE
+    #         marker.pose.orientation.w = 1.0
+    #         marker.scale.x = 0.09  # Size of the cube
+    #         marker.scale.y = 0.09
+    #         marker.scale.z = 0.09
+    #         marker.color.r = 0.0 
+    #         marker.color.g = 0.0
+    #         marker.color.b = 1.0  # Blue color
+    #         marker.color.a = 0.6  # Fully opaque
 
-            marker_array.markers.append(marker)
+    #         marker_array.markers.append(marker)
 
-        self.voxel_marker_publisher.publish(marker_array)
+    #     self.voxel_marker_publisher.publish(marker_array)
 
     def coord_to_traj_callback(self, request, response):
         # Extract the requested coordinate
@@ -286,6 +290,7 @@ class CoordinateToTrajectoryService(Node):
             self.get_logger().warn('Voxel mask positions out of range')
             self.get_logger().info('Resetting to unfiltered voxels...')
             self.voxel_centers = voxel_centers_copy
+            self.voxel_kdtree = cKDTree(self.voxel_centers.astype(np.float32), leafsize=64)
 
         # No tree in range (just wires)
         elif tree_pos == 0:
@@ -296,6 +301,7 @@ class CoordinateToTrajectoryService(Node):
 
             # Apply the combined mask to filter out coordinates and trajectories
             self.voxel_centers = voxel_centers_copy[combined_z_mask]
+            self.voxel_kdtree = cKDTree(self.voxel_centers.astype(np.float32), leafsize=64)
             self.trajectories = self.trajectories[:, :, combined_z_mask]
 
         # Set the mask of the tree pos and wires
@@ -336,25 +342,28 @@ class CoordinateToTrajectoryService(Node):
         return combined_z_mask
 
     def trajectory_to_closest_voxel(self, target_point):
-        """ Find the trajectory to a voxel that the target point is closest to 
+        """Find the trajectory to a voxel that the target point is closest to.
 
-        Args:
-            target_point (float list): target 3D coordinate
-
-        Returns:
-            trajectory: the trajectory to the voxel the target point is closest to
-            distance_error: error between target point and closest voxel center
+        Uses KD-tree with radius cutoff for speed and distance thresholding.
         """
-        # Calculate distances
-        distances = np.linalg.norm(self.voxel_centers - target_point, axis=1)
-        
-        # Find the index of the closest voxel
-        closest_voxel_index = np.argmin(distances)
 
-        distance_error = distances[closest_voxel_index]
+        # Query all voxels within the tolerance radius
+        idxs = self.voxel_kdtree.query_ball_point(target_point, r=self.voxel_distance_tol)
 
-        # Get the associated trajectory to closest voxel
-        return self.trajectories[:, :, closest_voxel_index], distance_error, closest_voxel_index
+        if not idxs:
+            # Nothing within the allowed radius
+            return None, float('inf'), -1
+
+        # Compute exact distances for those candidates
+        candidates = np.asarray(idxs, dtype=int)
+        sub_centers = self.voxel_centers[candidates]
+        d2 = np.sum((sub_centers - target_point) ** 2, axis=1)
+        j = int(np.argmin(d2))
+        idx = int(candidates[j])
+        dist = float(np.sqrt(d2[j]))
+
+        # Return trajectory and distance
+        return self.trajectories[:, :, idx], dist, idx
 
 def main():
     rclpy.init()
