@@ -341,26 +341,6 @@ class CoordinateToTrajectoryService(Node):
         
         return combined_z_mask
 
-    # def trajectory_to_closest_voxel(self, target_point):
-    #     """ Find the trajectory to a voxel that the target point is closest to 
-
-    #     Args:
-    #         target_point (float list): target 3D coordinate
-
-    #     Returns:
-    #         trajectory: the trajectory to the voxel the target point is closest to
-    #         distance_error: error between target point and closest voxel center
-    #     """
-    #     # Calculate distances
-    #     distances = np.linalg.norm(self.voxel_centers - target_point, axis=1)
-        
-    #     # Find the index of the closest voxel
-    #     closest_voxel_index = np.argmin(distances)
-
-    #     distance_error = distances[closest_voxel_index]
-
-    #     # Get the associated trajectory to closest voxel
-    #     return self.trajectories[:, :, closest_voxel_index], distance_error, closest_voxel_index
     def trajectory_to_closest_voxel(self, target_point):
         """Find the trajectory to a voxel that the target point is closest to.
 
