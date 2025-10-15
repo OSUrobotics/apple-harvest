@@ -518,11 +518,7 @@ class StartHarvest(Node):
 
             # Stage 3: Approach apple
             input(f'Hit enter to start with apple {idx}')
-            self.get_logger().info(f'Approaching apple {idx}')
-            input('Hit enter to start with this apple')
-
-            self.get_logger().info(f'apple coordinate is {coord}')
-            
+            self.get_logger().info(f'Approaching apple {idx}: Coord {coord}')
             if self.use_optimal_trajectory:
                 waypoints = self.call_coord_to_traj(coord)
                 self.trigger_arm_mover(waypoints)
@@ -530,11 +526,8 @@ class StartHarvest(Node):
                 self.trigger_move_arm_to_pose(coord)
 
             # Stage 4: visual servo
-            # input('hit enter to start visual servoing')
-            self.get_logger().info(f'Approaching apple {idx}')
-
-
             if self.enable_visual_servo:
+                input('hit enter to start visual servoing')
                 self.run_stage(self.visual_servo_topics, 
                                base_dir + self.visual_servo_file_name_prefix,
                                use_servo=True, 
