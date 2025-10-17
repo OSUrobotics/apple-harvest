@@ -51,6 +51,7 @@
   <!-- includes -->
   <xacro:include filename="$(find robot_custom_hardware)/urdf/amiga.urdf.xacro"/>
   <xacro:include filename="$(find ur_description)/urdf/ur_macro.xacro"/>
+  <xacro:include filename="$(find robot_custom_hardware)/urdf/finray_gripper.urdf.xacro"/>
   <xacro:include filename="$(find robot_custom_hardware)/urdf/gripper.urdf.xacro"/>
   <xacro:include filename="$(find robot_custom_hardware)/urdf/_d435i.urdf.xacro"/>
 
@@ -105,13 +106,22 @@
   </xacro:ur_robot>
 
   <!-- mount gripper -->
-  <joint name="gripper_joint" type="fixed">
+  <joint name="finray_gripper_joint" type="fixed">
+    <parent link="tool0"/>
+    <child  link="finray_gripper_link"/>
+    <origin xyz="0.00 0.00 0.215" rpy="0 0 0"/>
+  </joint>
+
+  <xacro:finray_gripper_macro/>
+
+  <!-- mount gripper -->
+  <!-- <joint name="gripper_joint" type="fixed">
     <parent link="tool0"/>
     <child  link="gripper_link"/>
     <origin xyz="0.00 0.00 0.215" rpy="0 0 0"/>
   </joint>
 
-  <xacro:gripper_macro/>
+  <xacro:gripper_macro/> -->
 
   <!-- MAST Realsense for apple locations -->
   <xacro:sensor_d435i 

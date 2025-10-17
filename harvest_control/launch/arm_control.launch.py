@@ -28,6 +28,9 @@ def generate_launch_description():
     declared_arguments.append(DeclareLaunchArgument('description_file', default_value='amiga_ur_gripper.urdf.xacro',
                                   description='Path (relative to description_package share) to the Xacro file'))
 
+    declared_arguments.append(DeclareLaunchArgument('gripper_type', default_value="old", 
+                                  description="Which gripper is in use ['old', 'finray']"))
+
     ### harvest node parameter
     # The pick pattern is dependent on the controller selected with the below parameter
     declared_arguments.append(DeclareLaunchArgument("pick_pattern", default_value="pull-twist", 
@@ -102,6 +105,7 @@ def generate_launch_description():
                 'max_accel': LaunchConfiguration('max_accel'),
                 'max_vel': LaunchConfiguration('max_vel'),
                 'traj_time_step': LaunchConfiguration('traj_time_step'),
+                'gripper_type': LaunchConfiguration('gripper_type'),
             }.items(),
         ),
 

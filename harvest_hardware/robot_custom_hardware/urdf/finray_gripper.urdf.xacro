@@ -1,0 +1,123 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+    <xacro:macro name="finray_gripper_macro">
+
+    <xacro:include filename="$(find robot_custom_hardware)/urdf/_d435i.urdf.xacro"/>
+
+        <joint name="finray_gripper_scups_joint" type="fixed">
+            <parent link="finray_gripper_link" />
+            <child link="gripper_scups_link" />
+            <origin xyz="0.000 -0.003 0.055" rpy="0 0 -2.618" />
+        </joint>
+
+
+        <link name="gripper_scups_link">
+            <visual>
+                <geometry>
+                    <box size="0.01 0.01 0.01" />
+                </geometry>
+                <material name="green">
+                    <color rgba="0 1 0 1" />
+                </material>
+            </visual>
+        </link>
+
+
+        <joint name="finray_gripper_palm_camera_joint" type="fixed">
+            <parent link="finray_gripper_link" />
+            <child link="gripper_palm_camera_optical_link" />
+            <origin xyz="0.00 0 0.024" rpy="0 0 0" />
+        </joint>
+
+        <!-- <joint name="finray_gripper_top_camera_joint" type="fixed">
+            <parent link="finray_gripper_link" />
+            <child link="finray_gripper_top_camera_link" />
+            <origin xyz="0.00 -.072 -0.0865" rpy="0 0 0" /> -->
+            <!-- <origin xyz="0.009525 -.08255 -0.0445" rpy="0 0 0"/> -->
+        <!-- </joint> -->
+
+        <!-- <link name="finray_gripper_top_camera_link">
+            <collision>
+            <geometry>
+                <box size="0.08 0.05 0.01"/>
+            </geometry>
+            </collision>
+        </link> -->
+
+        <link name="gripper_palm_camera_optical_link">
+            <visual>
+                <geometry>
+                    <box size="0.03 0.03 0.01" />
+                </geometry>
+                <material name="green">
+                    <color rgba="0 1 0 1" />
+                </material>
+            </visual>
+        </link>
+
+        <link name="finray_gripper_link">
+            <collision>
+                <origin xyz="-0.01125 -0.012 -0.07725" rpy="1.5708 0  -0.5236" />
+                <!-- With out Depth camera  -->
+                <!-- <origin xyz="-0.0037 -0.0005 -0.0723" rpy="1.5708 0  -0.5236" />  -->
+                <!-- <geometry>
+                    <box size="0.12 0.12 0.2" />
+                </geometry> -->36
+                <!-- <geometry>
+                    <cylinder length="0 .241" radius="0.110"/>
+                </geometry> -->
+                <geometry>
+                    <mesh
+                        filename="package://robot_custom_hardware/meshes/end_effectors/Fin_Ray-URDF_Collision_Body-Depth_Camera-Simplified.stl"
+                        scale="0.0001 0.0001 0.0001" />
+                </geometry>
+            </collision>
+            <visual>
+                <origin xyz="0.0011  0.0017 -0.1846" rpy="1.5708 0 3.14" />
+                <geometry>
+                    <mesh
+                        filename="package://robot_custom_hardware/meshes/end_effectors/Fin_Ray_2025-Gripper_Full_Assembly-Depth_Camera-Simplified.stl"
+                        scale="0.0001 0.0001 0.0001" />
+                </geometry>
+                <material name="ur5_blue">
+                    <color rgba="0.45 0.62 0.9 1" />
+                </material>
+            </visual>
+        </link>
+
+        <joint name="finray_camera_joint" type="fixed">
+            <!-- <parent link="gripper_link" /> -->
+            <parent link="base_link" />
+            <child link="finray_camera_link" />
+            <!-- <origin xyz="0.00 0.00 0.5" rpy="0 0 0" /> -->
+            <origin xyz="0.00 -0.1 0.5" rpy="-1.57079 0 0" />
+        </joint>
+
+        <link name="finray_camera_link">
+            <!-- <visual>
+                <geometry>
+                    <box size="0.03 0.03 0.01" />
+                </geometry>
+                <material name="green">
+                    <color rgba="0 1 0 1" />
+                </material>
+            </visual> -->
+        </link>
+
+        <xacro:sensor_d435i 
+            parent="finray_gripper_link" 
+            prefix="gripper_"
+            use_nominal_extrinsics="$(arg use_nominal_extrinsics)">
+            <origin xyz="-0.09 -0.06 -0.00875" rpy="0.5236 -1.5708 0"/>
+            <!-- <origin xyz="-0.065 -0.04075 -0.00875" rpy="0.5236 -1.5708 0"/> -->
+        </xacro:sensor_d435i>
+
+        <!-- <xacro:arg name="use_nominal_extrinsics" default="false" />
+    <xacro:include filename="$(find realsense2_description)/urdf/_d435i.urdf.xacro"/>
+    <xacro:sensor_d435i parent="gripper_top_camera_link" use_nominal_extrinsics="$(arg
+        use_nominal_extrinsics)">
+      <origin xyz="0 0 -0.5" rpy="0 -1.571 1.571"/>
+    </xacro:sensor_d435i> -->
+
+    </xacro:macro>
+</robot>
