@@ -1,322 +1,381 @@
 #!/usr/bin/env python3
-
-# ROS2
 import rclpy
 from rclpy.node import Node
+from rclpy.duration import Duration
+from rclpy.qos import qos_profile_sensor_data, QoSProfile, ReliabilityPolicy, HistoryPolicy
+from rclpy.callback_groups import ReentrantCallbackGroup
+
+from threading import Event
+from sensor_msgs.msg import Image, CameraInfo
 from visualization_msgs.msg import Marker, MarkerArray
 from geometry_msgs.msg import PoseStamped, PoseArray
 from harvest_interfaces.srv import ApplePrediction
-# TF2
-from tf2_ros.buffer import Buffer
-from tf2_ros.transform_listener import TransformListener
-from tf2_ros import TransformException
-import tf2_geometry_msgs
-# Image processing
-import cv2
+
+from tf2_geometry_msgs import do_transform_pose_stamped
+from tf2_ros import Buffer, TransformListener, TransformException
+
+from cv_bridge import CvBridge
 import numpy as np
+import cv2
 from ultralytics import YOLO
-# pointcloud reconstruction
 import open3d as o3d
+from message_filters import ApproximateTimeSynchronizer, Subscriber
+
 from .sphere_ransac import Sphere
-# realsense library
-import pyrealsense2 as rs
 
 
-def rs_get_color_intrinsics(pipeline_profile: rs.pipeline_profile):
-    # Find the active COLOR stream profile
-    color_stream = None
-    for s in pipeline_profile.get_streams():
-        if s.stream_type() == rs.stream.color:
-            color_stream = s.as_video_stream_profile()
-            break
-    if color_stream is None:
-        raise RuntimeError("No active color stream profile found")
+def stamp_to_ns(stamp) -> int:
+    return stamp.sec * 10**9 + stamp.nanosec
 
-    intr = color_stream.get_intrinsics()
-    # intr contains: width, height, ppx(cx), ppy(cy), fx, fy, and distortion model/coeffs
-    return intr  # rs.intrinsics
 
-class ApplePredictionRS(Node):
+class ApplePredictionFromTopics(Node):
     def __init__(self):
-        '''Uses realsense 435i to get RGBD image, uses YOLO to segment apples and then creates pointcloud.
-        Then uses RANSAC to fit a sphere to each apple to estimate the position and radius.'''
-        super().__init__("apple_prediction_RS_node")
+        super().__init__("apple_prediction_node")
 
-        ### SERVICE
-        self.prediction_srv = self.create_service(ApplePrediction, "apple_prediction", self.prediction_callback_srv)
-
-        ### PUBLISHER
-        self.marker_pub = self.create_publisher(MarkerArray, "apple_markers", 10)
-
-        ### PARAMETERS
+        # --- params ---
+        self.declare_parameter("camera_ns", "camera/mast_camera")
+        self.declare_parameter("use_aligned_depth", True)
+        self.declare_parameter("source_frame", "mast_camera_color_optical_frame")
+        self.declare_parameter("target_frame", "world")
         self.declare_parameter("prediction_model_path", "NA")
         self.declare_parameter("prediction_yolo_conf", 0.85)
         self.declare_parameter("prediction_radius_min", 0.03)
         self.declare_parameter("prediction_radius_max", 0.06)
         self.declare_parameter("prediction_distance_max", 1.0)
         self.declare_parameter("scan_data_path", "NOTGIVEN")
-        self.confidence_thresh = self.get_parameter("prediction_yolo_conf").get_parameter_value().double_value
-        self.lower_rad_bound = self.get_parameter("prediction_radius_min").get_parameter_value().double_value
-        self.upper_rad_bound = self.get_parameter("prediction_radius_max").get_parameter_value().double_value
-        self.distance_thresh = self.get_parameter("prediction_distance_max").get_parameter_value().double_value
-        self.model_path = self.get_parameter("prediction_model_path").get_parameter_value().string_value
-        self.scan_data_path = self.get_parameter("scan_data_path").get_parameter_value().string_value
 
-        self.get_logger().info(self.scan_data_path)
+        self.ns = self.get_parameter("camera_ns").value
+        self.use_aligned = bool(self.get_parameter("use_aligned_depth").value)
+        self.source_frame = self.get_parameter("source_frame").value
+        self.target_frame = self.get_parameter("target_frame").value
+        self.save_dir = self.get_parameter("scan_data_path").value
+        self.conf_thr = float(self.get_parameter("prediction_yolo_conf").value)
+        self.rad_min = float(self.get_parameter("prediction_radius_min").value)
+        self.rad_max = float(self.get_parameter("prediction_radius_max").value)
+        self.dist_max = float(self.get_parameter("prediction_distance_max").value)
 
-        ### YOLO SETUP
-        self.model = YOLO(self.model_path)  # pretrained YOLOv8n model
-        if self.model: 
-            self.get_logger().info("Succesfully loaded YOLO model.") 
-        else:
-            self.get_logger().error("Could not load YOLO model.") 
-        
-        ### REALSENSE SETUP
-        # get camera info
-        self.pipeline = rs.pipeline()
-        self.config = rs.config()
-        pipeline_wrapper = rs.pipeline_wrapper(self.pipeline)
-        pipeline_profile = self.config.resolve(pipeline_wrapper)
-        device = pipeline_profile.get_device() 
-        found_rgb = False
-        for s in device.sensors:
-            if s.get_info(rs.camera_info.name) == 'RGB Camera':
-                found_rgb = True
-                break
-        if not found_rgb:
-            self.get_logger().error("Realsense RGB camera could not be found")
-        else:
-            self.get_logger().info("Realsense camera found.")
-        # set resolution and format
-        self.config.enable_stream(rs.stream.depth, 848, 480, rs.format.z16, 30)
-        self.config.enable_stream(rs.stream.color, 848, 480, rs.format.bgr8, 30)
+        # --- I/O ---
+        self.service_group = ReentrantCallbackGroup()
 
-        # Start once and keep it running while the node is alive
-        self.profile = self.pipeline.start(self.config)
-
-        # Depth will be aligned to color
-        self.align = rs.align(rs.stream.color)
-
-        # Cache intrinsics for the ACTIVE color stream
-        cintr = rs_get_color_intrinsics(self.profile)
-        self.o3d_intr = o3d.camera.PinholeCameraIntrinsic(
-            cintr.width, cintr.height, cintr.fx, cintr.fy, cintr.ppx, cintr.ppy
+        self.marker_pub = self.create_publisher(MarkerArray, "apple_markers", 10)
+        self.srv = self.create_service(
+            ApplePrediction, "apple_prediction", self.on_predict, callback_group=self.service_group
+        )
+        self.annotated_pub = self.create_publisher(
+            Image,
+            "apple_annotated",
+            QoSProfile(
+                reliability=ReliabilityPolicy.RELIABLE,
+                history=HistoryPolicy.KEEP_LAST,
+                depth=10
+            )
         )
 
-        ### Tf2
+        # --- TF ---
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
 
-        ### VARS
-        self.debug_flag = False
-        self.marker_counter = 0
-        self.ransac_thresh = .0001  # UNITS: m - distance that is considered an inlier point and an outlier point in the sphere fit
-        self.ransac_iters = 1000    # number of iterations for ransac to run
-        self.apple_centers = None
-        self.apple_radii = None
-        self.c2 = 0
-        self.image_timestamp = "ERROR"
-        self.scan_count = 0
-        self.yolo_result = None
+        # --- YOLO ---
+        self.model = YOLO(self.get_parameter("prediction_model_path").value)
 
+        # --- subs + sync ---
+        self.bridge = CvBridge()
 
-    def callback(self):
+        color_topic = f"/{self.ns}/color/image_raw"
+        if self.use_aligned:
+            depth_topic = f"/{self.ns}/aligned_depth_to_color/image_raw"
+            cinfo_topic = f"/{self.ns}/color/camera_info"
+        else:
+            depth_topic = f"/{self.ns}/depth/image_rect_raw"
+            cinfo_topic = f"/{self.ns}/depth/camera_info"
 
-        if self.apple_centers and self.apple_radii and self.c2 < 1:
-            print("HERE")
-            self.publish_markers(self.apple_centers, self.apple_radii)
-            self.c2 += 1
+        color_sub = Subscriber(self, Image, color_topic, qos_profile=qos_profile_sensor_data)
+        depth_sub = Subscriber(self, Image, depth_topic, qos_profile=qos_profile_sensor_data)
 
-    def prediction_callback_srv(self, request, response):
-        rgb_image, depth_image = self.take_picture()
-        apple_masks = self.segment_apples(rgb_image)
-        rgb_image = cv2.cvtColor(rgb_image, cv2.COLOR_BGR2RGB)
-        centers, radii = self.get_apple_centers(rgb_image, depth_image, apple_masks)
-        transformed_poses = self.transform_apple_poses(centers)
-        self.publish_markers(transformed_poses, radii)
-        response.apple_poses = transformed_poses
-        self.apple_centers = transformed_poses
-        self.apple_radii = radii
-        self.c2 = 0
-        return response
+        info_qos = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=10
+        )
+        cinfo_sub = Subscriber(self, CameraInfo, cinfo_topic, qos_profile=info_qos)
 
+        # Smaller slop is better when color and aligned depth are tightly stamped
+        self.sync = ApproximateTimeSynchronizer(
+            [color_sub, depth_sub, cinfo_sub],
+            queue_size=20,
+            slop=0.01
+        )
+        self.sync.registerCallback(self._sync_cb)
 
-    def transform_apple_poses(self, apple_poses):
-        transformed_poses = PoseArray()
-        for i in apple_poses:
-            origin = PoseStamped()
-            origin.header.frame_id = "mast_camera_color_optical_frame"
-            origin.pose.position.x = i[0]
-            origin.pose.position.y = i[1]
-            origin.pose.position.z = i[2]
-            origin.header.stamp = self.get_clock().now().to_msg()
-            try:
-                new_pose = self.tf_buffer.transform(origin, "world", rclpy.duration.Duration(seconds=1))
-                transformed_poses.poses.append(new_pose.pose)
-            except TransformException as e:
-                self.get_logger().info(f'Transform failed: {e}')
-        return transformed_poses
-    
-    def publish_markers(self, apple_poses, apple_radii):
-        markers = MarkerArray()
-        for i in range(len(apple_poses.poses)):
-            marker = Marker()
-            marker.header.frame_id = "world"
-            marker.header.stamp = self.get_clock().now().to_msg()
-            marker.id = self.marker_counter
-            marker.type = Marker.SPHERE
-            marker.action = Marker.ADD
-            # Set the scale
-            marker.scale.x = apple_radii[i] * 2
-            marker.scale.y = apple_radii[i] * 2
-            marker.scale.z = apple_radii[i] * 2
-            # Set the color
-            marker.color.r = 1.0
-            marker.color.g = 0.0
-            marker.color.b = 0.0
-            marker.color.a = 1.0
-            # Set the pose
-            marker.pose.position.x = apple_poses.poses[i].position.x
-            marker.pose.position.y = apple_poses.poses[i].position.y
-            marker.pose.position.z = apple_poses.poses[i].position.z
-            markers.markers.append(marker)
-            self.marker_counter += 1
-            self.get_logger().info(f"Apple found at: [{np.round(apple_poses.poses[i].position.x, 3)}, {np.round(apple_poses.poses[i].position.y, 3)}, {np.round(apple_poses.poses[i].position.z, 3)}] with radius {np.round(apple_radii[i], 3)}")
-        self.marker_pub.publish(markers)
+        # Storage for the most recent synced tuple and coordination for on-demand grabbing
+        self._last_triplet = None  # (color_msg, depth_msg, cinfo_msg)
+        self._new_triplet_event = Event()
+        self._last_used_color_ns = -1  # nanoseconds stamp of last used color frame
 
+        # --- RANSAC config ---
+        self.ransac = Sphere()
+        self.ransac_thresh = 1e-4
+        self.ransac_iters = 1000
 
-    def segment_apples(self, image):
-        # returns masks of apples, each apple has its own mask. 0 for no apple, 255 for apple.  
-        # predict segmentation masks using model
-        results = self.model(image, conf=self.confidence_thresh)[0]
-        apple_masks = []
-        self.yolo_result = results
+        self.get_logger().info(
+            f"ApplePredictionFromTopics ready. Subscribing:\n"
+            f"  color: {color_topic}\n  depth: {depth_topic}\n  cinfo: {cinfo_topic}"
+        )
 
-        # creates a mask for each apple detected over the original image
-        for i in results:
-            # create empty mask
-            if results.masks != None: 
-                img_h, img_w = results.masks.orig_shape
-                mask = np.zeros((img_h, img_w), dtype=np.uint8)
-                # fill in mask with white where predicted apple segmentation is
-                cv2.fillPoly(mask, np.int32([i.masks.xy]), (255, 255, 255))
-                apple_masks.append(mask)
-            else:
-                img_h, img_w = results.orig_shape
-                mask = np.zeros((img_h, img_w), dtype=np.uint8)
-                x,y,w,h = i.boxes.xyxy.cpu().numpy()[0]
-                cv2.rectangle(mask, (int(x), int(y)), (int(w), int(h)), (255,255,255), -1)
-                apple_masks.append(mask)
+    # Keep the sync callback light: just stash and signal
+    def _sync_cb(self, color_msg, depth_msg, cinfo_msg):
+        self._last_triplet = (color_msg, depth_msg, cinfo_msg)
+        self._new_triplet_event.set()
 
-        # Optional visualization for debugging
-        if self.debug_flag: 
-            results.show()  # display to screen
-            for i in apple_masks:
-                cv2.imshow("apple_masks", i)
-                key = cv2.waitKey(0)
-                self.get_logger().info("Press esc to view next apple mask.")
-                if key == 27:
-                    cv2.destroyAllWindows()
-        return apple_masks
+    def _wait_for_new_synced(self, timeout_sec=1.0):
+        """
+        Wait until there is a synced tuple whose color stamp is newer than
+        the last one we used. Returns (color_msg, depth_msg, cinfo_msg) or None on timeout.
+        """
+        # Fast path: if we already have a newer triplet, grab it immediately
+        if self._last_triplet is not None:
+            c, d, i = self._last_triplet
+            if stamp_to_ns(c.header.stamp) > self._last_used_color_ns:
+                return c, d, i
 
+        # Otherwise wait for next signal
+        self._new_triplet_event.clear()
+        if not self._new_triplet_event.wait(timeout=timeout_sec):
+            return None
 
-    def take_picture(self):
-        # Grab a few frames to flush
-        flush = 0
-        while True:
-            frames = self.pipeline.wait_for_frames()
-            frames = self.align.process(frames)
-            depth = frames.get_depth_frame()
-            color = frames.get_color_frame()
-            if not depth or not color:
+        self._new_triplet_event.clear()
+        triplet = self._last_triplet
+        if triplet is None:
+            return None
+
+        color_msg, depth_msg, cinfo_msg = triplet
+        if stamp_to_ns(color_msg.header.stamp) <= self._last_used_color_ns:
+            # Keep waiting a bit longer for a truly newer one
+            if not self._new_triplet_event.wait(timeout=timeout_sec):
+                return None
+            self._new_triplet_event.clear()
+            triplet = self._last_triplet
+
+        return triplet
+
+    def on_predict(self, req, res):
+        # Block for fresh synced frames
+        triplet = self._wait_for_new_synced(timeout_sec=2.0)
+        if triplet is None:
+            self.get_logger().warn("Timed out waiting for fresh synced frames.")
+            res.apple_poses = PoseArray()  # ensure valid but empty
+            return res
+
+        color_msg, depth_msg, cinfo_msg = triplet
+        self._last_used_color_ns = stamp_to_ns(color_msg.header.stamp)
+
+        # Convert here so YOLO runs on fresh frames
+        color_bgr = self.bridge.imgmsg_to_cv2(color_msg, desired_encoding="bgr8")
+        depth_mm = self.bridge.imgmsg_to_cv2(depth_msg, desired_encoding="passthrough")  # uint16 mm
+
+        # 1) Run YOLO
+        results = self.model(color_bgr, conf=self.conf_thr)[0]
+
+        # Build masks and paired bboxes
+        masks = []
+        bboxes = []
+        H, W = color_bgr.shape[:2]
+
+        if results.boxes is not None and len(results.boxes) > 0:
+            xyxy = results.boxes.xyxy.cpu().numpy().astype(int)
+        else:
+            xyxy = np.empty((0, 4), dtype=int)
+
+        if results.masks is not None and len(results) > 0:
+            for i in range(len(results)):
+                poly_list = results.masks.xy[i]
+                mask = np.zeros((H, W), dtype=np.uint8)
+                if isinstance(poly_list, np.ndarray):
+                    cv2.fillPoly(mask, [np.int32(poly_list)], 255)
+                else:
+                    for poly in poly_list:
+                        cv2.fillPoly(mask, [np.int32(poly)], 255)
+                masks.append(mask)
+
+                if i < len(xyxy):
+                    x1, y1, x2, y2 = xyxy[i]
+                else:
+                    ys, xs = np.where(mask > 0)
+                    if xs.size > 0:
+                        x1, x2 = int(xs.min()), int(xs.max())
+                        y1, y2 = int(ys.min()), int(ys.max())
+                    else:
+                        x1 = y1 = 0; x2 = y2 = 0
+                bboxes.append((x1, y1, x2, y2))
+        else:
+            for i in range(len(xyxy)):
+                x1, y1, x2, y2 = xyxy[i]
+                mask = np.zeros((H, W), dtype=np.uint8)
+                cv2.rectangle(mask, (x1, y1), (x2, y2), 255, -1)
+                masks.append(mask)
+                bboxes.append((x1, y1, x2, y2))
+
+        # 2) Intrinsics from CameraInfo
+        K = cinfo_msg.k  # [fx,0,cx, 0,fy,cy, 0,0,1]
+        fx, fy, cx, cy = K[0], K[4], K[2], K[5]
+        w, h = cinfo_msg.width, cinfo_msg.height
+        o3d_intr = o3d.camera.PinholeCameraIntrinsic(w, h, fx, fy, cx, cy)
+
+        # 3) Fit spheres
+        rgb = cv2.cvtColor(color_bgr, cv2.COLOR_BGR2RGB)
+        centers, radii, kept_bboxes = self._estimate_apples(
+            rgb, depth_mm, masks, bboxes, o3d_intr
+        )
+
+        # 4) Transform to target frame
+        poses_world = self._to_pose_array(centers, self.source_frame, self.target_frame)
+
+        # 5) Publish markers
+        self._publish_markers(poses_world, radii, frame_id=self.target_frame)
+
+        # 6) Publish annotated image
+        self._publish_annotated_image(color_bgr, kept_bboxes, header=color_msg.header)
+
+        # 7) Fill response
+        res.apple_poses = poses_world
+        return res
+
+    def _estimate_apples(self, rgb, depth_mm, masks, bboxes, o3d_intr):
+        centers, radii, kept_bboxes = [], [], []
+
+        for m, bbox in zip(masks, bboxes):
+            if m.shape != depth_mm.shape:
+                m = cv2.resize(m, (depth_mm.shape[1], depth_mm.shape[0]), interpolation=cv2.INTER_NEAREST)
+
+            depth_masked = np.where(m > 0, depth_mm, 0)
+            valid = depth_masked[depth_masked > 0]
+            if valid.size == 0:
                 continue
-            if flush < 5:
-                flush += 1
+            if np.median(valid) > self.dist_max * 1000.0:
                 continue
-            depth_image = np.asanyarray(depth.get_data())
-            color_image = np.asanyarray(color.get_data())
-            self.image_timestamp = str(self.get_clock().now().to_msg().sec)
-            return color_image, depth_image
 
-    def ransac_apple_estimation(self, pcd):
-        center = None
-        radius = None
-        sph_ransac = Sphere()
-        center, radius, inliers = sph_ransac.fit(pcd, thresh=self.ransac_thresh, maxIteration=self.ransac_iters, 
-                                                 lower_rad_bound=self.lower_rad_bound, upper_rad_bound=self.upper_rad_bound)
-
-        return center, radius
-
-    def get_apple_centers(self, rgb, depth, masks):
-        apple_centers = []
-        apple_radii = []
-        visualization = []
-        for mask in masks: 
-            # segment only the apple portions
-            depth_segmented = np.where(mask, depth, 0)
-            print(depth_segmented[depth_segmented>0])
-            if np.median(depth_segmented[depth_segmented>0]) > self.distance_thresh * 1000:
-                continue
-            # create RGBD image (NEEDS TO BE IN RGB FORMAT NOT BGR TO LOOK RIGHT, doesnt super matter for anything other than visualization)
-            rgbd_image = o3d.geometry.RGBDImage.create_from_color_and_depth(
-                o3d.geometry.Image(rgb), 
-                o3d.geometry.Image(depth_segmented), 
-                depth_scale=1000.0,  # depth is in mm, convert to meters
+            rgbd = o3d.geometry.RGBDImage.create_from_color_and_depth(
+                o3d.geometry.Image(rgb),
+                o3d.geometry.Image(depth_masked),
+                depth_scale=1000.0,
                 convert_rgb_to_intensity=False
             )
-            # Creates pointcloud using camera intrinsics from Realsense 435i
-            pcd = o3d.geometry.PointCloud.create_from_rgbd_image(
-                rgbd_image,
-                # o3d.camera.PinholeCameraIntrinsic(width=848, height=480, fx=609.6989, fy=609.8549, cx=420.2079, cy=235.2782)
-                self.o3d_intr
+            pcd = o3d.geometry.PointCloud.create_from_rgbd_image(rgbd, o3d_intr)
+
+            pts = np.asarray(pcd.points)
+            if pts.shape[0] < 50:
+                continue
+
+            c, r, _ = self.ransac.fit(
+                pts,
+                thresh=self.ransac_thresh,
+                maxIteration=self.ransac_iters,
+                lower_rad_bound=self.rad_min,
+                upper_rad_bound=self.rad_max
             )
-            center, radius = self.ransac_apple_estimation(np.array(pcd.points))
+            if c is not None and r is not None:
+                centers.append(c)
+                radii.append(r)
+                kept_bboxes.append(bbox)
 
-            if center and radius: 
-                apple_centers.append(center)
-                apple_radii.append(radius)
-                mesh_sphere = o3d.geometry.TriangleMesh.create_sphere(radius=radius)
-                mesh_sphere.compute_vertex_normals()
-                mesh_sphere.paint_uniform_color([1,0,0])
-                mesh_sphere.translate(np.array(center), relative=False)
-                visualization.append(pcd)
-                visualization.append(mesh_sphere)
+        return centers, radii, kept_bboxes
 
-        if self.debug_flag:
-            pass
-            # o3d.visualization.draw_geometries(visualization)
+    def _to_pose_array(self, centers_xyz, source_frame, target_frame):
+        pa = PoseArray()
+        now = self.get_clock().now().to_msg()
 
-        # saving all data
-        if self.scan_data_path != "NOTGIVEN":
-            try: 
-                rgb_pc = o3d.geometry.Image(rgb)
-                depth_pc = o3d.geometry.Image(depth)
-                rgbd_image = o3d.geometry.RGBDImage.create_from_color_and_depth(rgb_pc, depth_pc, depth_scale=1000.0, convert_rgb_to_intensity=False)
-                pcd = o3d.geometry.PointCloud.create_from_rgbd_image(
-                    rgbd_image,
-                    o3d.camera.PinholeCameraIntrinsic(width=848, height=480, fx=609.6989, fy=609.8549, cx=420.2079, cy=235.2782))
-                o3d.io.write_point_cloud(self.scan_data_path + "/pc_" + str(self.scan_count) + "_" + self.image_timestamp + ".ply", pcd)
-                np.save(self.scan_data_path + "/mask_" + str(self.scan_count) + "_" + self.image_timestamp + ".npy", masks)
-                cv2.imwrite(self.scan_data_path + "/rgb_" + str(self.scan_count) + "_" + self.image_timestamp + ".png", rgb)
-                cv2.imwrite(self.scan_data_path + "/depth_" + str(self.scan_count) + "_" + self.image_timestamp + ".tiff", depth)
-                self.yolo_result.save(filename=self.scan_data_path + "/yolo_" + str(self.scan_count) + "_" + self.image_timestamp + ".png")
-                self.scan_count += 1
-                self.get_logger().info("Data from scan saved.")
-            except:
-                self.get_logger().error("Data from scan unable to be saved")
+        try:
+            tf = self.tf_buffer.lookup_transform(
+                target_frame,
+                source_frame,
+                rclpy.time.Time(),
+                timeout=Duration(seconds=1.0)
+            )
+        except TransformException as e:
+            self.get_logger().warn(f"TF failed {source_frame}->{target_frame}: {e}")
+            return pa
+
+        for c in centers_xyz:
+            src = PoseStamped()
+            src.header.frame_id = source_frame
+            src.header.stamp = now
+            src.pose.position.x = float(c[0])
+            src.pose.position.y = float(c[1])
+            src.pose.position.z = float(c[2])
+            src.pose.orientation.x = 0.0
+            src.pose.orientation.y = 0.0
+            src.pose.orientation.z = 0.0
+            src.pose.orientation.w = 1.0
+
+            out = do_transform_pose_stamped(src, tf)
+            pa.poses.append(out.pose)
+
+        return pa
+
+    def _publish_markers(self, poses, radii, frame_id="world"):
+        arr = MarkerArray()
+        for i, pose in enumerate(poses.poses):
+            m = Marker()
+            m.header.frame_id = frame_id
+            m.header.stamp = self.get_clock().now().to_msg()
+            m.id = i
+            m.type = Marker.SPHERE
+            m.action = Marker.ADD
+            r = float(radii[i]) if i < len(radii) else 0.04
+            m.scale.x = m.scale.y = m.scale.z = 2.0 * r
+            m.color.r = 1.0
+            m.color.g = 0.0
+            m.color.b = 0.0
+            m.color.a = 1.0
+            m.pose = pose
+            arr.markers.append(m)
+        self.marker_pub.publish(arr)
+
+    def _publish_annotated_image(self, bgr_img, bboxes, header=None):
+        if bgr_img is None:
+            return
+        annotated = bgr_img.copy()
+
+        for i, (x1, y1, x2, y2) in enumerate(bboxes):
+            h, w = annotated.shape[:2]
+            x1c, y1c = max(0, x1), max(0, y1)
+            x2c, y2c = min(w - 1, x2), min(h - 1, y2)
+            cv2.rectangle(annotated, (x1c, y1c), (x2c, y2c), (0, 255, 0), 2)
+            label = str(i)
+            (tw, th), baseline = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.9, 2)
+            cv2.rectangle(
+                annotated,
+                (x1c, max(0, y1c - th - baseline - 6)),
+                (x1c + tw + 8, y1c),
+                (0, 255, 0),
+                thickness=-1
+            )
+            cv2.putText(
+                annotated, label,
+                (x1c + 4, y1c - 6),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.9,
+                (0, 0, 0), 2, cv2.LINE_AA
+            )
+
+        msg = self.bridge.cv2_to_imgmsg(annotated, encoding="bgr8")
+        if header is not None:
+            msg.header = header
         else:
-            self.get_logger().error("No path given to save scan data")
+            msg.header.stamp = self.get_clock().now().to_msg()
+            msg.header.frame_id = self.source_frame
+        self.annotated_pub.publish(msg)
 
-        return apple_centers, apple_radii
-        
 
-            
-
-def main(args=None):
-    rclpy.init(args=args)
-    apple_prediction_node = ApplePredictionRS()
-    rclpy.spin(apple_prediction_node)
+def main():
+    rclpy.init()
+    node = ApplePredictionFromTopics()
+    from rclpy.executors import MultiThreadedExecutor
+    exec = MultiThreadedExecutor(num_threads=2)  # needed so the service can wait while subs spin
+    exec.add_node(node)
+    exec.spin()
+    exec.shutdown()
     rclpy.shutdown()
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     main()
