@@ -12,7 +12,7 @@ def generate_launch_description():
     # ### apple_prediction node parameters
     # # Segmentation model is trained on open source datasets and can give slightly more accurate 3D reconstruction results. 
     # # detection models are trained on Prosser data and may be more robust to field conditions.
-    declared_arguments.append(DeclareLaunchArgument("prediction_model", default_value="best_segmentation.pt", 
+    declared_arguments.append(DeclareLaunchArgument("prediction_model", default_value="v9e.pt", 
                                   description="Yolo model used, can specify any model in the harvest_vision/yolo_models directory."))
     declared_arguments.append(DeclareLaunchArgument("prediction_yolo_conf", default_value="0.85", 
                                   description="Confidence threshold for yolo model in apple_prediction node."))
@@ -20,14 +20,14 @@ def generate_launch_description():
                                   description="Minimum radius bound (meters) for ransac sphere fit in apple_prediction node."))
     declared_arguments.append(DeclareLaunchArgument("prediction_radius_max", default_value="0.06", 
                                   description="Maximum radius bound (meters) for ransac sphere fit in apple_prediction node."))
-    declared_arguments.append(DeclareLaunchArgument("prediction_distance_max", default_value="1.0", 
+    declared_arguments.append(DeclareLaunchArgument("prediction_distance_max", default_value="2.0", 
                                   description="Distance threshold in meters for detecting apples. Filters out backgound apples."))
     declared_arguments.append(DeclareLaunchArgument("scan_data_path", default_value="NOTGIVEN", 
                                   description="Data path to save pointcloud, realsense rgb image, realsense depth image and masks from prediction node. In format home/dir/data do not add slash at the end."))
 
 
     ### visual_servo node parameters
-    declared_arguments.append(DeclareLaunchArgument("vservo_model", default_value="best_segmentation.pt", 
+    declared_arguments.append(DeclareLaunchArgument("vservo_model", default_value="v9e.pt", 
                                   description="Yolo model used, can specify any model in the harvest_vision/yolo_models directory."))
     declared_arguments.append(DeclareLaunchArgument("vservo_yolo_conf", default_value="0.85", 
                                 description="Confidence threshold for yolo model in visual_servo node."))

@@ -1,11 +1,17 @@
 #!/usr/bin/env python3
+import time
+from threading import Event, Lock
+
+import numpy as np
+import cv2
+import torch
+
 import rclpy
 from rclpy.node import Node
 from rclpy.duration import Duration
 from rclpy.qos import qos_profile_sensor_data, QoSProfile, ReliabilityPolicy, HistoryPolicy
-from rclpy.callback_groups import ReentrantCallbackGroup
+from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 
-from threading import Event
 from sensor_msgs.msg import Image, CameraInfo
 from visualization_msgs.msg import Marker, MarkerArray
 from geometry_msgs.msg import PoseStamped, PoseArray
@@ -15,17 +21,14 @@ from tf2_geometry_msgs import do_transform_pose_stamped
 from tf2_ros import Buffer, TransformListener, TransformException
 
 from cv_bridge import CvBridge
-import numpy as np
-import cv2
 from ultralytics import YOLO
-import open3d as o3d
 from message_filters import ApproximateTimeSynchronizer, Subscriber
 
 from .sphere_ransac import Sphere
 
 
 def stamp_to_ns(stamp) -> int:
-    return stamp.sec * 10**9 + stamp.nanosec
+    return int(stamp.sec) * 10**9 + int(stamp.nanosec)
 
 
 class ApplePredictionFromTopics(Node):
@@ -43,6 +46,7 @@ class ApplePredictionFromTopics(Node):
         self.declare_parameter("prediction_radius_max", 0.06)
         self.declare_parameter("prediction_distance_max", 1.0)
         self.declare_parameter("scan_data_path", "NOTGIVEN")
+        self.declare_parameter("allow_reuse_latest_frame", False)
 
         self.ns = self.get_parameter("camera_ns").value
         self.use_aligned = bool(self.get_parameter("use_aligned_depth").value)
@@ -53,9 +57,11 @@ class ApplePredictionFromTopics(Node):
         self.rad_min = float(self.get_parameter("prediction_radius_min").value)
         self.rad_max = float(self.get_parameter("prediction_radius_max").value)
         self.dist_max = float(self.get_parameter("prediction_distance_max").value)
+        self.allow_reuse_latest = bool(self.get_parameter("allow_reuse_latest_frame").value)
 
         # --- I/O ---
-        self.service_group = ReentrantCallbackGroup()
+        self.service_group = MutuallyExclusiveCallbackGroup()  # single-flight service
+        self._predict_lock = Lock()
 
         self.marker_pub = self.create_publisher(MarkerArray, "apple_markers", 10)
         self.srv = self.create_service(
@@ -64,11 +70,9 @@ class ApplePredictionFromTopics(Node):
         self.annotated_pub = self.create_publisher(
             Image,
             "apple_annotated",
-            QoSProfile(
-                reliability=ReliabilityPolicy.RELIABLE,
-                history=HistoryPolicy.KEEP_LAST,
-                depth=10
-            )
+            QoSProfile(reliability=ReliabilityPolicy.RELIABLE,
+                       history=HistoryPolicy.KEEP_LAST,
+                       depth=10)
         )
 
         # --- TF ---
@@ -77,155 +81,152 @@ class ApplePredictionFromTopics(Node):
 
         # --- YOLO ---
         self.model = YOLO(self.get_parameter("prediction_model_path").value)
+        try:
+            self.model.model.eval()
+        except Exception:
+            pass
 
         # --- subs + sync ---
         self.bridge = CvBridge()
 
-        color_topic = f"/{self.ns}/color/image_raw"
+        self.color_topic = f"/{self.ns}/color/image_raw"
         if self.use_aligned:
-            depth_topic = f"/{self.ns}/aligned_depth_to_color/image_raw"
-            cinfo_topic = f"/{self.ns}/color/camera_info"
+            self.depth_topic = f"/{self.ns}/aligned_depth_to_color/image_raw"
+            self.cinfo_topic = f"/{self.ns}/color/camera_info"
         else:
-            depth_topic = f"/{self.ns}/depth/image_rect_raw"
-            cinfo_topic = f"/{self.ns}/depth/camera_info"
+            self.depth_topic = f"/{self.ns}/depth/image_rect_raw"
+            self.cinfo_topic = f"/{self.ns}/depth/camera_info"
 
-        color_sub = Subscriber(self, Image, color_topic, qos_profile=qos_profile_sensor_data)
-        depth_sub = Subscriber(self, Image, depth_topic, qos_profile=qos_profile_sensor_data)
+        # IMPORTANT: keep strong refs
+        self.color_sub = Subscriber(self, Image, self.color_topic, qos_profile=qos_profile_sensor_data)
+        self.depth_sub = Subscriber(self, Image, self.depth_topic, qos_profile=qos_profile_sensor_data)
 
         info_qos = QoSProfile(
             reliability=ReliabilityPolicy.RELIABLE,
             history=HistoryPolicy.KEEP_LAST,
             depth=10
         )
-        cinfo_sub = Subscriber(self, CameraInfo, cinfo_topic, qos_profile=info_qos)
+        self._last_cinfo = None
+        self.cinfo_sub = self.create_subscription(CameraInfo, self.cinfo_topic, self._cinfo_cb, qos_profile=info_qos)
 
-        # Smaller slop is better when color and aligned depth are tightly stamped
-        self.sync = ApproximateTimeSynchronizer(
-            [color_sub, depth_sub, cinfo_sub],
-            queue_size=20,
-            slop=0.01
-        )
-        self.sync.registerCallback(self._sync_cb)
+        # Sync only color + depth (looser window OK for field rigs)
+        self.sync = ApproximateTimeSynchronizer([self.color_sub, self.depth_sub],
+                                                queue_size=50, slop=0.10)
+        self.sync.registerCallback(self._sync_cd_cb)
 
-        # Storage for the most recent synced tuple and coordination for on-demand grabbing
-        self._last_triplet = None  # (color_msg, depth_msg, cinfo_msg)
-        self._new_triplet_event = Event()
-        self._last_used_color_ns = -1  # nanoseconds stamp of last used color frame
+        # Latest synced pair + coordination
+        self._last_pair = None                  # (color_msg, depth_msg)
+        self._new_pair_event = Event()
+        self._last_used_pair_key = None         # (color_ns, depth_ns) of last used pair
 
         # --- RANSAC config ---
-        self.ransac = Sphere()
         self.ransac_thresh = 1e-4
         self.ransac_iters = 1000
 
         self.get_logger().info(
-            f"ApplePredictionFromTopics ready. Subscribing:\n"
-            f"  color: {color_topic}\n  depth: {depth_topic}\n  cinfo: {cinfo_topic}"
+            "ApplePredictionFromTopics ready. Subscribing:\n"
+            f"  color: {self.color_topic}\n  depth: {self.depth_topic}\n  cinfo: {self.cinfo_topic}"
         )
 
-    # Keep the sync callback light: just stash and signal
-    def _sync_cb(self, color_msg, depth_msg, cinfo_msg):
-        self._last_triplet = (color_msg, depth_msg, cinfo_msg)
-        self._new_triplet_event.set()
+    # ----- subscribers -----
 
-    def _wait_for_new_synced(self, timeout_sec=1.0):
+    def _cinfo_cb(self, msg: CameraInfo):
+        self._last_cinfo = msg
+
+    def _sync_cd_cb(self, color_msg: Image, depth_msg: Image):
+        self._last_pair = (color_msg, depth_msg)
+        self._new_pair_event.set()
+
+    # ----- waiting for fresh color+depth pair -----
+
+    def _wait_for_new_synced(self, timeout_sec=3.0):
         """
-        Wait until there is a synced tuple whose color stamp is newer than
-        the last one we used. Returns (color_msg, depth_msg, cinfo_msg) or None on timeout.
+        Wait for a color+depth pair whose (color_ts, depth_ts) tuple differs from the last used.
+        Optionally allow reusing the most recent once to avoid instant timeouts.
+        Returns (color_msg, depth_msg) or None on timeout.
         """
-        # Fast path: if we already have a newer triplet, grab it immediately
-        if self._last_triplet is not None:
-            c, d, i = self._last_triplet
-            if stamp_to_ns(c.header.stamp) > self._last_used_color_ns:
-                return c, d, i
+        deadline = time.monotonic() + timeout_sec
+        tried_reuse = False
+        while time.monotonic() < deadline:
+            pair = self._last_pair
+            if pair is not None:
+                c, d = pair
+                key = (stamp_to_ns(c.header.stamp), stamp_to_ns(d.header.stamp))
+                if key != self._last_used_pair_key:
+                    return pair
+                if self.allow_reuse_latest and not tried_reuse:
+                    tried_reuse = True
+                    return pair
+            remaining = max(0.0, deadline - time.monotonic())
+            self._new_pair_event.clear()
+            self._new_pair_event.wait(timeout=remaining if remaining > 0 else 0)
+        return None
 
-        # Otherwise wait for next signal
-        self._new_triplet_event.clear()
-        if not self._new_triplet_event.wait(timeout=timeout_sec):
-            return None
-
-        self._new_triplet_event.clear()
-        triplet = self._last_triplet
-        if triplet is None:
-            return None
-
-        color_msg, depth_msg, cinfo_msg = triplet
-        if stamp_to_ns(color_msg.header.stamp) <= self._last_used_color_ns:
-            # Keep waiting a bit longer for a truly newer one
-            if not self._new_triplet_event.wait(timeout=timeout_sec):
-                return None
-            self._new_triplet_event.clear()
-            triplet = self._last_triplet
-
-        return triplet
+    # ----- service -----
 
     def on_predict(self, req, res):
-        # Block for fresh synced frames
-        triplet = self._wait_for_new_synced(timeout_sec=2.0)
-        if triplet is None:
-            self.get_logger().warn("Timed out waiting for fresh synced frames.")
-            res.apple_poses = PoseArray()  # ensure valid but empty
+        with self._predict_lock:
+            return self._on_predict_locked(req, res)
+
+    def _on_predict_locked(self, req, res):
+        if self._last_cinfo is None:
+            self.get_logger().warn("No CameraInfo received yet.")
+            res.apple_poses = PoseArray()
             return res
 
-        color_msg, depth_msg, cinfo_msg = triplet
-        self._last_used_color_ns = stamp_to_ns(color_msg.header.stamp)
+        pair = self._wait_for_new_synced(timeout_sec=3.0)
+        if pair is None:
+            self.get_logger().warn("Timed out waiting for fresh synced frames.")
+            res.apple_poses = PoseArray()
+            return res
 
-        # Convert here so YOLO runs on fresh frames
+        color_msg, depth_msg = pair
+        cinfo_msg = self._last_cinfo
+
+        # Mark this pair as consumed *before* inference
+        self._last_used_pair_key = (
+            stamp_to_ns(color_msg.header.stamp),
+            stamp_to_ns(depth_msg.header.stamp)
+        )
+
+        # Convert images
         color_bgr = self.bridge.imgmsg_to_cv2(color_msg, desired_encoding="bgr8")
         depth_mm = self.bridge.imgmsg_to_cv2(depth_msg, desired_encoding="passthrough")  # uint16 mm
 
-        # 1) Run YOLO
-        results = self.model(color_bgr, conf=self.conf_thr)[0]
+        # Sanity checks on sizes vs intrinsics
+        Hc, Wc = color_bgr.shape[:2]
+        if (cinfo_msg.height != Hc) or (cinfo_msg.width != Wc):
+            self.get_logger().warn(
+                f"CameraInfo size ({cinfo_msg.width}x{cinfo_msg.height}) "
+                f"!= color size ({Wc}x{Hc}). Using color size for back-projection."
+            )
+        if self.use_aligned and (depth_mm.shape[:2] != (Hc, Wc)):
+            self.get_logger().warn(
+                f"Aligned depth size {depth_mm.shape[1]}x{depth_mm.shape[0]} "
+                f"!= color size {Wc}x{Hc}; masks will be resized."
+            )
 
-        # Build masks and paired bboxes
-        masks = []
-        bboxes = []
-        H, W = color_bgr.shape[:2]
+        fx, fy = float(cinfo_msg.k[0]), float(cinfo_msg.k[4])
+        cx, cy = float(cinfo_msg.k[2]), float(cinfo_msg.k[5])
 
-        if results.boxes is not None and len(results.boxes) > 0:
-            xyxy = results.boxes.xyxy.cpu().numpy().astype(int)
-        else:
-            xyxy = np.empty((0, 4), dtype=int)
+        # 1) YOLO
+        with torch.inference_mode():
+            results = self.model(color_bgr, conf=self.conf_thr, verbose=False)[0]
 
-        if results.masks is not None and len(results) > 0:
-            for i in range(len(results)):
-                poly_list = results.masks.xy[i]
-                mask = np.zeros((H, W), dtype=np.uint8)
-                if isinstance(poly_list, np.ndarray):
-                    cv2.fillPoly(mask, [np.int32(poly_list)], 255)
-                else:
-                    for poly in poly_list:
-                        cv2.fillPoly(mask, [np.int32(poly)], 255)
-                masks.append(mask)
+        # 2) Build instance-aligned masks & boxes
+        masks, bboxes = self._build_instance_masks_and_boxes(results, Hc, Wc)
 
-                if i < len(xyxy):
-                    x1, y1, x2, y2 = xyxy[i]
-                else:
-                    ys, xs = np.where(mask > 0)
-                    if xs.size > 0:
-                        x1, x2 = int(xs.min()), int(xs.max())
-                        y1, y2 = int(ys.min()), int(ys.max())
-                    else:
-                        x1 = y1 = 0; x2 = y2 = 0
-                bboxes.append((x1, y1, x2, y2))
-        else:
-            for i in range(len(xyxy)):
-                x1, y1, x2, y2 = xyxy[i]
-                mask = np.zeros((H, W), dtype=np.uint8)
-                cv2.rectangle(mask, (x1, y1), (x2, y2), 255, -1)
-                masks.append(mask)
-                bboxes.append((x1, y1, x2, y2))
-
-        # 2) Intrinsics from CameraInfo
-        K = cinfo_msg.k  # [fx,0,cx, 0,fy,cy, 0,0,1]
-        fx, fy, cx, cy = K[0], K[4], K[2], K[5]
-        w, h = cinfo_msg.width, cinfo_msg.height
-        o3d_intr = o3d.camera.PinholeCameraIntrinsic(w, h, fx, fy, cx, cy)
-
-        # 3) Fit spheres
-        rgb = cv2.cvtColor(color_bgr, cv2.COLOR_BGR2RGB)
-        centers, radii, kept_bboxes = self._estimate_apples(
-            rgb, depth_mm, masks, bboxes, o3d_intr
+        # 3) Estimate spheres from masked back-projected points (fresh fitter per instance)
+        centers, radii, kept_bboxes = self._estimate_apples_backproject(
+            depth_mm, masks, bboxes, fx, fy, cx, cy
         )
+
+        self.get_logger().info(
+            f"Predict on pair ts=({color_msg.header.stamp.sec}.{color_msg.header.stamp.nanosec:09d}, "
+            f"{depth_msg.header.stamp.sec}.{depth_msg.header.stamp.nanosec:09d}) -> {len(centers)} detections."
+        )
+        if len(centers) > 0:
+            self.get_logger().info(f"Centers (m): {np.round(np.asarray(centers), 3)}")
 
         # 4) Transform to target frame
         poses_world = self._to_pose_array(centers, self.source_frame, self.target_frame)
@@ -240,43 +241,87 @@ class ApplePredictionFromTopics(Node):
         res.apple_poses = poses_world
         return res
 
-    def _estimate_apples(self, rgb, depth_mm, masks, bboxes, o3d_intr):
+    # ----- helpers -----
+
+    def _build_instance_masks_and_boxes(self, results, H, W):
+        inst_n = int(len(results.boxes) if results.boxes is not None else 0)
+        masks = [None] * inst_n
+        bboxes = [None] * inst_n
+
+        if inst_n == 0:
+            return [], []
+
+        xyxy = results.boxes.xyxy.cpu().numpy().astype(int)
+
+        if getattr(results, "masks", None) is not None and getattr(results.masks, "xy", None) is not None:
+            polys = results.masks.xy
+            for i in range(inst_n):
+                mask = np.zeros((H, W), dtype=np.uint8)
+                pl = polys[i]
+                if isinstance(pl, np.ndarray):
+                    cv2.fillPoly(mask, [pl.astype(np.int32)], 255)
+                else:
+                    for poly in pl:
+                        cv2.fillPoly(mask, [poly.astype(np.int32)], 255)
+                masks[i] = mask
+                x1, y1, x2, y2 = xyxy[i]
+                bboxes[i] = (x1, y1, x2, y2)
+        else:
+            for i in range(inst_n):
+                x1, y1, x2, y2 = xyxy[i]
+                mask = np.zeros((H, W), dtype=np.uint8)
+                cv2.rectangle(mask, (max(0, x1), max(0, y1)), (min(W - 1, x2), min(H - 1, y2)), 255, -1)
+                masks[i] = mask
+                bboxes[i] = (x1, y1, x2, y2)
+
+        pairs = [(m, b) for m, b in zip(masks, bboxes) if m is not None and m.any()]
+        if not pairs:
+            return [], []
+        masks, bboxes = zip(*pairs)
+        return list(masks), list(bboxes)
+
+    def _estimate_apples_backproject(self, depth_mm, masks, bboxes, fx, fy, cx, cy):
         centers, radii, kept_bboxes = [], [], []
 
-        for m, bbox in zip(masks, bboxes):
+        Hd, Wd = depth_mm.shape[:2]
+        for idx, (m, bbox) in enumerate(zip(masks, bboxes)):
             if m.shape != depth_mm.shape:
-                m = cv2.resize(m, (depth_mm.shape[1], depth_mm.shape[0]), interpolation=cv2.INTER_NEAREST)
+                m = cv2.resize(m, (Wd, Hd), interpolation=cv2.INTER_NEAREST)
 
-            depth_masked = np.where(m > 0, depth_mm, 0)
-            valid = depth_masked[depth_masked > 0]
-            if valid.size == 0:
+            ys, xs = np.where(m > 0)
+            if xs.size == 0:
                 continue
-            if np.median(valid) > self.dist_max * 1000.0:
-                continue
-
-            rgbd = o3d.geometry.RGBDImage.create_from_color_and_depth(
-                o3d.geometry.Image(rgb),
-                o3d.geometry.Image(depth_masked),
-                depth_scale=1000.0,
-                convert_rgb_to_intensity=False
-            )
-            pcd = o3d.geometry.PointCloud.create_from_rgbd_image(rgbd, o3d_intr)
-
-            pts = np.asarray(pcd.points)
-            if pts.shape[0] < 50:
+            z = depth_mm[ys, xs].astype(np.float32) / 1000.0
+            valid = z > 0
+            if not np.any(valid):
                 continue
 
-            c, r, _ = self.ransac.fit(
+            xs, ys, z = xs[valid], ys[valid], z[valid]
+            if z.size < 50:
+                continue
+
+            med = float(np.median(z))
+            if med > self.dist_max:
+                continue
+
+            X = (xs - cx) * z / fx
+            Y = (ys - cy) * z / fy
+            pts = np.column_stack((X, Y, z))
+
+            fitter = Sphere()  # stateless per detection
+            c, r, ok = fitter.fit(
                 pts,
                 thresh=self.ransac_thresh,
                 maxIteration=self.ransac_iters,
                 lower_rad_bound=self.rad_min,
                 upper_rad_bound=self.rad_max
             )
-            if c is not None and r is not None:
-                centers.append(c)
-                radii.append(r)
-                kept_bboxes.append(bbox)
+            if ok is False or c is None or r is None or not np.isfinite(c).all() or not np.isfinite(r):
+                continue
+
+            centers.append(c)
+            radii.append(float(r))
+            kept_bboxes.append(tuple(bbox))
 
         return centers, radii, kept_bboxes
 
@@ -286,10 +331,7 @@ class ApplePredictionFromTopics(Node):
 
         try:
             tf = self.tf_buffer.lookup_transform(
-                target_frame,
-                source_frame,
-                rclpy.time.Time(),
-                timeout=Duration(seconds=1.0)
+                target_frame, source_frame, rclpy.time.Time(), timeout=Duration(seconds=1.0)
             )
         except TransformException as e:
             self.get_logger().warn(f"TF failed {source_frame}->{target_frame}: {e}")
@@ -334,25 +376,45 @@ class ApplePredictionFromTopics(Node):
     def _publish_annotated_image(self, bgr_img, bboxes, header=None):
         if bgr_img is None:
             return
+
         annotated = bgr_img.copy()
+        H, W = annotated.shape[:2]
 
         for i, (x1, y1, x2, y2) in enumerate(bboxes):
-            h, w = annotated.shape[:2]
-            x1c, y1c = max(0, x1), max(0, y1)
-            x2c, y2c = min(w - 1, x2), min(h - 1, y2)
-            cv2.rectangle(annotated, (x1c, y1c), (x2c, y2c), (0, 255, 0), 2)
+            # Coerce to Python ints and clamp to image bounds
+            x1 = int(max(0, min(W - 1, x1)))
+            y1 = int(max(0, min(H - 1, y1)))
+            x2 = int(max(0, min(W - 1, x2)))
+            y2 = int(max(0, min(H - 1, y2)))
+
+            # Skip degenerate boxes
+            if x2 <= x1 or y2 <= y1:
+                continue
+
+            # Draw box
+            cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 255, 0), 2)
+
+            # Label background box (fixed: provide BOTH corners as tuples)
             label = str(i)
             (tw, th), baseline = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.9, 2)
+            bg_y1 = max(0, y1 - th - baseline - 6)
+            bg_y2 = y1
+            bg_x1 = x1
+            bg_x2 = min(W - 1, x1 + tw + 8)
+
             cv2.rectangle(
                 annotated,
-                (x1c, max(0, y1c - th - baseline - 6)),
-                (x1c + tw + 8, y1c),
+                (bg_x1, bg_y1),
+                (bg_x2, bg_y2),
                 (0, 255, 0),
-                thickness=-1
+                -1  # thickness as positional (filled)
             )
+
+            # Draw label text
+            text_org = (x1 + 4, max(0, y1 - 6))
             cv2.putText(
                 annotated, label,
-                (x1c + 4, y1c - 6),
+                text_org,
                 cv2.FONT_HERSHEY_SIMPLEX, 0.9,
                 (0, 0, 0), 2, cv2.LINE_AA
             )
@@ -370,7 +432,7 @@ def main():
     rclpy.init()
     node = ApplePredictionFromTopics()
     from rclpy.executors import MultiThreadedExecutor
-    exec = MultiThreadedExecutor(num_threads=2)  # needed so the service can wait while subs spin
+    exec = MultiThreadedExecutor(num_threads=4)
     exec.add_node(node)
     exec.spin()
     exec.shutdown()
