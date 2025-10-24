@@ -6,6 +6,8 @@ from rclpy.node import Node
 from message_filters import ApproximateTimeSynchronizer, Subscriber
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.callback_groups import ReentrantCallbackGroup
+
+
 # Interfaces
 from sensor_msgs.msg import Image
 from std_srvs.srv import Trigger
@@ -67,6 +69,8 @@ class LocalPlanner(Node):
         ### MUST BE 0.0 unless moving forward and using TOF distance as a stopping condition.
         self.z_speed = 0.0
         self.prev_pos = []
+        self.pan = 0.0
+        self.tilt = 0.0
 
         ### Image Processing
         self.br = CvBridge()
@@ -202,6 +206,18 @@ class LocalPlanner(Node):
             # Get apple bounding boxes from yolo model
             # results = self.model(image, conf=self.yolo_conf, device='cuda', verbose=False)[0]
             results = self.model(image, conf=self.yolo_conf, verbose=False)[0]
+
+            # TODO: Commit these Alejo's edits                      
+                           
+            self.get_logger().info(f"Detection results: {results.names}")  # Logs detected objects (apple)
+            if len(results) == 0:
+                self.get_logger().info("No detections found in the image.")
+            else:
+                for i in results:
+                    boxes = i.boxes.xyxy.cpu().numpy()  # Get bounding boxes
+                    confidences = i.boxes.conf.cpu().numpy()  # Get confidence scores
+                    self.get_logger().info(f"Detected apple with bounding box: {boxes}, confidence: {confidences}")
+            
             apple_centers = []
             z_dist = []
             for i in results:
@@ -261,14 +277,38 @@ class LocalPlanner(Node):
                 vel_vec = TwistStamped()
                 vel_vec.header.stamp = self.get_clock().now().to_msg()
                 vel_vec.header.frame_id = "tool0"
-                vel_vec.twist.linear.z = 0.0
+
+                # TODO: Commits Alejo's edits 07/24/25: Pan and tilt behavior (small random movement in x and y directions)
+#                self.get_logger().info("No apples found, starting panning and tilting")
+#                                
+#                if self.stall_count == 0 or self.stall_count% 20 ==0:
+#                    self.pan = np.random.uniform(-1.5, 1.5)  # Pan in x direction
+#                    self.tilt = np.random.uniform(-1.5, 1.5)  # Tilt in y direction
+               
+
+#                vel_vec.twist.linear.z = -0.80
+#                vel_vec.twist.linear.x = 0.0
+#                vel_vec.twist.linear.y = 0.0
+#                vel_vec.twist.angular.z = 0.0
+#                vel_vec.twist.angular.x = self.pan
+#                vel_vec.twist.angular.y = self.tilt
+
+                self.get_logger().info("No apples found, retreating")
+                vel_vec.twist.linear.z = -0.80
                 vel_vec.twist.linear.x = 0.0
                 vel_vec.twist.linear.y = 0.0
+                vel_vec.twist.angular.x = 0.0
+                vel_vec.twist.angular.y = 0.0
+                vel_vec.twist.angular.z = 0.0
+
+                self.get_logger().info(f'Twist Commands: {vel_vec.twist}')
+                
                 self.servo_publisher.publish(vel_vec)
                 self.stall_count += 1
-            
-            if self.stall_count > 10:
-                self.get_logger().error("STALLED after 10 attempts to servo, could not locate any apples in FOV.")
+                
+
+            if self.stall_count > 80:
+                self.get_logger().error("STALLED after 20 attempts to servo, could not locate any apples in FOV.")
                 self.start_flag = False
 
 
