@@ -101,17 +101,13 @@ class ApplePredictionFromTopics(Node):
         self.color_sub = Subscriber(self, Image, self.color_topic, qos_profile=qos_profile_sensor_data)
         self.depth_sub = Subscriber(self, Image, self.depth_topic, qos_profile=qos_profile_sensor_data)
 
-        info_qos = QoSProfile(
-            reliability=ReliabilityPolicy.RELIABLE,
-            history=HistoryPolicy.KEEP_LAST,
-            depth=10
-        )
+        info_qos = qos_profile_sensor_data
         self._last_cinfo = None
         self.cinfo_sub = self.create_subscription(CameraInfo, self.cinfo_topic, self._cinfo_cb, qos_profile=info_qos)
 
         # Sync only color + depth (looser window OK for field rigs)
         self.sync = ApproximateTimeSynchronizer([self.color_sub, self.depth_sub],
-                                                queue_size=50, slop=0.10)
+                                                queue_size=10, slop=0.50)
         self.sync.registerCallback(self._sync_cd_cb)
 
         # Latest synced pair + coordination

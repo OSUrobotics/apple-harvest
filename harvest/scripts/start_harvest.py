@@ -534,33 +534,6 @@ class StartHarvest(Node):
                                action_fn=self.start_visual_servo
                 )
 
-            # # Stage 5: pressure servo + grasp
-            # if self.enable_pressure_servo:
-            #     input('Done with visual servoing, hit enter to start pressure servoing')
-            #     self.run_stage(
-            #         self.pressure_servo_topics,
-            #         base_dir + self.pressure_servo_file_name_prefix,
-            #         servo_frame='base_link',
-            #         use_servo=True,
-            #         action_fn=self.grasp_controller
-            #     )           
-
-            # # Stage 6: pick controller
-            # if self.enable_picking:
-            #     input('Done with pressure, hit enter to start pick servoing')
-            #     def pick_action():
-            #         # self.start_detection()
-            #         self.pick_controller()
-            #         self.configure_servo('tool0')
-
-            #     self.run_stage(
-            #         self.pick_controller_topics,
-            #         base_dir + self.pick_controller_file_name_prefix,
-            #         servo_frame='base_link',
-            #         use_servo=True,
-            #         action_fn=pick_action
-            #     )
-
             # Stage 5 & 6: pressure servo + pick controller
             if self.enable_pressure_servo or self.enable_picking:
                 input('Done with approach, hit enter to start pressure servoing and pick controller')
