@@ -26,7 +26,7 @@
         <joint name="finray_gripper_palm_camera_joint" type="fixed">
             <parent link="finray_gripper_link" />
             <child link="gripper_palm_camera_optical_link" />
-            <origin xyz="0.00 0 0.024" rpy="0 0 0" />
+            <origin xyz="0.00 0 0.024" rpy="0 0 3.14159" />
         </joint>
 
         <!-- <joint name="finray_gripper_top_camera_joint" type="fixed">
@@ -62,7 +62,7 @@
                 <!-- <origin xyz="-0.0037 -0.0005 -0.0723" rpy="1.5708 0  -0.5236" />  -->
                 <!-- <geometry>
                     <box size="0.12 0.12 0.2" />
-                </geometry> -->36
+                </geometry> -->
                 <!-- <geometry>
                     <cylinder length="0 .241" radius="0.110"/>
                 </geometry> -->
@@ -108,8 +108,10 @@
             parent="finray_gripper_link" 
             prefix="gripper_"
             use_nominal_extrinsics="$(arg use_nominal_extrinsics)">
-            <origin xyz="-0.09 -0.06 -0.00875" rpy="0.5236 -1.5708 0"/>
-            <!-- <origin xyz="-0.065 -0.04075 -0.00875" rpy="0.5236 -1.5708 0"/> -->
+             <!-- move out for collision problem in intial collision body stl -->
+            <!-- <origin xyz="-0.09 -0.06 -0.00875" rpy="0.5236 -1.5708 0"/> -->
+            <!-- Aligned with model -->
+            <origin xyz="0.121651 -0.075874 -0.188703" rpy="2.618 -1.5708 0"/>
         </xacro:sensor_d435i>
 
         <!-- <xacro:arg name="use_nominal_extrinsics" default="false" />

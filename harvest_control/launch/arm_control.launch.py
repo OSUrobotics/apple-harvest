@@ -105,7 +105,7 @@ def generate_launch_description():
                 'max_accel': LaunchConfiguration('max_accel'),
                 'max_vel': LaunchConfiguration('max_vel'),
                 'traj_time_step': LaunchConfiguration('traj_time_step'),
-                'gripper_type': LaunchConfiguration('gripper_type'),
+                # 'gripper_type': LaunchConfiguration('gripper_type'),
             }.items(),
         ),
 
@@ -137,6 +137,12 @@ def generate_launch_description():
             package='harvest_control',
             executable='heuristic_controller.py',
             name='pick_controller',
+        ),
+
+        Node(
+            package='harvest_control',
+            executable='stiffness_controller.py',
+            name='stiffness_controller',
         ),
 
         Node(

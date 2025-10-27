@@ -12,7 +12,7 @@ def generate_launch_description():
     # ### apple_prediction node parameters
     # # Segmentation model is trained on open source datasets and can give slightly more accurate 3D reconstruction results. 
     # # detection models are trained on Prosser data and may be more robust to field conditions.
-    declared_arguments.append(DeclareLaunchArgument("prediction_model", default_value="best_segmentation.pt", 
+    declared_arguments.append(DeclareLaunchArgument("prediction_model", default_value="v9e.pt", 
                                   description="Yolo model used, can specify any model in the harvest_vision/yolo_models directory."))
     declared_arguments.append(DeclareLaunchArgument("prediction_yolo_conf", default_value="0.85", 
                                   description="Confidence threshold for yolo model in apple_prediction node."))
@@ -27,7 +27,7 @@ def generate_launch_description():
 
 
     ### visual_servo node parameters
-    declared_arguments.append(DeclareLaunchArgument("vservo_model", default_value="best_segmentation.pt", 
+    declared_arguments.append(DeclareLaunchArgument("vservo_model", default_value="v9e.pt", 
                                   description="Yolo model used, can specify any model in the harvest_vision/yolo_models directory."))
     declared_arguments.append(DeclareLaunchArgument("vservo_yolo_conf", default_value="0.85", 
                                 description="Confidence threshold for yolo model in visual_servo node."))

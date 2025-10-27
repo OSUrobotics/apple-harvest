@@ -47,12 +47,12 @@ private:
 
     std::unique_ptr<moveit::planning_interface::MoveGroupInterface> move_group_;
     std::vector<double> home_joint_positions = {
-        M_PI / 4,
-        -M_PI / 2,
-        2 * M_PI / 3,
+        M_PI / 2,
+        -1 * M_PI / 2,
+        2* M_PI / 3,
         5 * M_PI / 6,
         -M_PI / 2,
-        0};
+        -M_PI / 3};
 
     std::vector<double> scan_joint_positions = {
         M_PI / 2,
@@ -162,7 +162,7 @@ void MoveArmNode::move_to_config(const std::shared_ptr<std_srvs::srv::Trigger::R
         1.72,
         4.55,
         -1.58,
-        0};
+        -1.0472};
 
     // Set the target configuration as the target for the MoveGroup
     move_group_->setJointValueTarget(target_config);

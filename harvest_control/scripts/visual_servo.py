@@ -204,6 +204,17 @@ class LocalPlanner(Node):
             results = self.model(image, conf=self.yolo_conf, verbose=False)[0]
             apple_centers = []
             z_dist = []
+
+            self.get_logger().info(f"Detection results: {results.names}")  # Logs detected objects (apple)
+            if len(results) == 0:
+                self.get_logger().info("No detections found in the image.")
+            else:
+                for i in results:
+                    boxes = i.boxes.xyxy.cpu().numpy()  # Get bounding boxes
+                    confidences = i.boxes.conf.cpu().numpy()  # Get confidence scores
+                    self.get_logger().info(f"Detected apple with bounding box: {boxes}, confidence: {confidences}")
+
+
             for i in results:
                 # find center of each bounding box and calculate distance to center of image
                 x,y,w,h = i.boxes.xyxy.cpu().numpy()[0]
@@ -253,6 +264,7 @@ class LocalPlanner(Node):
                         ## THE 10 IS A CONSTANT DISTANCE VALUE BECAUSE WE ARE SERVOING IN PLACE ON A PLANE
                         ## IF NEEDED YOU CAN PASS IN A MEASURED DISTANCE AS A STOPPING CONDITION FOR THE SERVOING
                         vec = self.create_servo_vector(closest_apple, image, 10)
+                        self.get_logger().info(f"publishing velocity: {vec}")
                         self.servo_publisher.publish(vec)
                     except TransformException as e:
                         self.get_logger().info(f'Transform failed: {e}')

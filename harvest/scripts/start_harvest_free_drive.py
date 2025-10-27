@@ -92,7 +92,6 @@ class StartHarvest(Node):
         self.coord_to_traj_client = self.make_client(CoordinateToTrajectory, 'coordinate_to_trajectory')
         self.trigger_arm_mover_client = self.make_client(SendTrajectory, 'send_arm_trajectory')
         self.trigger_move_arm_to_pose_client =  self.make_client(MoveToPose, 'move_arm_to_pose')
-        self.trigger_move_arm_to_config_client =  self.make_client(Trigger, 'move_arm_to_config')
         # self.get_gripper_pose_client = self.make_client(GetGripperPose, 'get_gripper_pose')
 
         # Conditional clients
@@ -346,13 +345,6 @@ class StartHarvest(Node):
         self.future = self.start_move_arm_to_home_client.call_async(self.request)
         rclpy.spin_until_future_complete(self, self.future) 
         return self.future.result()
-
-    def go_to_scan_position(self):
-        # Starts go to home
-        self.request = Trigger.Request()
-        self.future = self.trigger_move_arm_to_config_client.call_async(self.request)
-        rclpy.spin_until_future_complete(self, self.future) 
-        return self.future.result()
     
     def call_coord_to_traj(self, apple_pose):
         x = apple_pose.position.x
@@ -502,102 +494,98 @@ class StartHarvest(Node):
             self.stop_recording()
 
     def start(self): 
-        # Scan position
-        self.get_logger().info("Moving to scan position")
-        self.go_to_scan_position()
-
-        # Stage 2: Request apple location prediction
-        if self.enable_apple_prediction:
-            self.get_logger().info('Predicting apple locations')
-            apple_poses = self.start_apple_prediction()
-        else:
-            self.get_logger().info('Skipping apple prediction, using pre-saved locations')
-            apple_poses = PoseArray()
-            apple_poses.poses = [
-                Pose(position=Point(x=row[0], y=row[1], z=row[2]))
-                for row in self.pre_saved_apple_locations
-            ]
-        self.apple_coordinates = {f'apple_{i+1}': [p.position.x,p.position.y,p.position.z]
-                                    for i,p in enumerate(apple_poses.poses)}
-        self.get_logger().info(f'Found {len(apple_poses.poses)} apples!')
-        
         # Stage 1: Reset arm to home position
-        self.get_logger().info(f'Resetting arm to home position')
-        self.go_to_home()
+        # self.get_logger().info(f'Resetting arm to home position')
+        # self.go_to_home()
 
+        # # Stage 2: Request apple location prediction
+        # if self.enable_apple_prediction:
+        #     self.get_logger().info('Predicting apple locations')
+        #     apple_poses = self.start_apple_prediction()
+        # else:
+        #     self.get_logger().info('Skipping apple prediction, using pre-saved locations')
+        #     apple_poses = PoseArray()
+        #     apple_poses.poses = [
+        #         Pose(position=Point(x=row[0], y=row[1], z=row[2]))
+        #         for row in self.pre_saved_apple_locations
+        #     ]
+        # self.apple_coordinates = {f'apple_{i+1}': [p.position.x,p.position.y,p.position.z]
+        #                             for i,p in enumerate(apple_poses.poses)}
+        # self.get_logger().info(f'Found {len(apple_poses.poses)} apples!')
+        
         # Loop over apple locations
-        for idx, coord in enumerate(apple_poses.poses):
-            # Update base directory for new apple location
-            base_dir = self.batch_dir + f'apple_{idx}/'
-        # base_dir = self.batch_dir + f'apple_1/'
+        # for idx, coord in enumerate(apple_poses.poses):
+        #     # Update base directory for new apple location
+        #     base_dir = self.batch_dir + f'apple_{idx}/'
+        base_dir = self.batch_dir + f'apple_1/'
         #     # Stage 3: Approach apple
-            input(f'Hit enter to start with apple {idx}')
-            self.get_logger().info(f'Approaching apple {idx}: Coord {coord}')
-            if self.use_optimal_trajectory:
-                waypoints = self.call_coord_to_traj(coord)
-                self.trigger_arm_mover(waypoints)
-            else:
-                self.trigger_move_arm_to_pose(coord)
+        #     input(f'Hit enter to start with apple {idx}')
+        #     self.get_logger().info(f'Approaching apple {idx}: Coord {coord}')
+        #     if self.use_optimal_trajectory:
+        #         waypoints = self.call_coord_to_traj(coord)
+        #         self.trigger_arm_mover(waypoints)
+        #     else:
+        #         self.trigger_move_arm_to_pose(coord)
 
-                # Stage 4: visual servo
-            if self.enable_visual_servo:
-                input('hit enter to start visual servoing')
-                self.run_stage(self.visual_servo_topics, 
-                                base_dir + self.visual_servo_file_name_prefix,
-                                use_servo=True, 
-                                action_fn=self.start_visual_servo
-                )
+            # Stage 4: visual servo
+        if self.enable_visual_servo:
+            input('hit enter to start visual servoing')
+            self.run_stage(self.visual_servo_topics, 
+                            base_dir + self.visual_servo_file_name_prefix,
+                            use_servo=True, 
+                            action_fn=self.start_visual_servo
+            )
 
-            # # Stage 5: pressure servo + grasp
-            # if self.enable_pressure_servo:
-            #     input('Done with visual servoing, hit enter to start pressure servoing')
-            #     self.run_stage(
-            #         self.pressure_servo_topics,
-            #         base_dir + self.pressure_servo_file_name_prefix,
-            #         servo_frame='base_link',
-            #         use_servo=True,
-            #         action_fn=self.grasp_controller
-            #     )           
+        # # Stage 5: pressure servo + grasp
+        # if self.enable_pressure_servo:
+        #     input('Done with visual servoing, hit enter to start pressure servoing')
+        #     self.run_stage(
+        #         self.pressure_servo_topics,
+        #         base_dir + self.pressure_servo_file_name_prefix,
+        #         servo_frame='base_link',
+        #         use_servo=True,
+        #         action_fn=self.grasp_controller
+        #     )           
 
-            # # Stage 6: pick controller
-            # if self.enable_picking:
-            #     input('Done with pressure, hit enter to start pick servoing')
-            #     def pick_action():
-            #         # self.start_detection()
-            #         self.pick_controller()
-            #         self.configure_servo('tool0')
+        # # Stage 6: pick controller
+        # if self.enable_picking:
+        #     input('Done with pressure, hit enter to start pick servoing')
+        #     def pick_action():
+        #         # self.start_detection()
+        #         self.pick_controller()
+        #         self.configure_servo('tool0')
 
-            #     self.run_stage(
-            #         self.pick_controller_topics,
-            #         base_dir + self.pick_controller_file_name_prefix,
-            #         servo_frame='base_link',
-            #         use_servo=True,
-            #         action_fn=pick_action
-            #     )
+        #     self.run_stage(
+        #         self.pick_controller_topics,
+        #         base_dir + self.pick_controller_file_name_prefix,
+        #         servo_frame='base_link',
+        #         use_servo=True,
+        #         action_fn=pick_action
+        #     )
 
-            # Stage 5 & 6: pressure servo + pick controller
-            if self.enable_pressure_servo or self.enable_picking:
-                input('Done with approach, hit enter to start pressure servoing and pick controller')
-                def pick_action():
-                    if self.enable_pressure_servo:
-                        self.grasp_controller()
-                    if self.enable_picking:
-                        self.pick_controller()
-                    self.configure_servo('tool0')
+        # Stage 5 & 6: pressure servo + pick controller
+        if self.enable_pressure_servo or self.enable_picking:
+            input('Done with approach, hit enter to start pressure servoing and pick controller')
+            def pick_action():
+                if self.enable_pressure_servo:
+                    self.grasp_controller()
+                if self.enable_picking:
+                    self.pick_controller()
+                self.configure_servo('tool0')
 
-                self.run_stage(
-                    self.pressure_servo_and_pick_controller_topics,
-                    base_dir + self.final_approach_and_pick_file_name_prefix,
-                    servo_frame='base_link',
-                    use_servo=True,
-                    action_fn=pick_action
-                )
+            self.run_stage(
+                self.pressure_servo_and_pick_controller_topics,
+                base_dir + self.final_approach_and_pick_file_name_prefix,
+                servo_frame='base_link',
+                use_servo=True,
+                action_fn=pick_action
+            )
 
-            # Stage 7: home & release & save
-            input('Done with pick, hit enter to return home')
-            self.go_to_home()
-            if self.enable_pressure_servo:
-                self.release_controller()
+        # Stage 7: home & release & save
+        input('Done with pick, hit enter to return home')
+        self.go_to_home()
+        if self.enable_pressure_servo:
+            self.release_controller()
 
         if self.enable_recording:
             self.save_metadata()

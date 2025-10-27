@@ -16,9 +16,9 @@ class TfListener(Node):
     def __init__(self):
         super().__init__('tf_listener')
         # TF frames
-        self.source = 'base_link'
+        self.source = 'world'
         self.tool_frame = 'tool0'
-        self.gripper_tip_frame = 'gripper_link'
+        self.gripper_tip_frame = 'temp'
 
         # Initialize TF listener
         self._tf_buffer = Buffer()

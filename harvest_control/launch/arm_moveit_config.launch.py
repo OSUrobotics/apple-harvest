@@ -26,7 +26,9 @@ def generate_launch_description():
         DeclareLaunchArgument('max_accel', default_value='0.05'),
         DeclareLaunchArgument('max_vel', default_value='0.05'),
         DeclareLaunchArgument('traj_time_step', default_value='0.05'),
+        DeclareLaunchArgument('gripper_type', default_value='finray'),
     ]
+    
 
     # URDF from your custom xacro
     robot_description = {
@@ -61,6 +63,8 @@ def generate_launch_description():
                 TextSubstitution(text='safety_limits:=false'),
                 ' ',
                 TextSubstitution(text='tool_device_name:=/tmp/ttyUR'),
+                # ' ',
+                # TextSubstitution(text = 'gripper_type:='), LaunchConfiguration('gripper_type'),
             ]),
             value_type=str
         )

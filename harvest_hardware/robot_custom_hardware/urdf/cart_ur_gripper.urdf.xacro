@@ -1,6 +1,5 @@
 <?xml version="1.0"?>
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="$(arg name)">
-
   <!-- keep the basics -->
   <xacro:arg name="name" default="ur"/>
   <xacro:arg name="ur_type" default="ur5e"/>  <!-- absorbs CLI arg; we won't pass it to ur_robot -->
@@ -36,17 +35,13 @@
   <xacro:arg name="initial_positions_file" default="$(find robot_custom_hardware)/config/initial_positions.yaml"/>
   <xacro:property name="initial_positions_file" default="$(arg initial_positions_file)"/>
 
-  <!-- Amiga args -->
-  <xacro:arg name="amiga_prefix" default="amiga__"/>
-
-  <!-- Realsense args -->
+ <!-- Realsense args -->
   <xacro:arg name="use_nominal_extrinsics" default="true" />
 
   <!--Gripper Args-->
   <xacro:arg name="gripper_type" default="old"/>
 
-
-  <!-- Define the four args with the names the UR macro expects -->
+   <!-- Define the four args with the names the UR macro expects -->
   <xacro:arg name="joint_limit_params" default="$(find robot_custom_hardware)/config/ur5e/joint_limits.yaml"/>
   <xacro:arg name="kinematics_params"  default="$(find robot_custom_hardware)/config/ur5e/default_kinematics.yaml"/>
   <xacro:arg name="physical_params"    default="$(find robot_custom_hardware)/config/ur5e/physical_parameters.yaml"/>
@@ -62,16 +57,34 @@
   <!-- define world exactly once -->
   <link name="world"/>
 
-  <!-- Instantiate Amiga, attached to world. 
-       NOTE: your amiga macro signature requires mesh_base_path -->
-  <xacro:property name="robot_custom_hardware" value="package://robot_custom_hardware/"/>
-  <xacro:amiga_macro amiga_prefix="$(arg amiga_prefix)" amiga_parent="world" mesh_base_path="package://robot_custom_hardware/meshes/"/>
+  <!-- define cart -->
+  <link name="cart_body"> 
+    <collision>
+      <geometry>
+        <box size="0.8763 0.55404 0.86519" />
+      </geometry>
+    </collision>
+
+    <visual>
+      <geometry>
+        <box size="0.8763 0.55404 0.86519" />
+      </geometry>
+    </visual>
+  </link>
+
+  <joint name="body_joint" type="fixed" >
+    <parent link="world"/>
+    <child link="cart_body"/>
+    <origin xyz="0.00 0 0.43259" rpy="0 0 0" />
+  </joint>
+
+
 
   <!-- UR5e arm -->
   <xacro:ur_robot
       name="$(arg name)"
       tf_prefix="$(arg tf_prefix)"
-      parent="$(arg amiga_prefix)tool0"
+      parent="cart_body"
 
       joint_limits_parameters_file="$(arg joint_limit_params)"
       kinematics_parameters_file ="$(arg kinematics_params)"
@@ -106,8 +119,9 @@
       reverse_port="$(arg reverse_port)"
       script_sender_port="$(arg script_sender_port)"
       trajectory_port="$(arg trajectory_port)">
-    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <origin xyz="0 0 0.4326" rpy="0 0 0"/>
   </xacro:ur_robot>
+
 
   <!-- mount finray gripper -->
   <!-- <xacro:if value="${'$(arg gripper_type)' == 'finray'}"> -->
@@ -118,8 +132,6 @@
     </joint>
      <xacro:finray_gripper_macro/>
   <!-- </xacro:if> -->
-
- 
 
   <!-- mount gripper -->
   <!-- <xacro:if value="${'$(arg gripper_type)' == 'old'}"> -->
@@ -132,23 +144,8 @@
     <xacro:gripper_macro/> -->
   <!-- </xacro:if> -->
 
-  <!-- MAST Realsense for apple locations -->
-  <xacro:sensor_d435i 
-    parent="$(arg amiga_prefix)base" 
-    prefix="mast_"
-    use_nominal_extrinsics="$(arg use_nominal_extrinsics)">
-    <origin xyz="0.4064 -0.1778 1.5113" rpy="0 0 1.8852"/>
-  </xacro:sensor_d435i>
-
-  <!-- Realsense for trunk detections -->
-  <xacro:sensor_d435i 
-    parent="$(arg amiga_prefix)base" 
-    prefix="base_"
-    use_nominal_extrinsics="$(arg use_nominal_extrinsics)">
-    <origin xyz="0.0 0.3937 0.555625" rpy="0 0 1.57"/>
-  </xacro:sensor_d435i>
-
- <joint name="finray_tip" type="fixed">
+  <!-- Define link for manual apple location -->
+   <joint name="finray_tip" type="fixed">
       <parent link="tool0" />
       <child link="temp" />
       <origin xyz="0.000 -0.00 0.32" rpy="0 0 -2.618" />
@@ -157,3 +154,4 @@
   <link name="temp">
   </link>
 </robot>
+

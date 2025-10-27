@@ -28,7 +28,7 @@ setup(
     maintainer_email='keegan.nave@gmail.com',
     description='TODO: Package description',
     license='TODO: License declaration',
-    tests_require=['pytest'],
+    extras_require={"test": ['pytest']},
     entry_points={
         'console_scripts': [
             'gripper_palm_camera = robot_custom_hardware.gripper_palm_camera:main',
