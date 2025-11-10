@@ -47,7 +47,8 @@ class ApplePredictionFromTopics(Node):
         self.declare_parameter("prediction_distance_max", 1.0)
         self.declare_parameter("scan_data_path", "NOTGIVEN")
         self.declare_parameter("allow_reuse_latest_frame", False)
-
+        self.declare_parameter("x_tolerance", 0.5)
+        
         self.ns = self.get_parameter("camera_ns").value
         self.use_aligned = bool(self.get_parameter("use_aligned_depth").value)
         self.source_frame = self.get_parameter("source_frame").value
@@ -58,6 +59,7 @@ class ApplePredictionFromTopics(Node):
         self.rad_max = float(self.get_parameter("prediction_radius_max").value)
         self.dist_max = float(self.get_parameter("prediction_distance_max").value)
         self.allow_reuse_latest = bool(self.get_parameter("allow_reuse_latest_frame").value)
+        self.x_tol = float(self.get_parameter("x_tolerance").value)
 
         # --- I/O ---
         self.service_group = MutuallyExclusiveCallbackGroup()  # single-flight service
@@ -227,17 +229,48 @@ class ApplePredictionFromTopics(Node):
         # 4) Transform to target frame
         poses_world = self._to_pose_array(centers, self.source_frame, self.target_frame)
 
-        # 5) Publish markers
-        self._publish_markers(poses_world, radii, frame_id=self.target_frame)
+        # 4.1) Filter by |x| <= x_tolerance in target frame
+        poses_world_f, radii_f, bboxes_f, kept = self._filter_by_x_range(
+            poses_world, radii, kept_bboxes, self.x_tol
+        )
 
-        # 6) Publish annotated image
-        self._publish_annotated_image(color_bgr, kept_bboxes, header=color_msg.header)
+        if len(poses_world.poses) != len(poses_world_f.poses):
+            self.get_logger().info(
+                f"Filtered {len(poses_world.poses) - len(poses_world_f.poses)} detections by |x| <= {self.x_tol} in '{self.target_frame}'. "
+                f"Kept {len(poses_world_f.poses)}."
+            )
 
-        # 7) Fill response
-        res.apple_poses = poses_world
+        # 5) Publish markers (filtered)
+        self._publish_markers(poses_world_f, radii_f, frame_id=self.target_frame)
+
+        # 6) Publish annotated image (filtered bboxes)
+        self._publish_annotated_image(color_bgr, bboxes_f, header=color_msg.header)
+
+        # 7) Fill response (filtered)
+        res.apple_poses = poses_world_f
         return res
 
     # ----- helpers -----
+
+    def _filter_by_x_range(self, poses_world: PoseArray, radii, bboxes, x_abs_max: float):
+        """
+        Keep only detections whose x (in target_frame) satisfies |x| <= x_abs_max.
+        Returns: (filtered_pose_array, filtered_radii, filtered_bboxes, kept_indices)
+        """
+        kept_indices = []
+        out = PoseArray()
+        out.header = poses_world.header  # preserve header if set
+
+        for i, p in enumerate(poses_world.poses):
+            if abs(float(p.position.x)) <= x_abs_max:
+                kept_indices.append(i)
+                out.poses.append(p)
+
+        # Filter radii and bboxes by kept indices
+        radii_f = [radii[i] for i in kept_indices] if radii else []
+        bboxes_f = [bboxes[i] for i in kept_indices] if bboxes else []
+
+        return out, radii_f, bboxes_f, kept_indices
 
     def _build_instance_masks_and_boxes(self, results, H, W):
         inst_n = int(len(results.boxes) if results.boxes is not None else 0)
