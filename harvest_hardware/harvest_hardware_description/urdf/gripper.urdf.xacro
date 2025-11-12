@@ -58,7 +58,7 @@
                 <origin xyz="0.085 0 -0.2" rpy="0 0 3.14" />
                 <geometry>
                     <mesh
-                        filename="package://robot_custom_hardware/meshes/end_effectors/03_mk3_full_assembly_coarse.STL"
+                        filename="package://harvest_hardware_description/meshes/end_effectors/03_mk3_full_assembly_coarse.STL"
                         scale="0.001 0.001 0.001" />
                 </geometry>
                 <material name="ur5_blue">

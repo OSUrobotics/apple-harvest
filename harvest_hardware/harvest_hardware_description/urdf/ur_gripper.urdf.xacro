@@ -2,7 +2,7 @@
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="$(arg name)">
 
   <!-- keep the basics -->
-  <xacro:arg name="name" default="ur"/>
+  <xacro:arg name="name" default="ur5e"/>
   <xacro:arg name="ur_type" default="ur5e"/>  <!-- absorbs CLI arg; we won't pass it to ur_robot -->
   <xacro:arg name="tf_prefix" default=""/>
   <xacro:arg name="transmission_hw_interface" default=""/>
@@ -28,45 +28,38 @@
   <xacro:arg name="tool_tx_idle_chars" default="3.5"/>
   <xacro:arg name="tool_device_name" default="/tmp/ttyUR"/>
   <xacro:arg name="tool_tcp_port" default="54321"/>
-  <xacro:arg name="use_fake_hardware" default="false"/> 
+  <xacro:arg name="use_fake_hardware" default="false"/>
   <xacro:arg name="fake_sensor_commands" default="false"/>
   <xacro:arg name="sim_gazebo" default="false"/>
   <xacro:arg name="sim_ignition" default="false"/>
   <xacro:arg name="simulation_controllers" default=""/>
-  <xacro:arg name="initial_positions_file" default="$(find robot_custom_hardware)/config/initial_positions.yaml"/>
+  
+  <!-- initial positions in your pkg -->
+  <xacro:arg name="initial_positions_file" default="$(find harvest_hardware_description)/config/initial_positions.yaml"/>
   <xacro:property name="initial_positions_file" default="$(arg initial_positions_file)"/>
 
-  <!-- Amiga args -->
-  <xacro:arg name="amiga_prefix" default="amiga__"/>
-
   <!-- Realsense args -->
-  <xacro:arg name="use_nominal_extrinsics" default="true" />
+  <xacro:arg name="use_nominal_extrinsics" default="false" />
 
-  <!-- Define the four args with the names the UR macro expects -->
-  <xacro:arg name="joint_limit_params" default="$(find robot_custom_hardware)/config/ur5e/joint_limits.yaml"/>
-  <xacro:arg name="kinematics_params"  default="$(find robot_custom_hardware)/config/ur5e/default_kinematics.yaml"/>
-  <xacro:arg name="physical_params"    default="$(find robot_custom_hardware)/config/ur5e/physical_parameters.yaml"/>
-  <xacro:arg name="visual_params"      default="$(find robot_custom_hardware)/config/ur5e/visual_parameters.yaml"/>
+  <!-- CRITICAL: define the four args with the names the UR macro expects -->
+  <xacro:arg name="joint_limit_params" default="$(find ur_description)/config/$(arg ur_type)/joint_limits.yaml"/>
+  <xacro:arg name="kinematics_params" default="$(find ur_description)/config/$(arg ur_type)/default_kinematics.yaml"/>
+  <xacro:arg name="physical_params" default="$(find ur_description)/config/$(arg ur_type)/physical_parameters.yaml"/>
+  <xacro:arg name="visual_params" default="$(find ur_description)/config/$(arg ur_type)/visual_parameters.yaml"/>
 
   <!-- includes -->
-  <xacro:include filename="$(find robot_custom_hardware)/urdf/amiga.urdf.xacro"/>
   <xacro:include filename="$(find ur_description)/urdf/ur_macro.xacro"/>
-  <xacro:include filename="$(find robot_custom_hardware)/urdf/gripper.urdf.xacro"/>
-  <xacro:include filename="$(find robot_custom_hardware)/urdf/_d435i.urdf.xacro"/>
+  <xacro:include filename="$(find harvest_hardware_description)/urdf/gripper.urdf.xacro"/>
+  <xacro:include filename="$(find realsense2_description)/urdf/_d435i.urdf.xacro"/>
 
   <!-- define world exactly once -->
   <link name="world"/>
 
-  <!-- Instantiate Amiga, attached to world. 
-       NOTE: your amiga macro signature requires mesh_base_path -->
-  <xacro:property name="robot_custom_hardware" value="package://robot_custom_hardware/"/>
-  <xacro:amiga_macro amiga_prefix="$(arg amiga_prefix)" amiga_parent="world" mesh_base_path="package://robot_custom_hardware/meshes/"/>
-
-  <!-- UR5e arm -->
+  <!-- UR5e arm: DO NOT pass ur_type; just pass the four *_params -->
   <xacro:ur_robot
       name="$(arg name)"
       tf_prefix="$(arg tf_prefix)"
-      parent="$(arg amiga_prefix)tool0"
+      parent="world"
 
       joint_limits_parameters_file="$(arg joint_limit_params)"
       kinematics_parameters_file ="$(arg kinematics_params)"
@@ -113,42 +106,8 @@
 
   <xacro:gripper_macro/>
 
-  <!-- MAST Realsense for apple locations -->
-  <xacro:sensor_d435i 
-    parent="$(arg amiga_prefix)base" 
-    prefix="mast_"
-    use_nominal_extrinsics="$(arg use_nominal_extrinsics)">
-    <!-- <origin xyz="0.4064 -0.1778 1.5113" rpy="0 0 1.8852"/> --> <!-- Manually measured position and orientation -->
-    <!-- <origin xyz="0.40948 -0.1881 1.5105" rpy="-0.013 0.033 1.907"/> Measured position and orientation with UR5e (with trailing values on roll and pitch -->
-    <!-- <origin xyz="0.40948 -0.1881 1.5105" rpy="0 0 1.907"/> Measured position and orientation with UR5e -->
-    <!-- <origin xyz="0.36566724 -0.17676987  1.52188824" rpy="-0.013000935978729311 0.03299973035765147 1.906999859790441"/> Calibrated from vision -->
-    <origin xyz=" 0.36916121 -0.17930941  1.534915" rpy="0 0 1.907"/> 
+  <xacro:sensor_d435i parent="base_link" use_nominal_extrinsics="$(arg use_nominal_extrinsics)">
+    <origin xyz="0.47625 -0.4907 0.4667" rpy="0 0 1.8852"/>
   </xacro:sensor_d435i>
-
-  <!-- Realsense for trunk detections -->
-  <xacro:sensor_d435i 
-    parent="$(arg amiga_prefix)base" 
-    prefix="base_"
-    use_nominal_extrinsics="$(arg use_nominal_extrinsics)">
-    <origin xyz="0.0 0.3937 0.555625" rpy="0 0 1.57"/>
-  </xacro:sensor_d435i>
-
-  <!-- Tracking marker frame -->
-  <joint name="tracking_marker_joint" type="fixed">
-    <parent link="tool0"/>
-    <child  link="tool0_tracking_marking_link"/>
-    <origin xyz="0 0.12 0.037" rpy="0 0 0"/>
-  </joint>
-  <link name="tool0_tracking_marking_link">
-    <visual>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
-      <geometry>
-        <sphere radius="0.001"/>
-      </geometry>
-      <material name="marker_material">
-        <color rgba="1 0 0 1"/>
-      </material>
-    </visual>
-  </link>
 
 </robot>
