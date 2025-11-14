@@ -14,11 +14,12 @@ def generate_launch_description():
         DeclareLaunchArgument('robot_ip', default_value='yyy.yyy.yyy.yyy'),
         DeclareLaunchArgument('use_fake_hardware', default_value='false'),
         DeclareLaunchArgument('prefix', default_value=''),
+        DeclareLaunchArgument('description_package', default_value='harvest_hardware_description'),
         DeclareLaunchArgument('description_file', default_value='amiga_ur_gripper.urdf.xacro'),
         DeclareLaunchArgument('launch_rviz', default_value='true'),
-
-        DeclareLaunchArgument('controller_manager_ns', default_value='/controller_manager'),
-        DeclareLaunchArgument('spawn_moveit_controllers', default_value='true'),
+        DeclareLaunchArgument("rviz_file", default_value="view_robot.rviz"),
+        DeclareLaunchArgument('use_sim_time', default_value='false'),
+        DeclareLaunchArgument("use_3d_sensors", default_value="false"),
 
         DeclareLaunchArgument('sim', default_value='false'),
         DeclareLaunchArgument('voxel_distance_tol', default_value='0.5'),
@@ -57,25 +58,26 @@ def generate_launch_description():
             'ur_type': LaunchConfiguration('ur_type'),
             'robot_ip': LaunchConfiguration('robot_ip'),
             'use_fake_hardware': LaunchConfiguration('use_fake_hardware'),
-            'description_package': 'harvest_hardware_description',
+            'use_mock_hardware': LaunchConfiguration('use_fake_hardware'),
+            'description_package': LaunchConfiguration('description_package'),
             'description_file': LaunchConfiguration('description_file'),
             'prefix': LaunchConfiguration('prefix'),
-            'use_robot_state_publisher': 'true',
             'launch_rviz': 'false',
             'initial_joint_controller': initial_controller,
         }.items(),
     )
 
-    description = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(desc_launch),
-        launch_arguments={
-            'ur_type': LaunchConfiguration('ur_type'),
-            'robot_ip': LaunchConfiguration('robot_ip'),
-            'use_fake_hardware': LaunchConfiguration('use_fake_hardware'),
-            'description_file': LaunchConfiguration('description_file'),
-            'prefix': LaunchConfiguration('prefix'),
-        }.items(),
-    )
+    # description = IncludeLaunchDescription(
+    #     PythonLaunchDescriptionSource(desc_launch),
+    #     launch_arguments={
+    #         'ur_type': LaunchConfiguration('ur_type'),
+    #         'robot_ip': LaunchConfiguration('robot_ip'),
+    #         'use_fake_hardware': LaunchConfiguration('use_fake_hardware'),
+    #         'description_file': LaunchConfiguration('description_file'),
+    #         'prefix': LaunchConfiguration('prefix'),
+    #         'use_sim_time': LaunchConfiguration('use_sim_time'),
+    #     }.items(),
+    # )
 
     moveit = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(moveit_launch),
@@ -86,8 +88,8 @@ def generate_launch_description():
             'robot_ip': LaunchConfiguration('robot_ip'),
             'use_fake_hardware': LaunchConfiguration('use_fake_hardware'),
             'description_file': LaunchConfiguration('description_file'),
-            'controller_manager_ns': LaunchConfiguration('controller_manager_ns'),
-            'spawn_controllers': LaunchConfiguration('spawn_moveit_controllers'),
+            'use_sim_time': LaunchConfiguration('use_sim_time'),
+            'use_3d_sensors': LaunchConfiguration('use_3d_sensors'),
         }.items(),
     )
 
@@ -99,18 +101,74 @@ def generate_launch_description():
         parameters=[{
             'sim': LaunchConfiguration('sim'),
             'voxel_distance_tol': LaunchConfiguration('voxel_distance_tol'),
+            'use_sim_time': LaunchConfiguration('use_sim_time'),
         }],
         output='screen',
     )
-
-    event_detector = Node(package='harvest_control', executable='event_detector.py', name='event_detector')
-    force_filter = Node(package='harvest_control', executable='force_filter.py', name='forcefilter')
-    pick_controller = Node(package='harvest_control', executable='heuristic_controller.py', name='pick_controller')
-    linear_controller = Node(package='harvest_control', executable='linear_controller.py', name='linear_controller')
-    tf_listener = Node(package='harvest_control', executable='pose_listener.py', name='tf_listener')
-    pressure_avg = Node(package='harvest_control', executable='pressure_averager.py', name='pressure_averager')
-    pull_twist = Node(package='harvest_control', executable='pull_twist_controller.py', name='pull_twist_controller')
-    recorder = Node(package='harvest', executable='record.py', name='record_topics_node')
+    event_detector = Node(
+        package='harvest_control', 
+        executable='event_detector.py', 
+        name='event_detector', 
+        parameters=[{
+            'use_sim_time': LaunchConfiguration('use_sim_time'),
+            }],
+    )
+    force_filter = Node(
+        package='harvest_control', 
+        executable='force_filter.py', 
+        name='forcefilter', 
+        parameters=[{
+            'use_sim_time': LaunchConfiguration('use_sim_time'),
+            }],
+    )
+    pick_controller = Node(
+        package='harvest_control', 
+        executable='heuristic_controller.py', 
+        name='pick_controller', 
+        parameters=[{
+            'use_sim_time': LaunchConfiguration('use_sim_time'),
+            }],
+    )
+    linear_controller = Node(
+        package='harvest_control', 
+        executable='linear_controller.py', 
+        name='linear_controller', 
+        parameters=[{
+            'use_sim_time': LaunchConfiguration('use_sim_time'),
+            }],
+    )
+    tf_listener = Node(
+        package='harvest_control', 
+        executable='pose_listener.py', 
+        name='tf_listener', 
+        parameters=[{
+            'use_sim_time': LaunchConfiguration('use_sim_time'),
+            }],
+    )
+    pressure_avg = Node(
+        package='harvest_control', 
+        executable='pressure_averager.py', 
+        name='pressure_averager', 
+        parameters=[{
+            'use_sim_time': LaunchConfiguration('use_sim_time'),
+            }],
+    )
+    pull_twist = Node(
+        package='harvest_control', 
+        executable='pull_twist_controller.py', 
+        name='pull_twist_controller', 
+        parameters=[{
+            'use_sim_time': LaunchConfiguration('use_sim_time'),
+            }],
+    )
+    recorder = Node(
+        package='harvest', 
+        executable='record.py', 
+        name='record_topics_node', 
+        parameters=[{
+            'use_sim_time': LaunchConfiguration('use_sim_time'),
+            }],
+    )
 
     return LaunchDescription(
         args + [

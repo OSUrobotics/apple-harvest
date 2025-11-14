@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-import os, yaml
+import os
+import yaml
+
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, OpaqueFunction
@@ -9,29 +11,35 @@ from launch_ros.substitutions import FindPackageShare
 from launch_ros.parameter_descriptions import ParameterValue
 from launch.conditions import IfCondition
 
+
 def load_yaml(pkg, relpath):
     path = os.path.join(get_package_share_directory(pkg), relpath)
     with open(path, "r") as f:
         return yaml.safe_load(f)
+
 
 def generate_launch_description():
     args = [
         DeclareLaunchArgument("ur_type", default_value="ur5e"),
         DeclareLaunchArgument("prefix", default_value=""),
         DeclareLaunchArgument("launch_rviz", default_value="true"),
+        DeclareLaunchArgument("rviz_file", default_value="view_robot.rviz"),
         DeclareLaunchArgument("robot_ip", default_value="yyy.yyy.yyy.yyy"),
         DeclareLaunchArgument("use_fake_hardware", default_value="false"),
         DeclareLaunchArgument("description_file", default_value="amiga_ur_gripper.urdf.xacro"),
-        # If your controller_manager isn’t at '/controller_manager', set it here:
-        DeclareLaunchArgument("controller_manager_ns", default_value="/controller_manager"),
         DeclareLaunchArgument("launch_servo", default_value="true"),
-        
+        DeclareLaunchArgument("use_sim_time", default_value="false"),
+        DeclareLaunchArgument("use_3d_sensors", default_value="false"),
     ]
     return LaunchDescription(args + [OpaqueFunction(function=_launch_setup)])
 
+
 def _launch_setup(context):
+    # Resolve launch configurations
     use_fake = LaunchConfiguration("use_fake_hardware").perform(context).lower() in ("1", "true", "yes")
     launch_servo = LaunchConfiguration("launch_servo")
+    use_sim_time = LaunchConfiguration("use_sim_time")
+    use_3d_sensors = LaunchConfiguration("use_3d_sensors").perform(context).lower() in ("1", "true", "yes")
 
     # --- URDF ---
     robot_description = {
@@ -106,50 +114,91 @@ def _launch_setup(context):
         "start_state_max_bounds_error": 0.1,
     })
 
-    # --- Controllers (MoveIt’s view only; driver actually spawns) ---
     controllers_yaml = load_yaml("harvest_hardware_moveit_config", "config/controllers.yaml")
     controllers_yaml.setdefault(
         "moveit_controller_manager",
         "moveit_simple_controller_manager/MoveItSimpleControllerManager",
     )
     controllers_yaml.setdefault("moveit_simple_controller_manager", {})
-    
+
+    # Octomap & 3D sensor config
+    octomap_params = {
+        "octomap_frame": "world",
+        "octomap_resolution": 0.05,
+        "max_range": 5.0,
+        "occupancy_map_monitor": {
+            "max_update_rate": 1.0
+        }
+    }
+
+    sensors_3d_yaml = load_yaml(
+        "harvest_hardware_moveit_config",
+        "config/sensors_3d.yaml",
+    )
+
+    # ---- move_group parameters (build list dynamically) ----
+    move_group_params = [
+        robot_description,
+        robot_description_semantic,
+        kinematics_yaml,
+        joint_limits_yaml,
+        {"planning_pipelines": ["ompl"], "default_planning_pipeline": "ompl"},
+        ompl_yaml,
+        controllers_yaml,
+        {"use_sim_time": use_sim_time},
+    ]
+
+    # Only add 3D sensor / octomap params if enabled
+    if use_3d_sensors:
+        move_group_params.append(octomap_params)
+        move_group_params.append(sensors_3d_yaml)
+
     move_group = Node(
         package="moveit_ros_move_group",
         executable="move_group",
         name="move_group",
         output="screen",
-        parameters=[
-            robot_description,
-            robot_description_semantic,
-            kinematics_yaml,
-            joint_limits_yaml,
-            {"planning_pipelines": ["ompl"], "default_planning_pipeline": "ompl"},
-            ompl_yaml,
-            controllers_yaml,
-        ],
+        parameters=move_group_params,
     )
 
+    # Servo node
     servo_yaml = load_yaml("harvest_hardware_moveit_config", "config/ur_servo.yaml")
     servo_params = {"moveit_servo": servo_yaml}
     servo_node = Node(
         package="moveit_servo",
         condition=IfCondition(launch_servo),
         executable="servo_node_main",
-        parameters=[servo_params, robot_description, robot_description_semantic, kinematics_yaml],
+        parameters=[
+            servo_params,
+            robot_description,
+            robot_description_semantic,
+            kinematics_yaml,
+            {"use_sim_time": use_sim_time},
+        ],
         output="screen",
     )
 
+    # RViz
     rviz = Node(
         package="rviz2",
         executable="rviz2",
         name="rviz2_moveit",
         output="screen",
-        arguments=["-d", PathJoinSubstitution([
-            FindPackageShare("harvest_hardware_moveit_config"), "rviz", "view_robot.rviz"
-        ])],
-        parameters=[robot_description, robot_description_semantic, kinematics_yaml, joint_limits_yaml],
+        arguments=[
+            "-d",
+            PathJoinSubstitution([
+                FindPackageShare("harvest_hardware_moveit_config"),
+                "rviz",
+                LaunchConfiguration("rviz_file"),
+            ]),
+        ],
+        parameters=[
+            robot_description,
+            robot_description_semantic,
+            kinematics_yaml,
+            joint_limits_yaml,
+            {"use_sim_time": use_sim_time},
+        ],
     )
 
-    # Important: no spawners/unspawners here
     return [move_group, rviz, servo_node]
