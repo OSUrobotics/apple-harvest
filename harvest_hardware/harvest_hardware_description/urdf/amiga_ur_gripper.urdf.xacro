@@ -54,13 +54,10 @@
   <xacro:include filename="$(find harvest_hardware_description)/urdf/gripper.urdf.xacro"/>
   <xacro:include filename="$(find harvest_hardware_description)/urdf/_d435i.urdf.xacro"/>
 
-  <!-- define world exactly once -->
-  <link name="world"/>
-
   <!-- Instantiate Amiga, attached to world. 
        NOTE: the amiga macro signature requires mesh_base_path -->
   <xacro:property name="harvest_hardware_description" value="package://harvest_hardware_description/"/>
-  <xacro:amiga_macro amiga_prefix="$(arg amiga_prefix)" amiga_parent="world" mesh_base_path="package://harvest_hardware_description/meshes/"/>
+  <xacro:amiga_macro amiga_prefix="$(arg amiga_prefix)" amiga_parent="" mesh_base_path="package://harvest_hardware_description/meshes/"/>
 
   <!-- UR5e arm -->
   <xacro:ur_robot

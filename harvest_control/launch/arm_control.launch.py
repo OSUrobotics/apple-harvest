@@ -16,7 +16,7 @@ def generate_launch_description():
         DeclareLaunchArgument('prefix', default_value=''),
         DeclareLaunchArgument('description_package', default_value='harvest_hardware_description'),
         DeclareLaunchArgument('description_file', default_value='amiga_ur_gripper.urdf.xacro'),
-        DeclareLaunchArgument('launch_rviz', default_value='true'),
+        DeclareLaunchArgument('view_rviz', default_value='true'),
         DeclareLaunchArgument("rviz_file", default_value="view_robot.rviz"),
         DeclareLaunchArgument('use_sim_time', default_value='false'),
         DeclareLaunchArgument("use_3d_sensors", default_value="false"),
@@ -64,27 +64,16 @@ def generate_launch_description():
             'prefix': LaunchConfiguration('prefix'),
             'launch_rviz': 'false',
             'initial_joint_controller': initial_controller,
+            'use_sim_time': LaunchConfiguration('use_sim_time'),
         }.items(),
     )
-
-    # description = IncludeLaunchDescription(
-    #     PythonLaunchDescriptionSource(desc_launch),
-    #     launch_arguments={
-    #         'ur_type': LaunchConfiguration('ur_type'),
-    #         'robot_ip': LaunchConfiguration('robot_ip'),
-    #         'use_fake_hardware': LaunchConfiguration('use_fake_hardware'),
-    #         'description_file': LaunchConfiguration('description_file'),
-    #         'prefix': LaunchConfiguration('prefix'),
-    #         'use_sim_time': LaunchConfiguration('use_sim_time'),
-    #     }.items(),
-    # )
 
     moveit = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(moveit_launch),
         launch_arguments={
             'ur_type': LaunchConfiguration('ur_type'),
             'prefix': LaunchConfiguration('prefix'),
-            'launch_rviz': 'true',
+            'launch_rviz': LaunchConfiguration('view_rviz'),
             'robot_ip': LaunchConfiguration('robot_ip'),
             'use_fake_hardware': LaunchConfiguration('use_fake_hardware'),
             'description_file': LaunchConfiguration('description_file'),
@@ -93,7 +82,6 @@ def generate_launch_description():
         }.items(),
     )
 
-    # ---------- Other nodes (commented out in your original) ----------
     coord_to_traj = Node(
         package='harvest_control',
         executable='coordinate_to_trajectory.py',

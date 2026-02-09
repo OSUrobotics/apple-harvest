@@ -55,7 +55,6 @@ install(PROGRAMS
   scripts/get_manual_apple_locations.py
   scripts/heuristic_controller.py
   scripts/linear_controller.py
-  scripts/odom_reframer_calibrated.py
   scripts/pose_listener.py
   scripts/pressure_averager.py
   scripts/pull_twist_controller.py

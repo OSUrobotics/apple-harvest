@@ -22,7 +22,7 @@ def generate_launch_description():
     args = [
         DeclareLaunchArgument("ur_type", default_value="ur5e"),
         DeclareLaunchArgument("prefix", default_value=""),
-        DeclareLaunchArgument("launch_rviz", default_value="true"),
+        DeclareLaunchArgument("view_rviz", default_value="true"),
         DeclareLaunchArgument("rviz_file", default_value="view_robot.rviz"),
         DeclareLaunchArgument("robot_ip", default_value="yyy.yyy.yyy.yyy"),
         DeclareLaunchArgument("use_fake_hardware", default_value="false"),
@@ -178,6 +178,28 @@ def _launch_setup(context):
         output="screen",
     )
 
+    move_arm = Node(
+        package="harvest_control",
+        executable="move_arm",
+        name="move_arm_node",
+        output="screen",
+        parameters=[
+            robot_description,
+            robot_description_semantic,
+            kinematics_yaml,
+            joint_limits_yaml,
+            {"use_sim_time": use_sim_time},
+            {"max_accel": 0.05, "max_vel": 0.05, "traj_time_step": 0.05},  # or LaunchConfigurations
+        ],
+    )
+
+    rsp = Node(
+        package="robot_state_publisher",
+        executable="robot_state_publisher",
+        parameters=[robot_description, {"use_sim_time": use_sim_time}],
+        output="screen",
+    )
+
     # RViz
     rviz = Node(
         package="rviz2",
@@ -199,6 +221,13 @@ def _launch_setup(context):
             joint_limits_yaml,
             {"use_sim_time": use_sim_time},
         ],
+        condition=IfCondition(LaunchConfiguration("view_rviz")),
     )
 
-    return [move_group, rviz, servo_node]
+    return [
+        move_group, 
+        servo_node,
+        move_arm,
+        # rsp,
+        rviz, 
+        ]
