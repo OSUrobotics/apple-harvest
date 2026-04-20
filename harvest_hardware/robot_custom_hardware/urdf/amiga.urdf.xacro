@@ -20,7 +20,7 @@
     <xacro:property name="amiga_collision_box2_z" value='0.25' />
 
     <xacro:property name="amiga_tool0_mount_rotation" value="0.0 0.0 ${pi / 4}"/>
-    <xacro:property name="amiga_tool0_mount_position" value="-0.092075 0.3048 1.04775"/>
+    <xacro:property name="amiga_tool0_mount_position" value="-0.095 0.306 1.04775"/>
 
     <!-- ================== -->
     <!--       Links        -->

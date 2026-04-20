@@ -118,7 +118,11 @@
     parent="$(arg amiga_prefix)base" 
     prefix="mast_"
     use_nominal_extrinsics="$(arg use_nominal_extrinsics)">
-    <origin xyz="0.4064 -0.1778 1.5113" rpy="0 0 1.8852"/>
+    <!-- <origin xyz="0.4064 -0.1778 1.5113" rpy="0 0 1.8852"/> --> <!-- Manually measured position and orientation -->
+    <!-- <origin xyz="0.40948 -0.1881 1.5105" rpy="-0.013 0.033 1.907"/> Measured position and orientation with UR5e (with trailing values on roll and pitch -->
+    <!-- <origin xyz="0.40948 -0.1881 1.5105" rpy="0 0 1.907"/> Measured position and orientation with UR5e -->
+    <!-- <origin xyz="0.36566724 -0.17676987  1.52188824" rpy="-0.013000935978729311 0.03299973035765147 1.906999859790441"/> Calibrated from vision -->
+    <origin xyz=" 0.36916121 -0.17930941  1.534915" rpy="0 0 1.907"/> 
   </xacro:sensor_d435i>
 
   <!-- Realsense for trunk detections -->
@@ -128,5 +132,23 @@
     use_nominal_extrinsics="$(arg use_nominal_extrinsics)">
     <origin xyz="0.0 0.3937 0.555625" rpy="0 0 1.57"/>
   </xacro:sensor_d435i>
+
+  <!-- Tracking marker frame -->
+  <joint name="tracking_marker_joint" type="fixed">
+    <parent link="tool0"/>
+    <child  link="tool0_tracking_marking_link"/>
+    <origin xyz="0 0.12 0.037" rpy="0 0 0"/>
+  </joint>
+  <link name="tool0_tracking_marking_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <sphere radius="0.001"/>
+      </geometry>
+      <material name="marker_material">
+        <color rgba="1 0 0 1"/>
+      </material>
+    </visual>
+  </link>
 
 </robot>
