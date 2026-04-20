@@ -1,180 +1,175 @@
+#!/usr/bin/env python3
 import os
-from ament_index_python.packages import get_package_prefix, get_package_share_directory
+from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
-from launch.substitutions import LaunchConfiguration
-from launch.actions import ExecuteProcess, IncludeLaunchDescription
-from launch_ros.actions import Node
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch_ros.actions import SetParameter
-
+from launch.substitutions import LaunchConfiguration, PythonExpression, TextSubstitution, IfElseSubstitution, EqualsSubstitution
+from launch_ros.actions import Node
 
 def generate_launch_description():
-    declared_arguments = []
+    # ---------- Arguments ----------
+    args = [
+        DeclareLaunchArgument('ur_type', default_value='ur5e'),
+        DeclareLaunchArgument('robot_ip', default_value='yyy.yyy.yyy.yyy'),
+        DeclareLaunchArgument('use_fake_hardware', default_value='false'),
+        DeclareLaunchArgument('prefix', default_value=''),
+        DeclareLaunchArgument('description_package', default_value='harvest_hardware_description'),
+        DeclareLaunchArgument('description_file', default_value='amiga_ur_gripper.urdf.xacro'),
+        DeclareLaunchArgument('view_rviz', default_value='true'),
+        DeclareLaunchArgument("rviz_file", default_value="view_robot.rviz"),
+        DeclareLaunchArgument('use_sim_time', default_value='false'),
+        DeclareLaunchArgument("use_3d_sensors", default_value="false"),
 
-    ### UR driver and MoveIt arguments
-    declared_arguments.append(DeclareLaunchArgument('ur_type', default_value="ur5e", 
-                                  description="Type of Universal Robot."))
-    declared_arguments.append(DeclareLaunchArgument('robot_ip', default_value="yyy.yyy.yyy.yyy", 
-                                  description="IP address of the robot."))
-    declared_arguments.append(DeclareLaunchArgument('use_fake_hardware', default_value="false", 
-                                  description="Use fake hardware for the UR robot."))
-    declared_arguments.append(DeclareLaunchArgument('launch_moveit_rviz', default_value="true", 
-                                  description="Launch RViz for MoveIt visualization."))
-    declared_arguments.append(DeclareLaunchArgument('launch_rviz', default_value="false", 
-                                  description="Launch RViz for visualization."))
-    declared_arguments.append(DeclareLaunchArgument('description_package', default_value='robot_custom_hardware',
-                                  description='Package containing the URDF/Xacro'))
-    declared_arguments.append(DeclareLaunchArgument('description_file', default_value='amiga_ur_gripper.urdf.xacro',
-                                  description='Path (relative to description_package share) to the Xacro file'))
+        DeclareLaunchArgument('sim', default_value='false'),
+        DeclareLaunchArgument('voxel_distance_tol', default_value='0.5'),
+        DeclareLaunchArgument('max_accel', default_value='0.05'),
+        DeclareLaunchArgument('max_vel', default_value='0.05'),
+        DeclareLaunchArgument('traj_time_step', default_value='0.05'),
+    ]
 
-    ### harvest node parameter
-    # The pick pattern is dependent on the controller selected with the below parameter
-    declared_arguments.append(DeclareLaunchArgument("pick_pattern", default_value="pull-twist", 
-                                  description="Pick pattern used, can specify: 'pull-twist', 'force-heuristic', or 'linear-pull'."))
-    
-    ### coordinate_to_trajectory node parameter
-    # If using MoveIt with simulation or hardware
-    declared_arguments.append(DeclareLaunchArgument('sim', default_value="False", 
-                                  description="Simulation bool for MoveIt."))
-    declared_arguments.append(DeclareLaunchArgument("voxel_distance_tol", default_value="0.5",
-                                  description="Maximum distance tolerance between target coordinate and precomputed voxel coordinate."))
-
-    ### move_arm node parameters
-    declared_arguments.append(DeclareLaunchArgument('max_accel', default_value="0.05", 
-                                  description="Set the max accelleration of the UR5."))
-    declared_arguments.append(DeclareLaunchArgument('max_vel', default_value="0.05", 
-                                  description="Set the max velocity of the UR5."))
-    declared_arguments.append(DeclareLaunchArgument('traj_time_step', default_value="0.05", 
-                                  description="Time step (in seconds) between UR5 joint trajectory waypoints."))
-
-    # Path to UR5 launch files
-    ur_driver_launch_path = os.path.join(
-        get_package_share_directory('ur_robot_driver'),
-        'launch',
-        'ur_control.launch.py')
-    
-    ur_moveit_launch_path = os.path.join(
-        get_package_share_directory('ur_moveit_config'),
-        'launch',
-        'ur_moveit.launch.py')
-    
-    move_arm_sublaunch_path = os.path.join(
-        get_package_share_directory('harvest_control'),
-        'launch',
-        'arm_moveit_config.launch.py'
+    # Pick controller based on fake hardware argument
+    initial_controller = IfElseSubstitution(
+        EqualsSubstitution(LaunchConfiguration('use_fake_hardware'), TextSubstitution(text='true')),
+        TextSubstitution(text='joint_trajectory_controller'),
+        TextSubstitution(text='scaled_joint_trajectory_controller'),
     )
 
-    return LaunchDescription(declared_arguments + [
-        # Include UR driver launch
-        IncludeLaunchDescription(
-            PythonLaunchDescriptionSource(ur_driver_launch_path),
-            launch_arguments={
-                'ur_type': LaunchConfiguration('ur_type'),
-                'robot_ip': LaunchConfiguration('robot_ip'),
-                'use_fake_hardware': LaunchConfiguration('use_fake_hardware'),
-                'launch_rviz': LaunchConfiguration('launch_rviz'),
-                'description_package': LaunchConfiguration('description_package'),
-                'description_file': LaunchConfiguration('description_file'),
-            }.items(),
-        ),
+    # ---------- Paths ----------
+    ur_driver_launch = os.path.join(
+        get_package_share_directory('ur_robot_driver'),
+        'launch', 'ur_control.launch.py'
+    )
 
-        # Include UR MoveIt launch
-        IncludeLaunchDescription(
-            PythonLaunchDescriptionSource(ur_moveit_launch_path),
-            launch_arguments={
-                'ur_type': LaunchConfiguration('ur_type'),
-                'robot_ip': LaunchConfiguration('robot_ip'),
-                'launch_rviz': LaunchConfiguration('launch_moveit_rviz'),
-                'description_package': LaunchConfiguration('description_package'),
-                'description_file': LaunchConfiguration('description_file'),
-            }.items(),
-        ),
+    desc_launch = os.path.join(
+        get_package_share_directory('harvest_hardware_description'),
+        'launch', 'robot_state_publisher.launch.py'
+    )
 
-        IncludeLaunchDescription(
-            PythonLaunchDescriptionSource(move_arm_sublaunch_path),
-            launch_arguments={
-                'ur_type': LaunchConfiguration('ur_type'),
-                'robot_ip': LaunchConfiguration('robot_ip'),
-                'use_fake_hardware': LaunchConfiguration('use_fake_hardware'),
-                'description_package': LaunchConfiguration('description_package'),
-                'description_file': LaunchConfiguration('description_file'),
-                'max_accel': LaunchConfiguration('max_accel'),
-                'max_vel': LaunchConfiguration('max_vel'),
-                'traj_time_step': LaunchConfiguration('traj_time_step'),
-            }.items(),
-        ),
+    moveit_launch = os.path.join(
+        get_package_share_directory('harvest_hardware_moveit_config'),
+        'launch', 'ur_moveit.launch.py'
+    )
 
-        # Launch the coordinate_to_trajectory_node
-        Node(
-            package='harvest_control',
-            executable='coordinate_to_trajectory.py',
-            name='trajectory_query_node',
-            parameters=[
-                    {"sim": LaunchConfiguration("sim"),
-                     "voxel_distance_tol": LaunchConfiguration("voxel_distance_tol")
-                      }
-                    ]
-        ),
+    # ---------- Includes ----------
+    ur_driver = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(ur_driver_launch),
+        launch_arguments={
+            'ur_type': LaunchConfiguration('ur_type'),
+            'robot_ip': LaunchConfiguration('robot_ip'),
+            'use_fake_hardware': LaunchConfiguration('use_fake_hardware'),
+            'use_mock_hardware': LaunchConfiguration('use_fake_hardware'),
+            'description_package': LaunchConfiguration('description_package'),
+            'description_file': LaunchConfiguration('description_file'),
+            'prefix': LaunchConfiguration('prefix'),
+            'launch_rviz': 'false',
+            'initial_joint_controller': initial_controller,
+            'use_sim_time': LaunchConfiguration('use_sim_time'),
+        }.items(),
+    )
 
-        Node(
-            package='harvest_control',
-            executable='event_detector.py',
-            name='event_detector',
-        ),
+    moveit = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(moveit_launch),
+        launch_arguments={
+            'ur_type': LaunchConfiguration('ur_type'),
+            'prefix': LaunchConfiguration('prefix'),
+            'launch_rviz': LaunchConfiguration('view_rviz'),
+            'robot_ip': LaunchConfiguration('robot_ip'),
+            'use_fake_hardware': LaunchConfiguration('use_fake_hardware'),
+            'description_file': LaunchConfiguration('description_file'),
+            'use_sim_time': LaunchConfiguration('use_sim_time'),
+            'use_3d_sensors': LaunchConfiguration('use_3d_sensors'),
+        }.items(),
+    )
 
-        Node(
-            package='harvest_control',
-            executable='force_filter.py',
-            name='forcefilter',
-        ),
+    coord_to_traj = Node(
+        package='harvest_control',
+        executable='coordinate_to_trajectory.py',
+        name='trajectory_query_node',
+        parameters=[{
+            'sim': LaunchConfiguration('sim'),
+            'voxel_distance_tol': LaunchConfiguration('voxel_distance_tol'),
+            'use_sim_time': LaunchConfiguration('use_sim_time'),
+        }],
+        output='screen',
+    )
+    event_detector = Node(
+        package='harvest_control', 
+        executable='event_detector.py', 
+        name='event_detector', 
+        parameters=[{
+            'use_sim_time': LaunchConfiguration('use_sim_time'),
+            }],
+    )
+    force_filter = Node(
+        package='harvest_control', 
+        executable='force_filter.py', 
+        name='forcefilter', 
+        parameters=[{
+            'use_sim_time': LaunchConfiguration('use_sim_time'),
+            }],
+    )
+    pick_controller = Node(
+        package='harvest_control', 
+        executable='heuristic_controller.py', 
+        name='pick_controller', 
+        parameters=[{
+            'use_sim_time': LaunchConfiguration('use_sim_time'),
+            }],
+    )
+    linear_controller = Node(
+        package='harvest_control', 
+        executable='linear_controller.py', 
+        name='linear_controller', 
+        parameters=[{
+            'use_sim_time': LaunchConfiguration('use_sim_time'),
+            }],
+    )
+    tf_listener = Node(
+        package='harvest_control', 
+        executable='pose_listener.py', 
+        name='tf_listener', 
+        parameters=[{
+            'use_sim_time': LaunchConfiguration('use_sim_time'),
+            }],
+    )
+    pressure_avg = Node(
+        package='harvest_control', 
+        executable='pressure_averager.py', 
+        name='pressure_averager', 
+        parameters=[{
+            'use_sim_time': LaunchConfiguration('use_sim_time'),
+            }],
+    )
+    pull_twist = Node(
+        package='harvest_control', 
+        executable='pull_twist_controller.py', 
+        name='pull_twist_controller', 
+        parameters=[{
+            'use_sim_time': LaunchConfiguration('use_sim_time'),
+            }],
+    )
+    recorder = Node(
+        package='harvest', 
+        executable='record.py', 
+        name='record_topics_node', 
+        parameters=[{
+            'use_sim_time': LaunchConfiguration('use_sim_time'),
+            }],
+    )
 
-        Node(
-            package='harvest_control',
-            executable='heuristic_controller.py',
-            name='pick_controller',
-        ),
-
-        Node(
-            package='harvest_control',
-            executable='linear_controller.py',
-            name='linear_controller',
-        ),
-
-        Node(
-            package='harvest_control',
-            executable='pose_listener.py',
-            name='tf_listener',
-        ),
-
-        Node(
-            package='harvest_control',
-            executable='pressure_averager.py',
-            name='pressure_averager',
-        ),
-
-        Node(
-            package='harvest_control',
-            executable='pull_twist_controller.py',
-            name='pull_twist_controller',
-        ),
-        
-        # # Launch C++ node
-        # Node(
-        #     package='harvest_control',
-        #     executable='move_arm',
-        #     name='move_arm_node',
-        #     parameters=[
-        #             {"max_accel": LaunchConfiguration("max_accel"),
-        #              "max_vel": LaunchConfiguration("max_vel"),
-        #              "traj_time_step": LaunchConfiguration("traj_time_step"),
-        #               }
-        #             ]
-        # ),
-
-        Node(
-            package='harvest',
-            executable='record.py',
-            name='record_topics_node',
-        ),
-    ])
+    return LaunchDescription(
+        args + [
+            ur_driver,
+            moveit,
+            coord_to_traj,
+            event_detector,
+            force_filter,
+            pick_controller,
+            linear_controller,
+            tf_listener,
+            pressure_avg,
+            pull_twist,
+            recorder,
+        ]
+    )

@@ -1,18 +1,25 @@
 <?xml version="1.0"?>
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
-  <name>robot_custom_hardware</name>
+  <name>harvest_hardware_description</name>
   <version>0.0.0</version>
   <description>TODO: Package description</description>
-  <maintainer email="keegan.nave@gmail.com">keegan</maintainer>
+  <maintainer email="rosettem@oregonstate.edu">marcus</maintainer>
   <license>TODO: License declaration</license>
 
-  <depend>xacro</depend>
-  <depend>urdf</depend>
-  <depend>launch</depend>
-  <depend>launch_ros</depend>
-  <exec_depend>ur_description</exec_depend>
+  <!-- Runtime dependencies -->
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>xacro</exec_depend>
   <exec_depend>robot_state_publisher</exec_depend>
+  <exec_depend>joint_state_publisher</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <!-- If you load ros2_control in URDF -->
+  <exec_depend>ros2_control</exec_depend>
+  <exec_depend>ros2_controllers</exec_depend>
+
+  <!-- For RViz config shipped here -->
+  <exec_depend>rviz2</exec_depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>

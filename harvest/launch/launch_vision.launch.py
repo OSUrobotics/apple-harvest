@@ -1,11 +1,12 @@
 import os
-from ament_index_python.packages import get_package_prefix, get_package_share_directory
+from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch_ros.actions import Node
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
-from launch.substitutions import Command, FindExecutable, LaunchConfiguration, PathJoinSubstitution
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.substitutions import FindPackageShare
+from launch.conditions import IfCondition
 import launch_ros.actions
 from launch.actions import IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
@@ -49,6 +50,10 @@ def generate_launch_description():
     declared_arguments.append(DeclareLaunchArgument('prediction_model_path', default_value=[PathJoinSubstitution([FindPackageShare("harvest_vision"), "yolo_networks", LaunchConfiguration("prediction_model")])]))
     declared_arguments.append(DeclareLaunchArgument('vservo_model_path', default_value=[PathJoinSubstitution([FindPackageShare("harvest_vision"), "yolo_networks", LaunchConfiguration("vservo_model")])]))
     
+    ## launch realsense topics conditionally 
+    declared_arguments.append(DeclareLaunchArgument("launch_realsense", default_value="true", 
+                                description="Whether to launch realsense topics."))
+
     # Reasense launch file path
     realsense_launch_path = os.path.join(
         get_package_share_directory('harvest'),
@@ -57,7 +62,8 @@ def generate_launch_description():
     
     realsense_topics_node = IncludeLaunchDescription(
             PythonLaunchDescriptionSource(realsense_launch_path),
-    )
+            condition=IfCondition(LaunchConfiguration('launch_realsense')),
+        )
 
     ### Nodes
     apple_prediction_node = launch_ros.actions.Node(
@@ -88,7 +94,7 @@ def generate_launch_description():
                 ])
 
     palm_camera_node = launch_ros.actions.Node(
-                package="robot_custom_hardware",
+                package="harvest_vision",
                 executable="gripper_palm_camera",
                 name="gripper_palm_camera",
                 parameters=[

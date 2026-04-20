@@ -42,23 +42,6 @@ ament_target_dependencies(
   "std_srvs"
   "shape_msgs"
   )
-  
-  # add_executable(move_arm_action_based src/move_arm_action_based.cpp)
-  
-  # target_include_directories(move_arm_action_based PUBLIC
-  # $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-  # $<INSTALL_INTERFACE:include>)
-
-  # target_compile_features(move_arm_action_based PUBLIC c_std_99 cxx_std_17)  # Require C99 and C++17
-
-  # ament_target_dependencies(
-    #   move_arm_action_based
-    #   "moveit_ros_planning_interface"
-    #   "harvest_interfaces"
-    #   "rclcpp"
-    #   "trajectory_msgs"
-    #   "std_srvs"
-    # )
 
 ### PYTHON ###
 # Install Python modules
@@ -82,9 +65,6 @@ install(PROGRAMS
 
 install(TARGETS move_arm
   DESTINATION lib/${PROJECT_NAME})
-
-# install(TARGETS move_arm_action_based
-  # DESTINATION lib/${PROJECT_NAME})
 
 ### LAUNCH ###
 # Install launch files.

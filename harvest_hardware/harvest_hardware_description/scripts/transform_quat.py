@@ -1,8 +1,8 @@
 import numpy as np
 from scipy.spatial.transform import Rotation as R
 
-position = np.array([0.375022,-0.188497,1.522220])
-quaternion = [-0.707750, -0.124846, 0.111880, 0.686284]
+position = np.array([ 0.355001,-0.184258,1.534915])
+quaternion = [-0.697140, -0.118307, 0.118307, 0.697140]
 
 desired_transform = [
     [0, -1, 0, 0.015],

@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <robot xmlns:xacro="https://ros.org/wiki/xacro" name="amiga">
 
-<xacro:macro name="amiga_macro" params="amiga_prefix:='amiga__' amiga_parent:='world' mesh_base_path">
+<xacro:macro name="amiga_macro" params="amiga_prefix:='amiga__' amiga_parent:='' mesh_base_path">
     <!-- ================== -->
     <!--     Amiga Macro    -->
     <!-- ================== -->
@@ -112,11 +112,13 @@
     <!-- ================== -->
     <!--       Joints       -->
     <!-- ================== -->
-    <joint name="${amiga_parent}--${amiga_prefix}base" type ="fixed">
+    <xacro:if value="${amiga_parent != ''}">
+    <joint name="${amiga_parent}--${amiga_prefix}base" type="fixed">
         <origin rpy="0 0 0" xyz="0 0 0"/>
         <parent link="${amiga_parent}"/>
         <child link="${amiga_prefix}base"/>
     </joint>
+    </xacro:if>
     <joint name="${amiga_prefix}base--${amiga_prefix}body" type="fixed">
         <origin rpy="0 0 0" xyz="0 0 0"/>
         <parent link="${amiga_prefix}base"/>
