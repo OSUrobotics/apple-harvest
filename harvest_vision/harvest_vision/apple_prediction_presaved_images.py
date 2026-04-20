@@ -32,19 +32,25 @@ class ApplePredictionPreSaved(Node):
         Then uses RANSAC to fit a sphere to each apple to estimate the position and radius.'''
         super().__init__("apple_prediction_pre_saved_node")
 
-        self.camera_type = 'azure'
+        # Set ros2 parameters and variables for camera type
+        self.declare_parameter("camera_type", "realsense") 
+        self.camera_type = self.get_parameter("camera_type").get_parameter_value().string_value 
         
-        ### AZURE CAMERA INTRINSICS
-        self.azure_color_intrinsic = [902.98, 0, 956.55, 0, 902.77, 547.68, 0, 0, 1]
-        self.fx = self.azure_color_intrinsic[0]  # Focal length in x
-        self.fy = self.azure_color_intrinsic[4]  # Focal length in y
-        self.cx = self.azure_color_intrinsic[2]  # Principal point x
-        self.cy = self.azure_color_intrinsic[5]  # Principal point y
-
         if self.camera_type == 'azure':
             self.target_size = (1920, 1080)
-        else:
+            self.azure_color_intrinsic = [902.98, 0, 956.55, 0, 902.77, 547.68, 0, 0, 1]
+            self.fx = self.azure_color_intrinsic[0]  # Focal length in x
+            self.fy = self.azure_color_intrinsic[4]  # Focal length in y
+            self.cx = self.azure_color_intrinsic[2]  # Principal point x
+            self.cy = self.azure_color_intrinsic[5]  # Principal point y
+        elif self.camera_type == 'realsense':
             self.target_size = (848, 480)
+            self.fx, self.fy, self.cx, self.cy = 609.6989, 609.8549, 420.2079, 235.2782
+        else:
+            self.get_logger().error("Invalid camera type specified. Must be 'azure' or 'realsense'.")
+            rclpy.shutdown()
+            return
+        self.get_logger().info(f"Camera type: {self.camera_type}, target size: {self.target_size}, fx: {self.fx}, fy: {self.fy}, cx: {self.cx}, cy: {self.cy}")
 
         ### SERVICE
         self.prediction_srv = self.create_service(ApplePrediction, "apple_prediction_presaved_images", self.prediction_callback_srv)
@@ -53,6 +59,17 @@ class ApplePredictionPreSaved(Node):
         self.marker_pub = self.create_publisher(MarkerArray, "apple_markers", 10)
         self.rgb_publisher = self.create_publisher(Image, 'rgb_image', 10)
         self.depth_publisher = self.create_publisher(Image, 'depth_image', 10)
+        self.annotated_image_publisher = self.create_publisher(Image, 'apple_prediction_annotated', 10)
+
+        # Latched publisher — voxelize node (or any other subscriber) will receive
+        # the last prediction result even if it subscribes after the service was called.
+        from rclpy.qos import QoSProfile, DurabilityPolicy, ReliabilityPolicy
+        latched_qos = QoSProfile(
+            depth=1,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            reliability=ReliabilityPolicy.RELIABLE,
+        )
+        self.apple_poses_pub = self.create_publisher(PoseArray, 'apple_poses', latched_qos)
 
         ### TIMERS
         self.timer = self.create_timer(0.1, self.publish_images)  # Publish at 10 Hz
@@ -84,17 +101,28 @@ class ApplePredictionPreSaved(Node):
             # Get the package's share directory
             share_directory = get_package_share_directory(package_name)
             
-            # Access a file or subdirectory within the share directory
-            self.rgb_path = os.path.join(share_directory, 'data/', f'prosser_{self.vision_experiment}/', 'color_raw.png')
-            self.depth_path = os.path.join(share_directory, 'data/', f'prosser_{self.vision_experiment}/', 'depth_to_color.png')
+            # # Access a file or subdirectory within the share directory
+            # self.rgb_path = os.path.join(share_directory, 'data/', f'prosser_{self.vision_experiment}/', 'color_raw.png')
+            # self.depth_path = os.path.join(share_directory, 'data/', f'prosser_{self.vision_experiment}/', 'depth_to_color.png')
+
+            self.rgb_path = '/home/marcus/apple_harvest_ws/data/rgbd_at_trees_oct_2025_v2/tree_006/color.png'
+            self.depth_path = '/home/marcus/apple_harvest_ws/data/rgbd_at_trees_oct_2025_v2/tree_006/depth.png'
+
         except Exception as e:
             self.get_logger().error(f"Error accessing share directory: {e}")
 
         # Load RGB and depth images
         self.rgb_image = cv2.imread(self.rgb_path)
         self.depth_image = cv2.imread(self.depth_path, cv2.IMREAD_UNCHANGED)
-        self.rgb_image = cv2.resize(self.rgb_image, self.target_size, interpolation=cv2.INTER_LINEAR) # Resize RGB image
-        self.depth_image = cv2.resize(self.depth_image, self.target_size, interpolation=cv2.INTER_NEAREST) # Resize depth image
+        self.get_logger().debug(f"Loaded RGB: dtype={self.rgb_image.dtype}, shape={self.rgb_image.shape}")
+        self.get_logger().debug(f"Loaded depth: dtype={self.depth_image.dtype}, min={self.depth_image.min()}, max={self.depth_image.max()}, shape={self.depth_image.shape}")
+
+        # Resize images to target size for YOLO input
+        self.rgb_image = cv2.resize(self.rgb_image, self.target_size, interpolation=cv2.INTER_LINEAR)
+        self.depth_image = cv2.resize(self.depth_image, self.target_size, interpolation=cv2.INTER_NEAREST)
+
+        if self.rgb_image is None or self.depth_image is None:
+            self.get_logger().error(f"Failed to load images from {self.rgb_path} or {self.depth_path}")
 
         ### YOLO SETUP
         self.model = YOLO(self.model_path)  # pretrained YOLOv8n model
@@ -110,7 +138,7 @@ class ApplePredictionPreSaved(Node):
         ### VARS
         self.debug_flag = False
         self.marker_counter = 0
-        self.ransac_thresh = .0001  # UNITS: m - distance that is considered an inlier point and an outlier point in the sphere fit
+        self.ransac_thresh = .005  # UNITS: m - distance that is considered an inlier point and an outlier point in the sphere fit
         self.ransac_iters = 1000    # number of iterations for ransac to run
         self.apple_centers = None
         self.apple_radii = None
@@ -122,12 +150,15 @@ class ApplePredictionPreSaved(Node):
     def prediction_callback_srv(self, request, response):
         # Segment apples and resize masks
         apple_masks = self.segment_apples(self.rgb_image)
+        self.get_logger().info(f"[1] YOLO found {len(apple_masks)} apple masks")
         resized_apple_masks = [cv2.resize(mask, self.target_size, interpolation=cv2.INTER_NEAREST) for mask in apple_masks]
 
         # Process images and masks
         rgb_image = cv2.cvtColor(self.rgb_image, cv2.COLOR_BGR2RGB)
         centers, radii = self.get_apple_centers(rgb_image, self.depth_image, resized_apple_masks)
+        self.get_logger().info(f"[2] get_apple_centers returned {len(centers)} centers")
         transformed_poses = self.transform_apple_poses(centers)
+        self.get_logger().info(f"[3] transform_apple_poses returned {len(transformed_poses.poses)} poses")
 
         # Publish results
         self.publish_markers(transformed_poses, radii)
@@ -135,6 +166,14 @@ class ApplePredictionPreSaved(Node):
         self.apple_centers = transformed_poses
         self.apple_radii = radii
         self.c2 = 0
+
+        self.publish_annotated_image()
+
+        # Publish poses on latched topic so voxelize node can consume them
+        transformed_poses.header.stamp = self.get_clock().now().to_msg()
+        transformed_poses.header.frame_id = "amiga__base"
+        self.apple_poses_pub.publish(transformed_poses)
+        self.get_logger().info(f"Published {len(transformed_poses.poses)} apple pose(s) to 'apple_poses'.")
 
         return response
 
@@ -182,18 +221,19 @@ class ApplePredictionPreSaved(Node):
         return center, radius
 
     def get_apple_centers(self, rgb, depth, masks):
+        self.get_logger().info(f"Depth dtype={depth.dtype}, min={depth.min()}, max={depth.max()}, nonzero={np.count_nonzero(depth)}, shape={depth.shape}")
         apple_centers = []
         apple_radii = []
         visualization = []
         for mask in masks: 
             # segment only the apple portions
-            depth_segmented = np.where(mask, depth, 0)
+            depth_segmented = np.where(mask.astype(bool), depth, 0).astype(np.uint16)
             print(depth_segmented[depth_segmented>0])
-            if np.median(depth_segmented[depth_segmented>0] > self.distance_thresh * 1000):
+            if np.median(depth_segmented[depth_segmented>0]) > self.distance_thresh * 1000:
                 continue
             # create RGBD image (NEEDS TO BE IN RGB FORMAT NOT BGR TO LOOK RIGHT, doesnt super matter for anything other than visualization)
             rgb_pc = o3d.geometry.Image(rgb)
-            depth_pc = o3d.geometry.Image(depth_segmented)
+            depth_pc = o3d.geometry.Image(depth_segmented.astype(np.uint16))
             rgbd_image = o3d.geometry.RGBDImage.create_from_color_and_depth(rgb_pc, depth_pc, convert_rgb_to_intensity=False)
 
             if self.camera_type == 'realsense':
@@ -233,7 +273,7 @@ class ApplePredictionPreSaved(Node):
         for i in apple_poses:
             origin = PoseStamped()
             # origin.header.frame_id = "camera_color_optical_frame"
-            origin.header.frame_id = "camera_link"
+            origin.header.frame_id = "mast_camera_color_optical_frame"
             origin.pose.position.x = i[0]
             origin.pose.position.y = i[1]
             origin.pose.position.z = i[2]
@@ -242,10 +282,11 @@ class ApplePredictionPreSaved(Node):
             origin.pose.orientation.z = 0.0
             origin.pose.orientation.w = 1.0
             try:
-                new_pose = self.tf_buffer.transform(origin, "base_link", rclpy.duration.Duration(seconds=1))
+                new_pose = self.tf_buffer.transform(origin, "amiga__base", rclpy.duration.Duration(seconds=1))
                 transformed_poses.poses.append(new_pose.pose)
             except TransformException as e:
-                self.get_logger().info(f'Transform failed: {e}')
+                self.get_logger().error(f'Transform failed: {e}')  # Change to error so it's visible
+                transformed_poses.poses.append(origin.pose)        # Append untransformed as fallback
         return transformed_poses
     
     def publish_markers(self, apple_poses, apple_radii):
@@ -253,7 +294,7 @@ class ApplePredictionPreSaved(Node):
         clear_markers = MarkerArray()
         for i in range(self.marker_counter):
             marker = Marker()
-            marker.header.frame_id = "base_link"
+            marker.header.frame_id = "amiga__base"
             marker.id = i
             marker.action = Marker.DELETE
             clear_markers.markers.append(marker)
@@ -264,7 +305,7 @@ class ApplePredictionPreSaved(Node):
         markers = MarkerArray()
         for i in range(len(apple_poses.poses)):
             marker = Marker()
-            marker.header.frame_id = "base_link"
+            marker.header.frame_id = "amiga__base"
             marker.header.stamp = self.get_clock().now().to_msg()
             marker.id = self.marker_counter
             marker.type = Marker.SPHERE
@@ -288,7 +329,7 @@ class ApplePredictionPreSaved(Node):
             marker.pose.orientation.w = 1.0
             markers.markers.append(marker)
             self.marker_counter += 1
-            self.get_logger().info(f"Apple found at: [{apple_poses.poses[i].position.x}, {apple_poses.poses[i].position.y}, {apple_poses.poses[i].position.z}] with radius {apple_radii[i]}")
+            self.get_logger().debug(f"Apple found at: [{apple_poses.poses[i].position.x}, {apple_poses.poses[i].position.y}, {apple_poses.poses[i].position.z}] with radius {apple_radii[i]}")
         self.marker_pub.publish(markers)
     
     def publish_images(self):
@@ -307,7 +348,7 @@ class ApplePredictionPreSaved(Node):
             o3d.geometry.Image(self.rgb_image),
             o3d.geometry.Image(self.depth_image),
             depth_scale=self.scale,
-            depth_trunc=1.5,  # Ignore points beyond 3m
+            depth_trunc=4,  # Ignore points beyond 3m
             convert_rgb_to_intensity=False
         )
         camera_intrinsics = o3d.camera.PinholeCameraIntrinsic(
@@ -332,7 +373,7 @@ class ApplePredictionPreSaved(Node):
         # Create ROS PointCloud2 message 
         header = Header()
         header.stamp = self.get_clock().now().to_msg()
-        header.frame_id = 'camera_link'  # Replace with your frame
+        header.frame_id = 'mast_camera_color_optical_frame'  # Replace with your frame
         fields = [
             PointField(name='x', offset=0, datatype=PointField.FLOAT32, count=1),
             PointField(name='y', offset=4, datatype=PointField.FLOAT32, count=1),
@@ -348,7 +389,33 @@ class ApplePredictionPreSaved(Node):
         """Periodically publish markers using the latest apple data."""
         if self.apple_centers is not None and self.apple_radii is not None:
             self.publish_markers(self.apple_centers, self.apple_radii)
-            
+
+    def publish_annotated_image(self):
+        if self.yolo_result is None:
+            return
+
+        annotated = self.rgb_image.copy()  # BGR, which is what cv2 drawing expects
+
+        for result in self.yolo_result:
+            if result.boxes is None:
+                continue
+            x1, y1, x2, y2 = result.boxes.xyxy.cpu().numpy()[0].astype(int)
+            conf = float(result.boxes.conf.cpu().numpy()[0])
+
+            # Draw bounding box
+            cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 255, 0), 2)
+
+            # Draw confidence label
+            label = f"apple {conf:.2f}"
+            (text_w, text_h), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+            cv2.rectangle(annotated, (x1, y1 - text_h - 6), (x1 + text_w, y1), (0, 255, 0), -1)
+            cv2.putText(annotated, label, (x1, y1 - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
+
+        msg = self.bridge.cv2_to_imgmsg(annotated, encoding="bgr8")
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.header.frame_id = "mast_camera_color_optical_frame"
+        self.annotated_image_publisher.publish(msg)
+                
 
 def main(args=None):
     rclpy.init(args=args)
