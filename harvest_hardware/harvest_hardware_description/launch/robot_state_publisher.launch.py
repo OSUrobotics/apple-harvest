@@ -13,9 +13,11 @@ def generate_launch_description():
         DeclareLaunchArgument('ur_type', default_value='ur5e'),
         DeclareLaunchArgument('robot_ip', default_value='yyy.yyy.yyy.yyy'),
         DeclareLaunchArgument('use_fake_hardware', default_value='false'),
+        DeclareLaunchArgument('use_mock_hardware', default_value='false'),
+        DeclareLaunchArgument('description_package', default_value='harvest_hardware_description'),
         DeclareLaunchArgument('description_file', default_value='amiga_ur_gripper.urdf.xacro'),
-        # set a non-empty prefix here if you ever need one, and pass the same to SRDF
         DeclareLaunchArgument('prefix', default_value=''),
+        DeclareLaunchArgument('use_sim_time', default_value='false'),
     ]
 
     # Build robot_description from your xacro
@@ -24,7 +26,7 @@ def generate_launch_description():
             Command([
                 'xacro ',
                 PathJoinSubstitution([
-                    FindPackageShare('harvest_hardware_description'),
+                    FindPackageShare(LaunchConfiguration('description_package')),
                     'urdf',
                     LaunchConfiguration('description_file'),
                 ]),
@@ -49,7 +51,7 @@ def generate_launch_description():
         package='robot_state_publisher',
         executable='robot_state_publisher',
         output='screen',
-        parameters=[robot_description],
+        parameters=[robot_description, {'use_sim_time': LaunchConfiguration('use_sim_time')}],
     )
 
     return LaunchDescription(args + [rsp])

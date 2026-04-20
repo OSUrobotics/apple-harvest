@@ -123,7 +123,8 @@
     parent="$(arg amiga_prefix)base" 
     prefix="base_"
     use_nominal_extrinsics="$(arg use_nominal_extrinsics)">
-    <origin xyz="0.0 0.3937 0.555625" rpy="0 0 1.57"/>
+    <origin xyz="0.0 0.3937 0.555625" rpy="0 0 1.57"/> <!-- Realworld mount location -->
+    <!-- <origin xyz="0.7 -0.75 0.555625" rpy="0 0 -1.57"/> --> <!-- Location used for warthog placement (original 0.7 0.69 0.555625-->
   </xacro:sensor_d435i>
 
   <!-- Tracking marker frame -->
@@ -142,6 +143,9 @@
         <color rgba="1 0 0 1"/>
       </material>
     </visual>
+    <collision>
+      <geometry><box size="0.0 0.0 0.0"/></geometry>
+    </collision>
   </link>
 
 </robot>

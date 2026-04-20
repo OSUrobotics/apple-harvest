@@ -4,7 +4,7 @@ from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration, PythonExpression, TextSubstitution, IfElseSubstitution, EqualsSubstitution
+from launch.substitutions import LaunchConfiguration, TextSubstitution, IfElseSubstitution, EqualsSubstitution
 from launch_ros.actions import Node
 
 def generate_launch_description():
@@ -37,8 +37,8 @@ def generate_launch_description():
 
     # ---------- Paths ----------
     ur_driver_launch = os.path.join(
-        get_package_share_directory('ur_robot_driver'),
-        'launch', 'ur_control.launch.py'
+        get_package_share_directory('harvest_hardware_moveit_config'),
+        'launch', 'ur_control_no_rsp.launch.py'
     )
 
     desc_launch = os.path.join(
@@ -49,6 +49,11 @@ def generate_launch_description():
     moveit_launch = os.path.join(
         get_package_share_directory('harvest_hardware_moveit_config'),
         'launch', 'ur_moveit.launch.py'
+    )
+
+    ur_controller_config = os.path.join(
+        get_package_share_directory('harvest_hardware_moveit_config'),
+        'config', 'ur_controllers.yaml'
     )
 
     # ---------- Includes ----------
@@ -64,6 +69,21 @@ def generate_launch_description():
             'prefix': LaunchConfiguration('prefix'),
             'launch_rviz': 'false',
             'initial_joint_controller': initial_controller,
+            'use_sim_time': LaunchConfiguration('use_sim_time'),
+            'controllers_file': ur_controller_config,
+        }.items(),
+    )
+
+    rsp = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(desc_launch),
+        launch_arguments={
+            'ur_type': LaunchConfiguration('ur_type'),
+            'robot_ip': LaunchConfiguration('robot_ip'),
+            'use_fake_hardware': LaunchConfiguration('use_fake_hardware'),
+            'use_mock_hardware': LaunchConfiguration('use_fake_hardware'),
+            'description_package': LaunchConfiguration('description_package'),
+            'description_file': LaunchConfiguration('description_file'),
+            'prefix': LaunchConfiguration('prefix'),
             'use_sim_time': LaunchConfiguration('use_sim_time'),
         }.items(),
     )
@@ -161,6 +181,7 @@ def generate_launch_description():
     return LaunchDescription(
         args + [
             ur_driver,
+            rsp,
             moveit,
             coord_to_traj,
             event_detector,
