@@ -15,12 +15,11 @@
 #include "std_srvs/srv/empty.hpp"
 #include <std_srvs/srv/trigger.hpp>
 
-// Read data packages
 #include <iostream>
 #include <fstream>
 #include <vector>
 #include <stdexcept>
-#include <cmath> // For M_PI
+#include <cmath>
 #include <memory>
 
 using std::placeholders::_1;
@@ -46,21 +45,18 @@ private:
     std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
 
     std::unique_ptr<moveit::planning_interface::MoveGroupInterface> move_group_;
-    std::vector<double> home_joint_positions = {
-        M_PI / 4,
-        -M_PI / 2,
-        2 * M_PI / 3,
-        5 * M_PI / 6,
-        -M_PI / 2,
-        0};
 
-    std::vector<double> scan_joint_positions = {
-        M_PI / 2,
-        -M_PI / 2,
-        2 * M_PI / 3,
-        5 * M_PI / 6,
-        -M_PI / 2,
-        0};
+    const std::vector<double> home_joint_positions_ = {
+        M_PI / 4, -M_PI / 2, 2 * M_PI / 3, 5 * M_PI / 6, -M_PI / 2, 0};
+
+    const std::vector<double> scan_joint_positions_ = {
+        M_PI / 2, -M_PI / 2, 2 * M_PI / 3, 5 * M_PI / 6, -M_PI / 2, 0};
+
+    const std::vector<double> target_joint_positions_ = {
+        1.5, -2.775, 1.72, 4.55, -1.58, 0};
+
+    // Plans and executes a joint-space goal; returns true on success
+    bool plan_and_execute_joints(const std::vector<double> &joint_positions);
 
     void execute_trajectory(const std::shared_ptr<harvest_interfaces::srv::SendTrajectory::Request> request,
                             std::shared_ptr<harvest_interfaces::srv::SendTrajectory::Response> response);
@@ -78,11 +74,9 @@ MoveArmNode::MoveArmNode()
       tf_buffer_(std::make_shared<tf2_ros::Buffer>(this->get_clock())),
       tf_listener_(std::make_shared<tf2_ros::TransformListener>(*tf_buffer_))
 {
-    // Initialize the subscription to /gripper_tip
     gripper_tip_subscription_ = this->create_subscription<geometry_msgs::msg::TransformStamped>(
         "/gripper_tip", 10, std::bind(&MoveArmNode::gripper_tip_callback, this, std::placeholders::_1));
 
-    // Set up services
     arm_trajectory_service_ = this->create_service<harvest_interfaces::srv::SendTrajectory>(
         "send_arm_trajectory", std::bind(&MoveArmNode::execute_trajectory, this, _1, _2));
 
@@ -100,21 +94,11 @@ MoveArmNode::MoveArmNode()
 
 void MoveArmNode::init_moveit()
 {
-    // Now safe to use shared_from_this(); the object is owned by a std::shared_ptr
     move_group_ = std::make_unique<moveit::planning_interface::MoveGroupInterface>(
-        shared_from_this(), "ur5e_manipulator"  // group must match SRDF/kinematics
-    );
+        shared_from_this(), "ur5e_manipulator");
 
-    // // Declare with defaults so we don’t crash if unset
-    // double max_accel = this->declare_parameter<double>("max_accel", 0.05);
-    // double max_vel   = this->declare_parameter<double>("max_vel",   0.05);
-    // Set up parameters
-    double max_accel = this->get_parameter("max_accel").as_double();
-    double max_vel = this->get_parameter("max_vel").as_double();
-
-
-    move_group_->setMaxAccelerationScalingFactor(max_accel);
-    move_group_->setMaxVelocityScalingFactor(max_vel);
+    move_group_->setMaxAccelerationScalingFactor(this->get_parameter("max_accel").as_double());
+    move_group_->setMaxVelocityScalingFactor(this->get_parameter("max_vel").as_double());
 
     RCLCPP_INFO(this->get_logger(), "MoveIt MoveGroupInterface initialized");
 }
@@ -124,121 +108,78 @@ void MoveArmNode::gripper_tip_callback(const geometry_msgs::msg::TransformStampe
     current_gripper_pose_ = *msg;
 }
 
-void MoveArmNode::move_to_home(const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
-                               const std::shared_ptr<std_srvs::srv::Trigger::Response> response)
+bool MoveArmNode::plan_and_execute_joints(const std::vector<double> &joint_positions)
 {
-    (void)request; // Suppress unused parameter warning
-
-    // Set the home configuration as the target for the MoveGroup
-    move_group_->setJointValueTarget(home_joint_positions);
-
-    // Plan and execute to move to the home position
+    move_group_->setJointValueTarget(joint_positions);
     moveit::planning_interface::MoveGroupInterface::Plan plan;
-    bool success = static_cast<bool>(move_group_->plan(plan));
-
-    if (success)
+    if (static_cast<bool>(move_group_->plan(plan)))
     {
         move_group_->execute(plan);
-        RCLCPP_INFO(this->get_logger(), "Moved to home configuration.");
-        response->success = true;
-        response->message = "Successfully moved to home configuration.";
+        return true;
     }
-    else
-    {
-        RCLCPP_ERROR(this->get_logger(), "Failed to move to home configuration.");
-        response->success = false;
-        response->message = "Failed to move to home configuration.";
-    }
+    return false;
 }
 
-void MoveArmNode::move_to_config(const std::shared_ptr<std_srvs::srv::Trigger::Request> request,
+void MoveArmNode::move_to_home(const std::shared_ptr<std_srvs::srv::Trigger::Request> /*request*/,
+                               const std::shared_ptr<std_srvs::srv::Trigger::Response> response)
+{
+    response->success = plan_and_execute_joints(home_joint_positions_);
+    response->message = response->success
+        ? "Successfully moved to home configuration."
+        : "Failed to move to home configuration.";
+    RCLCPP_INFO(this->get_logger(), response->message.c_str());
+}
+
+void MoveArmNode::move_to_config(const std::shared_ptr<std_srvs::srv::Trigger::Request> /*request*/,
                                  const std::shared_ptr<std_srvs::srv::Trigger::Response> response)
 {
-    (void)request; // Suppress unused parameter warning
-
-    std::vector<double> target_config = {
-        1.5,
-        -2.775,
-        1.72,
-        4.55,
-        -1.58,
-        0};
-
-    // Set the target configuration as the target for the MoveGroup
-    move_group_->setJointValueTarget(target_config);
-
-    // Plan and execute to move to the target position
-    moveit::planning_interface::MoveGroupInterface::Plan plan;
-    bool success = static_cast<bool>(move_group_->plan(plan));
-
-    if (success)
-    {
-        move_group_->execute(plan);
-        RCLCPP_INFO(this->get_logger(), "Moved to target configuration.");
-        response->success = true;
-    }
-    else
-    {
+    response->success = plan_and_execute_joints(target_joint_positions_);
+    if (!response->success)
         RCLCPP_ERROR(this->get_logger(), "Failed to move to target configuration.");
-        response->success = false;
-    }
 }
 
 void MoveArmNode::move_to_pose(const std::shared_ptr<harvest_interfaces::srv::MoveToPose::Request> request,
                                const std::shared_ptr<harvest_interfaces::srv::MoveToPose::Response> response)
 {
-    // Set the current state as the start
-    this->move_group_->setStartStateToCurrentState();
+    move_group_->setStartStateToCurrentState();
 
-    // Make PoseStamped message
-    tf2::Quaternion orientation;
-    orientation.setRPY(3.14 / 2, 3.14, 3.14);  // Set desired orientation
-    geometry_msgs::msg::PoseStamped msg;
-    msg.header.frame_id = "world";
-    msg.pose.orientation = tf2::toMsg(orientation);
-    msg.pose.position.x = request->position.x;
-    msg.pose.position.y = request->position.y;
-    msg.pose.position.z = request->position.z;
+    geometry_msgs::msg::PoseStamped msg = request->pose_stamped;
 
-    // Set pose and joint tolerances
-    this->move_group_->setPoseTarget(msg, "gripper_link");
-    // this->move_group_->setGoalOrientationTolerance(0.35);
-    this->move_group_->setGoalOrientationTolerance(1.05);
-    // this->move_group_->setGoalJointTolerance(0.001); // Minimize joint changes
+    const auto &ori = request->pose_stamped.pose.orientation;
+    if (std::isnan(ori.x) || std::isnan(ori.y) || std::isnan(ori.z) || std::isnan(ori.w))
+    {
+        RCLCPP_WARN(this->get_logger(), "No valid orientation provided, using default.");
+        tf2::Quaternion q;
+        q.setRPY(M_PI / 2, M_PI, M_PI);
+        msg.pose.orientation = tf2::toMsg(q);
+    }
 
-    // Use an optimization-aware planner
-    // this->move_group_->setPlannerId("RRTstarkConfigDefault");
-    this->move_group_->setPlannerId("RRTConnectkConfigDefault");
-    // this->move_group_->setPlanningTime(20.0);
-    // this->move_group_->setNumPlanningAttempts(50);
-    this->move_group_->setPlanningTime(20.0);
-    this->move_group_->setNumPlanningAttempts(1000);
+    move_group_->setPoseTarget(msg, "gripper_link");
+    move_group_->setGoalOrientationTolerance(1.05);
+    move_group_->setPlannerId("RRTConnectkConfigDefault");
+    move_group_->setPlanningTime(20.0);
+    move_group_->setNumPlanningAttempts(1000);
 
-    // Plan and execute
     moveit::planning_interface::MoveGroupInterface::Plan goal;
     if (move_group_->plan(goal))
     {
-        this->move_group_->execute(goal);
+        move_group_->execute(goal);
         response->result = true;
 
-        // Save the reverse trajectory as Float32MultiArray
+        // Build reverse trajectory for caller
+        const auto &traj = goal.trajectory_.joint_trajectory;
         std_msgs::msg::Float32MultiArray reverse_traj;
         reverse_traj.layout.dim.resize(2);
-        reverse_traj.layout.dim[0].label = "waypoints";
-        reverse_traj.layout.dim[0].size = goal.trajectory_.joint_trajectory.points.size();
-        reverse_traj.layout.dim[0].stride = goal.trajectory_.joint_trajectory.points.size() * goal.trajectory_.joint_trajectory.joint_names.size();
-        reverse_traj.layout.dim[1].label = "joints";
-        reverse_traj.layout.dim[1].size = goal.trajectory_.joint_trajectory.joint_names.size();
-        reverse_traj.layout.dim[1].stride = goal.trajectory_.joint_trajectory.joint_names.size();
+        reverse_traj.layout.dim[0].label  = "waypoints";
+        reverse_traj.layout.dim[0].size   = traj.points.size();
+        reverse_traj.layout.dim[0].stride = traj.points.size() * traj.joint_names.size();
+        reverse_traj.layout.dim[1].label  = "joints";
+        reverse_traj.layout.dim[1].size   = traj.joint_names.size();
+        reverse_traj.layout.dim[1].stride = traj.joint_names.size();
 
-        
-        for (auto it = goal.trajectory_.joint_trajectory.points.rbegin(); it != goal.trajectory_.joint_trajectory.points.rend(); ++it)
-        {
-            for (double position : it->positions)
-            {
-                reverse_traj.data.push_back(position);
-            }
-        }
+        for (auto it = traj.points.rbegin(); it != traj.points.rend(); ++it)
+            for (double pos : it->positions)
+                reverse_traj.data.push_back(pos);
 
         response->reverse_traj = reverse_traj;
     }
@@ -252,7 +193,6 @@ void MoveArmNode::move_to_pose(const std::shared_ptr<harvest_interfaces::srv::Mo
 void MoveArmNode::execute_trajectory(const std::shared_ptr<harvest_interfaces::srv::SendTrajectory::Request> request,
                                      std::shared_ptr<harvest_interfaces::srv::SendTrajectory::Response> response)
 {
-    // Extract the layout dimensions from the Float32MultiArray message
     const auto &layout = request->waypoints.layout;
     if (layout.dim.size() < 2)
     {
@@ -261,10 +201,9 @@ void MoveArmNode::execute_trajectory(const std::shared_ptr<harvest_interfaces::s
         return;
     }
 
-    int num_waypoints = layout.dim[0].size;
-    int num_joints = layout.dim[1].size;
+    const int num_waypoints = layout.dim[0].size;
+    const int num_joints    = layout.dim[1].size;
 
-    // Ensure the flattened data size matches the expected dimensions
     if (static_cast<int>(request->waypoints.data.size()) != num_waypoints * num_joints)
     {
         RCLCPP_ERROR(this->get_logger(), "Mismatch between data size and dimensions");
@@ -272,20 +211,14 @@ void MoveArmNode::execute_trajectory(const std::shared_ptr<harvest_interfaces::s
         return;
     }
 
-    // Create a 2D vector to store the reconstructed data
+    // Reconstruct 2-D path from flat array
     std::vector<std::vector<double>> path(num_waypoints, std::vector<double>(num_joints));
-
-    // Copy data into the 2D vector
     size_t index = 0;
     for (int row = 0; row < num_waypoints; ++row)
-    {
         for (int col = 0; col < num_joints; ++col)
-        {
             path[row][col] = request->waypoints.data[index++];
-        }
-    }
 
-    // Logging each waypoint from the trajectory
+    // Log waypoints
     for (int row = 0; row < num_waypoints; ++row)
     {
         std::stringstream ss;
@@ -293,65 +226,43 @@ void MoveArmNode::execute_trajectory(const std::shared_ptr<harvest_interfaces::s
         for (int col = 0; col < num_joints; ++col)
         {
             ss << path[row][col];
-            if (col < num_joints - 1)
-            {
-                ss << ", ";
-            }
+            if (col < num_joints - 1) ss << ", ";
         }
-        RCLCPP_INFO(this->get_logger(), ss.str().c_str());
+        RCLCPP_INFO(this->get_logger(), "%s", ss.str().c_str());
     }
 
-    // Prepare the JointTrajectory message
+    // Build JointTrajectory
     trajectory_msgs::msg::JointTrajectory joint_trajectory;
     joint_trajectory.header.frame_id = move_group_->getPlanningFrame();
-    joint_trajectory.joint_names = move_group_->getJointNames();
+    joint_trajectory.joint_names     = move_group_->getJointNames();
 
-    trajectory_msgs::msg::JointTrajectoryPoint point;
-    point.time_from_start.sec = 0;
-    point.time_from_start.nanosec = 0;
-
-    double current_time = 0.0; // Start time
-    // double time_step = 0.05;   // Time step between waypoints (seconds)
-    double traj_time_step = this->get_parameter("traj_time_step").as_double();
+    const double traj_time_step = this->get_parameter("traj_time_step").as_double();
+    double current_time = 0.0;
 
     for (int i = 0; i < num_waypoints; ++i)
     {
-        // Set joint positions for this point
-        point.positions.clear();
+        trajectory_msgs::msg::JointTrajectoryPoint point;
         for (int j = 0; j < num_joints; ++j)
-        {
             point.positions.push_back(path[i][j]);
-        }
 
-        // Set time_from_start for this point
         builtin_interfaces::msg::Duration duration;
-        duration.sec = static_cast<uint32_t>(current_time);
-        duration.nanosec = static_cast<uint32_t>((current_time - static_cast<uint32_t>(current_time)) * 1e9);
+        duration.sec    = static_cast<uint32_t>(current_time);
+        duration.nanosec = static_cast<uint32_t>((current_time - duration.sec) * 1e9);
         point.time_from_start = duration;
 
         joint_trajectory.points.push_back(point);
-
-        current_time += traj_time_step; // Increment time for the next waypoint
+        current_time += traj_time_step;
     }
 
-    // Convert JointTrajectory to RobotTrajectory
     moveit_msgs::msg::RobotTrajectory robot_trajectory;
     robot_trajectory.joint_trajectory = joint_trajectory;
 
     moveit::planning_interface::MoveGroupInterface::Plan plan;
     plan.trajectory_ = robot_trajectory;
 
-    // Plan and execute the trajectory
-    bool plan_success = static_cast<bool>(move_group_->execute(plan));
-    if (plan_success)
-    {
-        response->success = true;
-    }
-    else
-    {
+    response->success = static_cast<bool>(move_group_->execute(plan));
+    if (!response->success)
         RCLCPP_ERROR(this->get_logger(), "Failed to execute trajectory");
-        response->success = false;
-    }
 }
 
 int main(int argc, char *argv[])

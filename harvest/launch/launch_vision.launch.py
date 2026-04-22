@@ -20,12 +20,14 @@ def generate_launch_description():
                                   description="Whether to use presaved images for apple prediction. If False, will subscribe to camera topics for apple prediction. If True, will use presaved images"))
     declared_arguments.append(DeclareLaunchArgument("prediction_model", default_value="v9e.pt", 
                                   description="Yolo model used, can specify any model in the harvest_vision/yolo_models directory."))
-    declared_arguments.append(DeclareLaunchArgument("prediction_yolo_conf", default_value="0.65", 
+    declared_arguments.append(DeclareLaunchArgument("prediction_yolo_conf", default_value="0.85", 
                                   description="Confidence threshold for yolo model in apple_prediction node."))
     declared_arguments.append(DeclareLaunchArgument("prediction_radius_min", default_value="0.03", 
                                   description="Minimum radius bound (meters) for ransac sphere fit in apple_prediction node."))
     declared_arguments.append(DeclareLaunchArgument("prediction_radius_max", default_value="0.06", 
                                   description="Maximum radius bound (meters) for ransac sphere fit in apple_prediction node."))
+    declared_arguments.append(DeclareLaunchArgument("ransac_iters", default_value="100", 
+                                  description="Number of iterations for ransac sphere fit in apple_prediction node."))
     declared_arguments.append(DeclareLaunchArgument("prediction_distance_max", default_value="4.0", 
                                   description="Distance threshold in meters for detecting apples. Filters out backgound apples."))
     declared_arguments.append(DeclareLaunchArgument("vision_experiment", default_value="a", 
@@ -49,10 +51,9 @@ def generate_launch_description():
     
 
     ### apple_prediction presaved_images parameters
-    declared_arguments.append(DeclareLaunchArgument("presaved_images.rgb_image_path", default_value="/home/marcus/apple_harvest_ws/src/apple-harvest/harvest_vision/data/tree_000/color.png",
-                                    description="Path to the RGB image for presaved images mode."))
-    declared_arguments.append(DeclareLaunchArgument("presaved_images.depth_image_path", default_value="/home/marcus/apple_harvest_ws/src/apple-harvest/harvest_vision/data/tree_000/depth.png",
-                                    description="Path to the depth image for presaved images mode."))
+    declared_arguments.append(DeclareLaunchArgument("presaved_images.rgbd_dir_path", default_value="/home/marcus/apple_harvest_ws/data/rgbd_at_trees_oct_2025_v3/tree_000",
+                                    description="Path to the directory containing RGB ('color.png') and depth ('depth.png') images for presaved images mode."))
+
     ### visual_servo node parameters
     declared_arguments.append(DeclareLaunchArgument("vservo_model", default_value="v9e.pt", 
                                   description="Yolo model used, can specify any model in the harvest_vision/yolo_models directory."))
@@ -112,8 +113,7 @@ def generate_launch_description():
 
                      # Parameters for presaved images mode (will be ignored if presaved_images is False)
                      "camera_type": LaunchConfiguration("camera_type"),
-                     "presaved_images.rgb_image_path": LaunchConfiguration("presaved_images.rgb_image_path"),
-                     "presaved_images.depth_image_path": LaunchConfiguration("presaved_images.depth_image_path"),
+                     "presaved_images.rgbd_dir_path": LaunchConfiguration("presaved_images.rgbd_dir_path"),
                       }
                 ])
     
@@ -145,7 +145,9 @@ def generate_launch_description():
             name="voxelize_scan",
             parameters=[
                 {"vision_experiment": LaunchConfiguration("vision_experiment"),
-                    "camera_type": LaunchConfiguration("camera_type"),
+                 "camera_type": LaunchConfiguration("camera_type"),
+                 "target_frame": LaunchConfiguration("target_frame"),
+                 "source_frame": LaunchConfiguration("source_frame"),
                     }
             ])
     

@@ -7,12 +7,14 @@ from geometry_msgs.msg import Point
 from std_msgs.msg import ColorRGBA
 from sensor_msgs.msg import PointCloud2
 from sensor_msgs_py import point_cloud2
-from moveit_msgs.msg import CollisionObject
+from moveit_msgs.msg import CollisionObject, PlanningScene
+from moveit_msgs.srv import ApplyPlanningScene
 from shape_msgs.msg import SolidPrimitive
 from visualization_msgs.msg import Marker, MarkerArray
 from geometry_msgs.msg import Pose, PoseArray
 from rclpy.qos import QoSProfile, DurabilityPolicy, ReliabilityPolicy
 from tf2_ros import Buffer, TransformListener
+from std_srvs.srv import Trigger
 
 import open3d as o3d
 import numpy as np
@@ -44,6 +46,11 @@ class VoxelGridService(Node):
         self.pointcloud_sub = self.create_subscription(PointCloud2, self.pointcloud_topic, self.pointcloud_callback, 10)
         self.latest_pointcloud = None
 
+        # Track active counts for clean removal
+        self.active_voxel_count = 0         # collision objects added to planning scene
+        self.active_scene_marker_count = 0  # scene (natural colour) RViz markers
+        self.active_apple_marker_count = 0  # apple-region (red) RViz markers
+
         # Publishers
         self.publisher = self.create_publisher(Point, 'voxel_centers', 10)
         self.voxel_collision_pub = self.create_publisher(CollisionObject, "/collision_object", 10)
@@ -52,9 +59,15 @@ class VoxelGridService(Node):
 
         # Services
         self.srv = self.create_service(VoxelGrid, 'voxel_grid', self.voxel_grid_callback)
+        self.clear_voxels_srv = self.create_service(Trigger, 'clear_voxels', self.clear_voxels_callback)
+
+        # Client
+        self.apply_planning_scene_client = self.create_client(ApplyPlanningScene, '/apply_planning_scene')
+        while not self.apply_planning_scene_client.wait_for_service(timeout_sec=1.0):
+            self.get_logger().info('Waiting for /apply_planning_scene service...')
 
         # Subscribe to apple poses published by apple_prediction node.
-        self.apple_coords = None 
+        self.apple_coords = None
         latched_qos = QoSProfile(
             depth=1,
             durability=DurabilityPolicy.TRANSIENT_LOCAL,
@@ -106,15 +119,14 @@ class VoxelGridService(Node):
         return np.array(points, dtype=object), idx_flattened
 
     def add_collision_objects(self, voxel_centers):
+        self.active_voxel_count = len(voxel_centers)
         for i, voxel_center in enumerate(voxel_centers):
             collision_object = CollisionObject()
             collision_object.id = f"{self.voxel_obj_collision_id_prefix}{i}"
             collision_object.header.frame_id = self.target_frame
-            # Define the shape and size
             primitive = SolidPrimitive()
             primitive.type = SolidPrimitive.BOX
             primitive.dimensions = [self.voxel_size] * 3
-            # Define the pose
             box_pose = Pose()
             box_pose.position = voxel_center
             box_pose.orientation.w = 1.0
@@ -133,6 +145,11 @@ class VoxelGridService(Node):
             is_apple_region: when True, publishes to the 'removed_voxel_markers' topic
                              and overrides colors to red regardless of what is passed.
         """
+        if is_apple_region:
+            self.active_apple_marker_count = len(voxel_centers)
+        else:
+            self.active_scene_marker_count = len(voxel_centers)
+
         if is_apple_region or colors is None:
             is_apple_region = True
             colors = [[1.0, 0.0, 0.0, 0.8] for _ in range(len(voxel_centers))]
@@ -167,6 +184,72 @@ class VoxelGridService(Node):
             self.voxel_marker_removed_publisher.publish(marker_array)
         else:
             self.voxel_marker_publisher.publish(marker_array)
+
+    def clear_voxels_callback(self, request, response):
+        # Build a planning scene diff removing all known collision objects atomically
+        planning_scene = PlanningScene()
+        planning_scene.is_diff = True
+
+        for i in range(self.active_voxel_count):
+            co = CollisionObject()
+            co.id = f"{self.voxel_obj_collision_id_prefix}{i}"
+            co.header.frame_id = self.target_frame
+            co.operation = CollisionObject.REMOVE
+            planning_scene.world.collision_objects.append(co)
+
+        req = ApplyPlanningScene.Request()
+        req.scene = planning_scene
+        future = self.apply_planning_scene_client.call_async(req)
+
+        # Spin a temporary separate executor to process the future
+        # without deadlocking the node's own executor
+        executor = rclpy.executors.SingleThreadedExecutor()
+        executor.add_node(self)
+        try:
+            executor.spin_until_future_complete(future, timeout_sec=5.0)
+        finally:
+            executor.remove_node(self)
+
+        if not future.done() or future.result() is None:
+            self.get_logger().warn("apply_planning_scene did not complete within timeout.")
+
+        # Delete scene markers by ID
+        scene_delete = MarkerArray()
+        for i in range(self.active_scene_marker_count):
+            m = Marker()
+            m.header.frame_id = self.target_frame
+            m.header.stamp = self.get_clock().now().to_msg()
+            m.ns = "voxels"
+            m.id = i
+            m.action = Marker.DELETE
+            scene_delete.markers.append(m)
+        self.voxel_marker_publisher.publish(scene_delete)
+
+        # Delete apple-region markers by ID
+        apple_delete = MarkerArray()
+        for i in range(self.active_apple_marker_count):
+            m = Marker()
+            m.header.frame_id = self.target_frame
+            m.header.stamp = self.get_clock().now().to_msg()
+            m.ns = "voxels"
+            m.id = i
+            m.action = Marker.DELETE
+            apple_delete.markers.append(m)
+        self.voxel_marker_removed_publisher.publish(apple_delete)
+
+        self.get_logger().info(
+            f"Cleared {self.active_voxel_count} collision objects, "
+            f"{self.active_scene_marker_count} scene markers, "
+            f"{self.active_apple_marker_count} apple-region markers."
+        )
+
+        self.active_voxel_count = 0
+        self.active_scene_marker_count = 0
+        self.active_apple_marker_count = 0
+
+        response.success = True
+        response.message = "Voxels cleared."
+        return response
 
     def voxelize_point_cloud(self, voxel_size, transform):
         if self.latest_pointcloud is None:
@@ -279,6 +362,12 @@ class VoxelGridService(Node):
     def voxel_grid_callback(self, request, response):
         try:
             self.voxel_size = request.voxel_size
+
+            # Clear any previously published voxels before generating new ones
+            if self.active_voxel_count > 0:
+                dummy_req = Trigger.Request()
+                dummy_res = Trigger.Response()
+                self.clear_voxels_callback(dummy_req, dummy_res)
 
             try:
                 transform = self.tf_buffer.lookup_transform(self.target_frame, self.source_frame, rclpy.time.Time())

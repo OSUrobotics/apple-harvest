@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import os
 from threading import Event, Lock
 import open3d as o3d
 import numpy as np
@@ -57,7 +58,7 @@ class ApplePredictionNode(Node):
     # ------------------------------------------------------------------ init
 
     def __init__(self):
-        super().__init__("apple_prediction_node")
+        super().__init__("apple_prediction")
 
         # ---- common parameters ----
         self.declare_parameter("presaved_images", False)
@@ -174,8 +175,7 @@ class ApplePredictionNode(Node):
     def _init_presaved(self):
         """Set up presaved-image mode: load intrinsics, images, timers, publishers."""
 
-        self.declare_parameter("presaved_images.rgb_image_path", "")
-        self.declare_parameter("presaved_images.depth_image_path", "")
+        self.declare_parameter("presaved_images.rgbd_dir_path", "")
 
         # ---- camera intrinsics ----
         if self.camera_type == "azure":
@@ -200,8 +200,9 @@ class ApplePredictionNode(Node):
         )
 
         # ---- load images ----
-        rgb_path   = self.get_parameter("presaved_images.rgb_image_path").get_parameter_value().string_value
-        depth_path = self.get_parameter("presaved_images.depth_image_path").get_parameter_value().string_value
+        rgbd_dir_path   = self.get_parameter("presaved_images.rgbd_dir_path").get_parameter_value().string_value
+        rgb_path   = os.path.join(rgbd_dir_path, "color.png")
+        depth_path = os.path.join(rgbd_dir_path, "depth.png")
 
         self.rgb_image   = cv2.imread(rgb_path)
         self.depth_image = cv2.imread(depth_path, cv2.IMREAD_UNCHANGED)
@@ -221,19 +222,17 @@ class ApplePredictionNode(Node):
         )
 
         # ---- extra publishers (presaved only) ----
-        self.rgb_pub   = self.create_publisher(Image, "rgb_image", 10)
-        self.depth_pub = self.create_publisher(Image, "depth_image", 10)
-
         latched_qos = QoSProfile(
             depth=1,
             durability=DurabilityPolicy.TRANSIENT_LOCAL,
             reliability=ReliabilityPolicy.RELIABLE,
         )
+        self.rgb_pub   = self.create_publisher(Image, "rgb_image", latched_qos)
+        self.depth_pub = self.create_publisher(Image, "depth_image", latched_qos)
         self.apple_poses_pub = self.create_publisher(PoseArray, "apple_poses", latched_qos)
 
-        # ---- timers ----
-        self.create_timer(0.1, self._presaved_publish_images)
-        self.create_timer(0.5, self._presaved_publish_pointcloud)
+        self._presaved_publish_images()
+        self._presaved_publish_pointcloud()
 
         # ---- misc state ----
         self._presaved_apple_centers = None

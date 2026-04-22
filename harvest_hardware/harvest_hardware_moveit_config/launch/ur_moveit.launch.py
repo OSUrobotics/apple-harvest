@@ -30,6 +30,10 @@ def generate_launch_description():
         DeclareLaunchArgument("launch_servo", default_value="true"),
         DeclareLaunchArgument("use_sim_time", default_value="false"),
         DeclareLaunchArgument("use_3d_sensors", default_value="false"),
+
+        DeclareLaunchArgument('max_accel', default_value='0.05'),
+        DeclareLaunchArgument('max_vel', default_value='0.05'),
+        DeclareLaunchArgument('traj_time_step', default_value='0.05'),
     ]
     return LaunchDescription(args + [OpaqueFunction(function=_launch_setup)])
 
@@ -40,6 +44,9 @@ def _launch_setup(context):
     launch_servo = LaunchConfiguration("launch_servo")
     use_sim_time = LaunchConfiguration("use_sim_time")
     use_3d_sensors = LaunchConfiguration("use_3d_sensors").perform(context).lower() in ("1", "true", "yes")
+    max_accel = LaunchConfiguration("max_accel")
+    max_vel = LaunchConfiguration("max_vel")
+    traj_time_step = LaunchConfiguration("traj_time_step")
 
     # --- URDF ---
     robot_description = {
@@ -188,16 +195,8 @@ def _launch_setup(context):
             robot_description_semantic,
             kinematics_yaml,
             joint_limits_yaml,
-            {"use_sim_time": use_sim_time},
-            {"max_accel": 0.05, "max_vel": 0.05, "traj_time_step": 0.05},  # or LaunchConfigurations
+            {"use_sim_time": use_sim_time, "max_accel": max_accel, "max_vel": max_vel, "traj_time_step": traj_time_step},
         ],
-    )
-
-    rsp = Node(
-        package="robot_state_publisher",
-        executable="robot_state_publisher",
-        parameters=[robot_description, {"use_sim_time": use_sim_time}],
-        output="screen",
     )
 
     # RViz
@@ -228,6 +227,5 @@ def _launch_setup(context):
         move_group, 
         servo_node,
         move_arm,
-        # rsp,
         rviz, 
         ]
