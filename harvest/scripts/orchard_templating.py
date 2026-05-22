@@ -17,7 +17,7 @@ from rcl_interfaces.msg import Parameter, ParameterValue, ParameterType
 # Interfaces
 from harvest_interfaces.srv import ApplePrediction, VoxelGrid, MoveToPose, SendTrajectory
 
-# Python 
+# Python
 import numpy as np
 import os
 import yaml
@@ -34,16 +34,16 @@ class OrchardTemplating(Node):
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
 
-        # TODO: Set as a ros2 parameters
-        self.data_save_dir = '/home/marcus/apple_harvest_ws/test_templating_data/' # Data saving directory
-        self.arm_workspace_radius = 1.5 # meters - set as the max distance from manipulator base link that is considered reachable for apple coordinates
+        # TODO: Set as ros2 parameters
+        self.data_save_dir = '/home/marcus/apple_harvest_ws/test_templating_data/'
+        self.arm_workspace_radius = 1.5  # meters
         self.planning_frame = 'amiga__base'
         self.rgbd_dir_path = None
         self.tree_number = None
         self.yolo_model = None
         self.apple_coords = None
         self.voxel_size = 0.05
-        self.apple_approach_offset = 0.04 # meters
+        self.apple_approach_offset = 0.04  # meters
         self.apples_found = 0
         self.apples_reached_templating = 0
         self.apples_reached_voxelization = 0
@@ -70,6 +70,14 @@ class OrchardTemplating(Node):
         while not self.set_template_anchor_client.wait_for_service(timeout_sec=1.0):
             self.get_logger().info('Waiting for template anchor parameter service...')
 
+        self.trigger_estimation_client = self.create_client(Trigger, '/trigger_estimation', callback_group=m_callback_group)
+        while not self.trigger_estimation_client.wait_for_service(timeout_sec=1.0):
+            self.get_logger().info('Waiting for /trigger_estimation service...')
+
+        self.correct_template_anchor_client = self.create_client(Trigger, '/correct_template_anchor', callback_group=m_callback_group)
+        while not self.correct_template_anchor_client.wait_for_service(timeout_sec=1.0):
+            self.get_logger().info('Waiting for /correct_template_anchor service...')
+
         self.clear_template_collisions_client = self.create_client(Trigger, '/clear_trellis_trees', callback_group=m_callback_group)
         while not self.clear_template_collisions_client.wait_for_service(timeout_sec=1.0):
             self.get_logger().info('Waiting for clear template collisions service...')        
@@ -82,7 +90,7 @@ class OrchardTemplating(Node):
         while not self.clear_voxel_collisions_client.wait_for_service(timeout_sec=1.0):
             self.get_logger().info('Waiting for clear voxel collisions service...')   
 
-        self.move_arm_to_pose_client = self.create_client(MoveToPose, "/move_arm_to_pose",callback_group=m_callback_group)
+        self.move_arm_to_pose_client = self.create_client(MoveToPose, "/move_arm_to_pose", callback_group=m_callback_group)
         while not self.move_arm_to_pose_client.wait_for_service(timeout_sec=1.0):
             self.get_logger().info("Move arm to pose service not available, waiting...")
 
@@ -97,6 +105,10 @@ class OrchardTemplating(Node):
         self.get_planning_scene_client = self.create_client(GetPlanningScene, 'get_planning_scene', callback_group=m_callback_group)
         while not self.get_planning_scene_client.wait_for_service(timeout_sec=1.0):
             self.get_logger().info('Waiting for get_planning_scene_client to be available...')
+
+    # =========================================================================
+    #  Parameter / vision helpers
+    # =========================================================================
 
     def get_apple_prediction_params(self):
         req = GetParameters.Request()
@@ -124,60 +136,77 @@ class OrchardTemplating(Node):
         rclpy.spin_until_future_complete(self, future)
         return future.result()
     
+    def trigger_trunk_estimation(self):
+        future = self.trigger_estimation_client.call_async(Trigger.Request())
+        rclpy.spin_until_future_complete(self, future)
+        return future.result()
+
+    def correct_template_anchor(self):
+        """Delegate anchor correction to the TemplateAnchorCorrector node."""
+        future = self.correct_template_anchor_client.call_async(Trigger.Request())
+        rclpy.spin_until_future_complete(self, future)
+        result = future.result()
+
+        if result.success:
+            self.get_logger().info(f"Template anchor corrected: {result.message}")
+        else:
+            self.get_logger().warn(f"Template anchor correction failed: {result.message}")
+
+        return result
+
+    # =========================================================================
+    #  Scene management
+    # =========================================================================
+
     def remove_tree_from_scene(self):
         request = Trigger.Request()
         future = self.clear_template_collisions_client.call_async(request)
-        rclpy.spin_until_future_complete(self, future) 
+        rclpy.spin_until_future_complete(self, future)
 
         if future.result().success:
-            self.get_logger().info(f'Successfully cleared template collisions from scene')
+            self.get_logger().info('Successfully cleared template collisions from scene')
         else:
-            self.get_logger().warn(f'Failed to clear template collisions from scene')
+            self.get_logger().warn('Failed to clear template collisions from scene')
 
         return future.result()
-    
+
     def remove_voxels_from_scene(self):
         request = Trigger.Request()
         future = self.clear_voxel_collisions_client.call_async(request)
-        rclpy.spin_until_future_complete(self, future) 
+        rclpy.spin_until_future_complete(self, future)
 
         if future.result().success:
-            self.get_logger().info(f'Successfully cleared voxel collisions from scene')
+            self.get_logger().info('Successfully cleared voxel collisions from scene')
         else:
-            self.get_logger().warn(f'Failed to clear voxel collisions from scene')
+            self.get_logger().warn('Failed to clear voxel collisions from scene')
 
         return future.result()
-        
+
+    # =========================================================================
+    #  Apple prediction / motion
+    # =========================================================================
+
     def start_apple_prediction(self):
-        # Starts servo node
         self.request = ApplePrediction.Request()
         self.future = self.start_apple_prediction_client.call_async(self.request)
-        rclpy.spin_until_future_complete(self, self.future) 
-        return self.future.result().apple_poses 
-    
+        rclpy.spin_until_future_complete(self, self.future)
+        return self.future.result().apple_poses
+
     def sort_coordinates(self, target_coord, coords):
-        # Calculate distances from each point to the target
         distances = np.linalg.norm(coords - target_coord, axis=1)
-
-        # Sort indices based on distances
         sorted_indices = np.argsort(distances)
-
-        # Get sorted coordinates
         return coords[sorted_indices]
-    
+
     def get_manipulator_base_position(self):
         try:
-            # Look up the transform from the world frame to the manipulator base frame
             transform = self.tf_buffer.lookup_transform('amiga__base', 'base_link', rclpy.time.Time())
-            # Extract the translation (position) from the transform
             position = transform.transform.translation
             return np.array([position.x, position.y, position.z])
         except Exception as e:
             self.get_logger().error(f"Failed to get manipulator base position: {e}")
-            return np.array([0.0, 0.0, 0.0])  # Return a default value if transform lookup fails
-    
+            return np.array([0.0, 0.0, 0.0])
+
     def filter_reachable_coords_from_arm_ws(self, coordinates):
-        # Coordinates are reachable if they are within a specified euclidean distance from manipulator base link
         manipulator_base_position = self.get_manipulator_base_position()
         reachable_coords = []
         reachable_count = 0
@@ -190,13 +219,13 @@ class OrchardTemplating(Node):
                 self.unreachable_idx_arm_ws.append(i)
         self.get_logger().info(f'# of reachable apple coordinates within arm workspace: {reachable_count} out of {len(coordinates)}')
         return np.array(reachable_coords)
-    
+
     def call_voxel_grid_service(self):
         request = VoxelGrid.Request()
-        request.voxel_size = self.voxel_size 
+        request.voxel_size = self.voxel_size
 
         self.future = self.voxel_client.call_async(request)
-        rclpy.spin_until_future_complete(self, self.future) 
+        rclpy.spin_until_future_complete(self, self.future)
         return self.future.result()
 
     def send_pose_goal(self, coordinate):
@@ -206,71 +235,72 @@ class OrchardTemplating(Node):
         pose_stamped.pose.position.y = coordinate[1]
         pose_stamped.pose.position.z = coordinate[2]
 
-        # Sends x,y,z to C++ moveit node to execute pose goal since python moveit not available for humble
         self.request = MoveToPose.Request()
         self.request.pose_stamped = pose_stamped
         self.future = self.move_arm_to_pose_client.call_async(self.request)
         rclpy.spin_until_future_complete(self, self.future)
         return self.future.result()
-    
+
     def send_trajectory(self, trajectory):
         request = SendTrajectory.Request()
-        request.waypoints = trajectory  # Pass the entire Float32MultiArray message
+        request.waypoints = trajectory
 
-        # Use async call
         future = self.trigger_arm_mover_client.call_async(request)
-        rclpy.spin_until_future_complete(self, future) 
+        rclpy.spin_until_future_complete(self, future)
         return future.result()
-    
+
     def go_to_home(self):
-        # Starts go to home
         self.request = Trigger.Request()
         self.future = self.start_move_arm_to_home_client.call_async(self.request)
-        rclpy.spin_until_future_complete(self, self.future) 
+        rclpy.spin_until_future_complete(self, self.future)
 
         if self.future.result().success:
-            self.get_logger().info(f'Successfully moved home')
+            self.get_logger().info('Successfully moved home')
         else:
-            self.get_logger().warn(f'Failed to moved home')
+            self.get_logger().warn('Failed to move home')
 
         return self.future.result()
 
+    # =========================================================================
+    #  Data saving
+    # =========================================================================
+
     def save_metadata(self):
-        # Combine the dictionaries into a list or another structure if necessary
         data = {
-            'rgbd_dir_path':                    self.rgbd_dir_path,
-            'tree_number':                      self.tree_number,
-            'YOLO_model':                       self.yolo_model,
-            'apple_coordinates':                self.apple_coords.tolist(),
-            'voxel_size':                       self.voxel_size,
-            'apple_approach_offset':            self.apple_approach_offset,
-            'apples_found':                     self.apples_found,
-            'apples_reached_templating':        self.apples_reached_templating,
-            'apples_reached_voxelization':      self.apples_reached_voxelization,
-            'unreached_idx_templating':         self.unreached_idx_templating,
-            'unreached_idx_voxelization':       self.unreached_idx_voxelization,
-            'unreachable_idx_via_arm_ws':       self.unreachable_idx_arm_ws,
+            'rgbd_dir_path':                self.rgbd_dir_path,
+            'tree_number':                  self.tree_number,
+            'YOLO_model':                   self.yolo_model,
+            'apple_coordinates':            self.apple_coords.tolist(),
+            'voxel_size':                   self.voxel_size,
+            'apple_approach_offset':        self.apple_approach_offset,
+            'apples_found':                 self.apples_found,
+            'apples_reached_templating':    self.apples_reached_templating,
+            'apples_reached_voxelization':  self.apples_reached_voxelization,
+            'unreached_idx_templating':     self.unreached_idx_templating,
+            'unreached_idx_voxelization':   self.unreached_idx_voxelization,
+            'unreachable_idx_via_arm_ws':   self.unreachable_idx_arm_ws,
         }
 
-        # Save to a YAML file - create new dir if one does not exist
         os.makedirs(self.data_save_dir, exist_ok=True)
         with open(self.data_save_dir + f'tree_{self.tree_number}_results.yaml', 'w') as file:
             yaml.dump(data, file)
 
-        self.get_logger().info("YAML file saved successfully.")   
+        self.get_logger().info("YAML file saved successfully.")
 
-    def start(self): 
+    # =========================================================================
+    #  Main sequence
+    # =========================================================================
+
+    def start(self):
         ### GET VISION EXPERIMENT PARAMETER
-        self.get_logger().info(f'Getting vision experiment parameter')
+        self.get_logger().info('Getting vision experiment parameter')
         self.get_apple_prediction_params()
 
         ### STAGE 0 - INITIALIZE ARM POSITION AND LOCATE APPLES
-        # Ensure arm is in home position
-        self.get_logger().info(f'Moving arm to home')
+        self.get_logger().info('Moving arm to home')
         self.go_to_home()
 
-        # Request apple location prediction
-        self.get_logger().info(f'Sending request to predict apple centerpoint locations in scene.')
+        self.get_logger().info('Sending request to predict apple centerpoint locations in scene.')
         apple_poses = self.start_apple_prediction()
         self.apples_found = len(apple_poses.poses)
         self.apple_coords = np.array([[pose.position.x, pose.position.y, pose.position.z] for pose in apple_poses.poses])
@@ -279,14 +309,22 @@ class OrchardTemplating(Node):
 
         ### STAGE 1 - TEMPLATING
         self.get_logger().info(f'Starting templating method at tree number: {self.tree_number}')
-        # Place trellis template
+
+        # Place trellis template at the stored anchor position
         self.set_template_anchor(self.tree_number)
 
-        # Set a gripper approach offset to each apple location
-        apple_coords = copy.deepcopy(apple_coords)
-        apple_coords[:, 1] -= (self.apple_approach_offset) # apple radius offset
+        self.get_logger().info('Triggering trunk estimation...')
+        self.trigger_trunk_estimation()
 
-        # Move arm to apple position
+        # Refine anchor trunk position using the live depth sensor
+        self.get_logger().info('Requesting template anchor correction...')
+        self.correct_template_anchor()
+
+        # Apply gripper approach offset to each apple location
+        apple_coords = copy.deepcopy(apple_coords)
+        apple_coords[:, 1] -= self.apple_approach_offset
+
+        # Move arm to each apple position
         for i, apple in enumerate(self.apple_coords):
             if i in self.unreachable_idx_arm_ws:
                 self.get_logger().warn(f'Apple ID: {i} not reachable via arm workspace, skipping templating for this apple')
@@ -297,28 +335,24 @@ class OrchardTemplating(Node):
             if result.result:
                 self.get_logger().info(f'Apple ID: {i} reached')
                 self.apples_reached_templating += 1
-
-                self.get_logger().info(f'Moving arm to home')
-                trajectory = result.reverse_traj
-                self.send_trajectory(trajectory)
+                self.get_logger().info('Moving arm to home')
+                self.send_trajectory(result.reverse_traj)
             else:
                 self.get_logger().warn(f'Apple ID: {i} not reachable')
                 self.unreached_idx_templating.append(i)
-        
+
         self.get_logger().info(f'Number of apples reached via templating: {self.apples_reached_templating}')
 
         # Remove template
-        self.get_logger().info(f'Removing template from the planning scene')
+        self.get_logger().info('Removing template from the planning scene')
         self.remove_tree_from_scene()
 
         ### STAGE 2 - VOXELIZATION
-        self.get_logger().info(f'Starting voxelization method')
-        # Request voxel data from point cloud
-        self.get_logger().info(f'Sending request to extract voxels from point cloud.')
+        self.get_logger().info('Starting voxelization method')
+        self.get_logger().info('Sending request to extract voxels from point cloud.')
         voxel_data = self.call_voxel_grid_service()
         self.get_logger().info(f"# of voxels generated: {len(voxel_data.voxel_centers)}")
 
-        # Move arm to apple position
         for i, apple in enumerate(self.apple_coords):
             if i in self.unreachable_idx_arm_ws:
                 self.get_logger().warn(f'Apple ID: {i} not reachable via arm workspace, skipping voxelization for this apple')
@@ -329,10 +363,8 @@ class OrchardTemplating(Node):
             if result.result:
                 self.get_logger().info(f'Apple ID: {i} reached')
                 self.apples_reached_voxelization += 1
-
-                self.get_logger().info(f'Moving arm to home')
-                trajectory = result.reverse_traj
-                self.send_trajectory(trajectory)
+                self.get_logger().info('Moving arm to home')
+                self.send_trajectory(result.reverse_traj)
             else:
                 self.get_logger().warn(f'Apple ID: {i} not reachable')
                 self.unreached_idx_voxelization.append(i)
@@ -340,14 +372,14 @@ class OrchardTemplating(Node):
         self.get_logger().info(f'Number of apples reached via voxelization: {self.apples_reached_voxelization}')
 
         # Remove voxels
-        self.get_logger().info(f'Removing voxels from the planning scene')
+        self.get_logger().info('Removing voxels from the planning scene')
         self.remove_voxels_from_scene()
 
         ### STAGE 3 - SAVE DATA
         self.save_metadata()
 
         ### COMPLETE
-        self.get_logger().info(f'Trial complete!')
+        self.get_logger().info('Trial complete!')
 
 
 def main(args=None):
@@ -357,6 +389,7 @@ def main(args=None):
     executor = MultiThreadedExecutor()
     rclpy.spin(node, executor=executor)
     rclpy.shutdown()
+
 
 if __name__ == '__main__':
     main()

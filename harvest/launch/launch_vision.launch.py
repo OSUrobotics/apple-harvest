@@ -51,7 +51,7 @@ def generate_launch_description():
     
 
     ### apple_prediction presaved_images parameters
-    declared_arguments.append(DeclareLaunchArgument("presaved_images.rgbd_dir_path", default_value="/home/marcus/apple_harvest_ws/data/rgbd_at_trees_oct_2025_v3/tree_000",
+    declared_arguments.append(DeclareLaunchArgument("presaved_images.rgbd_dir_path", default_value="/home/marcus/apple_harvest_ws/data/rgbd_at_trees_oct_2025_w_base_cam/tree_016",
                                     description="Path to the directory containing RGB ('color.png') and depth ('depth.png') images for presaved images mode."))
 
     ### visual_servo node parameters

@@ -201,8 +201,10 @@ class ApplePredictionNode(Node):
 
         # ---- load images ----
         rgbd_dir_path   = self.get_parameter("presaved_images.rgbd_dir_path").get_parameter_value().string_value
-        rgb_path   = os.path.join(rgbd_dir_path, "color.png")
-        depth_path = os.path.join(rgbd_dir_path, "depth.png")
+
+        # ---- mast_cam (used for YOLO inference pipeline) ----
+        rgb_path   = os.path.join(rgbd_dir_path, "mast_cam", "color.png")
+        depth_path = os.path.join(rgbd_dir_path, "mast_cam", "depth.png")
 
         self.rgb_image   = cv2.imread(rgb_path)
         self.depth_image = cv2.imread(depth_path, cv2.IMREAD_UNCHANGED)
@@ -216,10 +218,37 @@ class ApplePredictionNode(Node):
         self.depth_image = cv2.resize(self.depth_image, self.target_size, interpolation=cv2.INTER_NEAREST)
 
         self.get_logger().info(
-            f"Loaded RGB: dtype={self.rgb_image.dtype} shape={self.rgb_image.shape} | "
+            f"[mast_cam] Loaded RGB: dtype={self.rgb_image.dtype} shape={self.rgb_image.shape} | "
             f"Depth: dtype={self.depth_image.dtype} min={self.depth_image.min()} "
             f"max={self.depth_image.max()} shape={self.depth_image.shape}"
         )
+
+        # ---- base_cam (published as-is, no inference) ----
+        base_rgb_path   = os.path.join(rgbd_dir_path, "base_cam", "color.png")
+        base_depth_path = os.path.join(rgbd_dir_path, "base_cam", "depth.png")
+
+        self.base_rgb_image   = cv2.imread(base_rgb_path)
+        self.base_depth_image = cv2.imread(base_depth_path, cv2.IMREAD_UNCHANGED)
+
+        if self.base_rgb_image is None:
+            self.get_logger().warn(
+                f"[base_cam] Could not load RGB image: {base_rgb_path}. "
+                "Base camera publishing will be skipped."
+            )
+        if self.base_depth_image is None:
+            self.get_logger().warn(
+                f"[base_cam] Could not load depth image: {base_depth_path}. "
+                "Base camera publishing will be skipped."
+            )
+
+        if self.base_rgb_image is not None and self.base_depth_image is not None:
+            self.get_logger().info(
+                f"[base_cam] Loaded RGB: dtype={self.base_rgb_image.dtype} "
+                f"shape={self.base_rgb_image.shape} | "
+                f"Depth: dtype={self.base_depth_image.dtype} "
+                f"min={self.base_depth_image.min()} max={self.base_depth_image.max()} "
+                f"shape={self.base_depth_image.shape}"
+            )
 
         # ---- extra publishers (presaved only) ----
         latched_qos = QoSProfile(
@@ -227,9 +256,14 @@ class ApplePredictionNode(Node):
             durability=DurabilityPolicy.TRANSIENT_LOCAL,
             reliability=ReliabilityPolicy.RELIABLE,
         )
+        # mast_cam — full inference pipeline
         self.rgb_pub   = self.create_publisher(Image, "rgb_image", latched_qos)
         self.depth_pub = self.create_publisher(Image, "depth_image", latched_qos)
         self.apple_poses_pub = self.create_publisher(PoseArray, "apple_poses", latched_qos)
+
+        # base_cam — raw image pass-through only
+        self.base_rgb_pub   = self.create_publisher(Image, "base_cam/rgb_image",   latched_qos)
+        self.base_depth_pub = self.create_publisher(Image, "base_cam/depth_image", latched_qos)
 
         self._presaved_publish_images()
         self._presaved_publish_pointcloud()
@@ -473,13 +507,28 @@ class ApplePredictionNode(Node):
         return center, radius
 
     def _presaved_publish_images(self):
-        """Timer callback: republish the loaded RGB and depth images at 10 Hz."""
+        """Republish the loaded mast_cam RGB/depth images, and base_cam images if available."""
         if self._predict_lock.locked():
             return  # service callback is running — skip this cycle
+
+        # mast_cam — full inference pipeline images
         rgb_msg   = self.bridge.cv2_to_imgmsg(self.rgb_image,   encoding="bgr8")
         depth_msg = self.bridge.cv2_to_imgmsg(self.depth_image, encoding="mono16")
+        rgb_msg.header.stamp    = self.get_clock().now().to_msg()
+        rgb_msg.header.frame_id = self.source_frame
+        depth_msg.header        = rgb_msg.header
         self.rgb_pub.publish(rgb_msg)
         self.depth_pub.publish(depth_msg)
+
+        # base_cam — raw pass-through, no inference
+        if self.base_rgb_image is not None and self.base_depth_image is not None:
+            base_rgb_msg   = self.bridge.cv2_to_imgmsg(self.base_rgb_image,   encoding="bgr8")
+            base_depth_msg = self.bridge.cv2_to_imgmsg(self.base_depth_image, encoding="mono16")
+            base_rgb_msg.header.stamp    = self.get_clock().now().to_msg()
+            base_rgb_msg.header.frame_id = "base_camera_color_optical_frame"
+            base_depth_msg.header        = base_rgb_msg.header
+            self.base_rgb_pub.publish(base_rgb_msg)
+            self.base_depth_pub.publish(base_depth_msg)
 
     def _publish_pointcloud(self, rgb_bgr, depth, fx, fy, cx, cy, stamp=None):
         """Build and publish an XYZRGB PointCloud2 from a BGR image and depth map.
