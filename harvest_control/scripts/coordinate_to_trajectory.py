@@ -49,9 +49,9 @@ class CoordinateToTrajectoryService(Node):
         # Load data
         tree_wire_filter_file = os.path.join(package_share_directory, 'resource', 'tree_wire_mask.json')
         self.load_tree_wire_filter_ranges(tree_wire_filter_file)
-        self.voxel_data = np.loadtxt(os.path.join(package_share_directory, 'resource', 'finray/reachable_voxels_20251026_222020.csv'))
-        self.trajectories = np.load(os.path.join(package_share_directory, 'resource', 'finray/reachable_paths_20251026_222019.npy'))
-        self.ik_data = np.loadtxt(os.path.join(package_share_directory, 'resource', 'finray/voxel_ik_data_20251026_222019.csv'), delimiter=',', skiprows=1)
+        self.voxel_data = np.loadtxt(os.path.join(package_share_directory, 'resource', 'finray/Hot_fix_1/reachable_voxels_20251028_222036.csv')) #'alejo_v2/reachable_voxels_20251029_221624.csv'
+        self.trajectories = np.load(os.path.join(package_share_directory, 'resource', 'finray/Hot_fix_1/reachable_paths_20251028_222035.npy')) #'alejo_v2/reachable_paths_20251029_221623.npy'
+        self.ik_data = np.loadtxt(os.path.join(package_share_directory, 'resource', 'finray/Hot_fix_1/voxel_ik_data_20251028_222034.csv'), delimiter=',', skiprows=1) #'alejo_v2/voxel_ik_data_20251029_221622.csv'
 
         # Extract the data
         self.trajectories_orig = np.copy(self.trajectories)

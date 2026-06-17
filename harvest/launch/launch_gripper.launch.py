@@ -15,9 +15,14 @@ def generate_launch_description():
     gripper_type = LaunchConfiguration("gripper_type")
     gripper_arg = DeclareLaunchArgument('gripper_type', default_value="old", 
                                   description="Which gripper is attached [old, finray]")
+    grasp_strategy = LaunchConfiguration("grasp_strategy")
+    grasp_strategy_arg = DeclareLaunchArgument('grasp_strategy', default_value="pressure", 
+                                  description="Which grasp strategy [pressure, time]")
     
+
     
     ld.add_action(gripper_arg)
+    ld.add_action(grasp_strategy_arg)
     # Launch the node to control gripper functionality
     ld.add_action(Node(
         package='gripper',
@@ -58,7 +63,7 @@ def generate_launch_description():
     ld.add_action(Node(
         package='gripper',
         executable='grasp_controller.py',
-        parameters=[{'gripper_type' : gripper_type}]
+        parameters=[{'gripper_type' : gripper_type}, {'grasp_strategy' : grasp_strategy}]
     ))
     
     return ld

@@ -1,3 +1,5 @@
+import os
+from ament_index_python.packages import get_package_prefix, get_package_share_directory
 from launch import LaunchDescription
 from launch_ros.actions import Node
 from launch.actions import DeclareLaunchArgument
@@ -5,7 +7,8 @@ from launch.substitutions import LaunchConfiguration
 from launch.substitutions import Command, FindExecutable, LaunchConfiguration, PathJoinSubstitution
 from launch_ros.substitutions import FindPackageShare
 import launch_ros.actions
-from launch.substitutions import TextSubstitution
+from launch.actions import IncludeLaunchDescription
+from launch.launch_description_sources import PythonLaunchDescriptionSource
 
 def generate_launch_description():
     declared_arguments = []
@@ -20,22 +23,22 @@ def generate_launch_description():
                                   description="Minimum radius bound (meters) for ransac sphere fit in apple_prediction node."))
     declared_arguments.append(DeclareLaunchArgument("prediction_radius_max", default_value="0.06", 
                                   description="Maximum radius bound (meters) for ransac sphere fit in apple_prediction node."))
-    declared_arguments.append(DeclareLaunchArgument("prediction_distance_max", default_value="1.0", 
+    declared_arguments.append(DeclareLaunchArgument("prediction_distance_max", default_value="2.0", 
                                   description="Distance threshold in meters for detecting apples. Filters out backgound apples."))
     declared_arguments.append(DeclareLaunchArgument("scan_data_path", default_value="NOTGIVEN", 
                                   description="Data path to save pointcloud, realsense rgb image, realsense depth image and masks from prediction node. In format home/dir/data do not add slash at the end."))
 
 
     ### visual_servo node parameters
-    declared_arguments.append(DeclareLaunchArgument("vservo_model", default_value="v9e.pt", 
+    declared_arguments.append(DeclareLaunchArgument("vservo_model", default_value="best_segmentation.pt", 
                                   description="Yolo model used, can specify any model in the harvest_vision/yolo_models directory."))
-    declared_arguments.append(DeclareLaunchArgument("vservo_yolo_conf", default_value="0.85", 
+    declared_arguments.append(DeclareLaunchArgument("vservo_yolo_conf", default_value="0.8", 
                                 description="Confidence threshold for yolo model in visual_servo node."))
     declared_arguments.append(DeclareLaunchArgument("vservo_accuracy_px", default_value="10", 
                                   description="Specifies in pixels how close the center of the camera must be to the apple center to stop visual servoing."))
-    declared_arguments.append(DeclareLaunchArgument("vservo_smoothing_factor", default_value="6.0", 
+    declared_arguments.append(DeclareLaunchArgument("vservo_smoothing_factor", default_value="8.0", 
                                   description="Smoothing factor on velocity based on how far away the target apple center is from the camera center. Higher smoothing factor, faster movement when apple is far away."))
-    declared_arguments.append(DeclareLaunchArgument("vservo_max_vel", default_value="0.6", 
+    declared_arguments.append(DeclareLaunchArgument("vservo_max_vel", default_value="0.5", 
                                   description="Maximum velocity that arm end effector can move during visual servo."))
     
     ### palm camera publisher node parameters
@@ -46,6 +49,16 @@ def generate_launch_description():
     declared_arguments.append(DeclareLaunchArgument('prediction_model_path', default_value=[PathJoinSubstitution([FindPackageShare("harvest_vision"), "yolo_networks", LaunchConfiguration("prediction_model")])]))
     declared_arguments.append(DeclareLaunchArgument('vservo_model_path', default_value=[PathJoinSubstitution([FindPackageShare("harvest_vision"), "yolo_networks", LaunchConfiguration("vservo_model")])]))
     
+    # Reasense launch file path
+    realsense_launch_path = os.path.join(
+        get_package_share_directory('harvest'),
+        'launch',
+        'realsense_topics.launch.py')
+    
+    realsense_topics_node = IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(realsense_launch_path),
+    )
+
     ### Nodes
     apple_prediction_node = launch_ros.actions.Node(
                 package="harvest_vision",
@@ -87,4 +100,5 @@ def generate_launch_description():
                              apple_prediction_node, 
                              vservo_node, 
                              palm_camera_node,
+                             realsense_topics_node
     ])

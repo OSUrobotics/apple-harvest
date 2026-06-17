@@ -136,12 +136,15 @@ class StartHarvest(Node):
         self.approach_trajectory_topics = ['/apple_markers']
         self.visual_servo_topics = ['/gripper/rgb_palm_camera/image_raw','/joint_states','/servo_node/delta_twist_cmds']
         self.pressure_servo_topics = [
-            '/gripper/pressure','/gripper/distance','/gripper/motor/current',
-            '/gripper/motor/position','/gripper/motor/velocity','/joint_states',
+            #'/gripper/pressure','/gripper/distance','/gripper/motor/current', '/gripper/motor/position','/gripper/motor/velocity',
+            '/microROS/sensor_data',
+            '/joint_states',
             '/force_torque_sensor_broadcaster/wrench','/servo_node/delta_twist_cmds'
         ]
         self.pick_controller_topics = [
-            '/gripper/pressure','/gripper/distance','/joint_states',
+            #'/gripper/pressure','/gripper/distance',
+            '/microROS/sensor_data',
+            '/joint_states',
             '/tool_pose','/force_torque_sensor_broadcaster/wrench','/servo_node/delta_twist_cmds'
         ]
         self.pressure_servo_and_pick_controller_topics = list(set(self.pressure_servo_topics + self.pick_controller_topics))
@@ -570,6 +573,7 @@ class StartHarvest(Node):
                 if self.enable_pressure_servo:
                     self.grasp_controller()
                 if self.enable_picking:
+                    self.get_logger().info(f"Picking with: {self.PICK_PATTERN}")
                     self.pick_controller()
                 self.configure_servo('tool0')
 
@@ -581,9 +585,26 @@ class StartHarvest(Node):
                 action_fn=pick_action
             )
 
+        # # Temp Stage: pull back after pick
+        #     original_pick_controller = self.PICK_PATTERN
+        #     def pick_action():
+        #         if self.enable_picking:
+        #             self.PICK_PATTERN = 'linear-pull'
+        #             self.pick_controller()
+        #         self.configure_servo('base_link')
+
+        #     self.run_stage(
+        #         [],
+        #         base_dir + 'post_pick_pull',
+        #         servo_frame='base_link',
+        #         use_servo=True,
+        #         action_fn=pick_action
+        #     )
+        #     self.PICK_PATTERN = original_pick_controller
+
         # Stage 7: home & release & save
         input('Done with pick, hit enter to return home')
-        self.go_to_home()
+        #self.go_to_home()
         if self.enable_pressure_servo:
             self.release_controller()
 

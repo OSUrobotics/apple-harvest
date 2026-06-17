@@ -13,7 +13,7 @@ class LinController(Node):
         
         super().__init__('linear_controller')
         
-        self.max_velocity = 0.2 #0.1 # * 0.6 m/s
+        self.max_velocity = 0.5 # PROSSER 2025 Miranda controller needs 0.2
         self.vel_cmd = Vector3() # * 0.6 m/s
 
         self.publisher = self.create_publisher(TwistStamped, '/servo_node/delta_twist_cmds', 10)

@@ -132,17 +132,21 @@ class StartHarvest(Node):
         self.apple_coordinates = {}
         self.pick_pattern = {'pick controller': self.PICK_PATTERN}
 
+        #TODO: Switch topics for which gripper
         # Recording topics
         self.prediction_topics = ['/apple_markers']
         self.approach_trajectory_topics = ['/apple_markers']
         self.visual_servo_topics = ['/gripper/rgb_palm_camera/image_raw','/joint_states','/servo_node/delta_twist_cmds']
         self.pressure_servo_topics = [
-            '/gripper/pressure','/gripper/distance','/gripper/motor/current',
-            '/gripper/motor/position','/gripper/motor/velocity','/joint_states',
+            #'/gripper/pressure','/gripper/distance','/gripper/motor/current','/gripper/motor/position','/gripper/motor/velocity',
+            '/microROS/sensor_data',
+            '/joint_states',
             '/force_torque_sensor_broadcaster/wrench','/servo_node/delta_twist_cmds'
         ]
         self.pick_controller_topics = [
-            '/gripper/pressure','/gripper/distance','/joint_states',
+            #'/gripper/pressure','/gripper/distance',
+            '/microROS/sensor_data',
+            '/joint_states', 
             '/tool_pose','/force_torque_sensor_broadcaster/wrench','/servo_node/delta_twist_cmds'
         ]
         self.pressure_servo_and_pick_controller_topics = list(set(self.pressure_servo_topics + self.pick_controller_topics))
@@ -548,33 +552,6 @@ class StartHarvest(Node):
                                 action_fn=self.start_visual_servo
                 )
 
-            # # Stage 5: pressure servo + grasp
-            # if self.enable_pressure_servo:
-            #     input('Done with visual servoing, hit enter to start pressure servoing')
-            #     self.run_stage(
-            #         self.pressure_servo_topics,
-            #         base_dir + self.pressure_servo_file_name_prefix,
-            #         servo_frame='base_link',
-            #         use_servo=True,
-            #         action_fn=self.grasp_controller
-            #     )           
-
-            # # Stage 6: pick controller
-            # if self.enable_picking:
-            #     input('Done with pressure, hit enter to start pick servoing')
-            #     def pick_action():
-            #         # self.start_detection()
-            #         self.pick_controller()
-            #         self.configure_servo('tool0')
-
-            #     self.run_stage(
-            #         self.pick_controller_topics,
-            #         base_dir + self.pick_controller_file_name_prefix,
-            #         servo_frame='base_link',
-            #         use_servo=True,
-            #         action_fn=pick_action
-            #     )
-
             # Stage 5 & 6: pressure servo + pick controller
             if self.enable_pressure_servo or self.enable_picking:
                 input('Done with approach, hit enter to start pressure servoing and pick controller')
@@ -592,6 +569,23 @@ class StartHarvest(Node):
                     use_servo=True,
                     action_fn=pick_action
                 )
+            
+            # Temp Stage: pull back after pick
+            original_pick_controller = self.PICK_PATTERN
+            def pick_action():
+                if self.enable_picking:
+                    self.PICK_PATTERN = 'linear-pull'
+                    self.pick_controller()
+                self.configure_servo('base_link')
+
+            self.run_stage(
+                [],
+                base_dir + 'post_pick_pull',
+                servo_frame='base_link',
+                use_servo=True,
+                action_fn=pick_action
+            )
+            self.PICK_PATTERN = original_pick_controller
 
             # Stage 7: home & release & save
             input('Done with pick, hit enter to return home')

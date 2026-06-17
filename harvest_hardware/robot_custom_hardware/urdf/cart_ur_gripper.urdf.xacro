@@ -139,9 +139,9 @@
       <parent link="tool0"/>
       <child  link="gripper_link"/>
       <origin xyz="0.00 0.00 0.215" rpy="0 0 0"/>
-    </joint>
+    </joint> -->
 
-    <xacro:gripper_macro/> -->
+    <!-- <xacro:gripper_macro/> -->
   <!-- </xacro:if> -->
 
   <!-- Define link for manual apple location -->
