@@ -55,7 +55,7 @@
   <!-- includes -->
   <xacro:include filename="$(find harvest_hardware_description)/urdf/amiga.urdf.xacro"/>
   <xacro:include filename="$(find ur_description)/urdf/ur_macro.xacro"/>
-  <xacro:include filename="$(find robot_custom_hardware)/urdf/finray_gripper.urdf.xacro"/>
+  <xacro:include filename="$(find harvest_hardware_description)/urdf/finray_gripper.urdf.xacro"/>
   <xacro:include filename="$(find harvest_hardware_description)/urdf/gripper.urdf.xacro"/>
   <xacro:include filename="$(find harvest_hardware_description)/urdf/_d435i.urdf.xacro"/>
 
@@ -108,25 +108,25 @@
 
   <!-- mount finray gripper -->
   <!-- <xacro:if value="${'$(arg gripper_type)' == 'finray'}"> -->
-    <joint name="finray_gripper_joint" type="fixed">
+    <!-- <joint name="finray_gripper_joint" type="fixed">
       <parent link="tool0"/>
       <child  link="finray_gripper_link"/>
       <origin xyz="0.00 0.00 0.23474" rpy="0 0 0"/>
     </joint>
-     <xacro:finray_gripper_macro/>
+     <xacro:finray_gripper_macro/> -->
   <!-- </xacro:if> -->
 
  
 
   <!-- mount gripper -->
   <!-- <xacro:if value="${'$(arg gripper_type)' == 'old'}"> -->
-    <!-- <joint name="gripper_joint" type="fixed">
+    <joint name="gripper_joint" type="fixed">
       <parent link="tool0"/>
       <child  link="gripper_link"/>
       <origin xyz="0.00 0.00 0.215" rpy="0 0 0"/>
     </joint>
 
-    <xacro:gripper_macro/> -->
+    <xacro:gripper_macro/>
   <!-- </xacro:if> -->
 
   <!-- MAST Realsense for apple locations -->
@@ -167,12 +167,12 @@
     </collision>
   </link>
 
- <joint name="finray_tip" type="fixed">
+ <!-- <joint name="finray_tip" type="fixed">
       <parent link="tool0" />
       <child link="temp" />
       <origin xyz="0.000 -0.00 0.32" rpy="0 0 -2.618" />
   </joint>
 
   <link name="temp">
-  </link>
+  </link> -->
 </robot>

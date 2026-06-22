@@ -98,8 +98,8 @@ class StartHarvest(Node):
         if self.enable_recording:
             self.start_record_client = self.make_client(RecordTopics, 'record_topics')
             self.stop_record_client = self.make_client(Trigger, 'stop_recording')
-            # Initialize metadata and topics
-            self.init_metadata_and_topics()
+        # Initialize metadata and topics
+        self.init_metadata_and_topics()
         if self.enable_visual_servo:
             self.start_vservo_client = self.make_client(Trigger, '/start_visual_servo')
         if self.enable_apple_prediction:

@@ -137,6 +137,14 @@ def generate_launch_description():
             'use_sim_time': LaunchConfiguration('use_sim_time'),
             }],
     )
+    stiffness_controller = Node(
+        package='harvest_control',
+        executable='stiffness_controller.py',
+        name='stiffness_controller',
+        parameters=[{
+            'use_sim_time': LaunchConfiguration('use_sim_time'),
+        }],
+    ),
     linear_controller = Node(
         package='harvest_control', 
         executable='linear_controller.py', 
@@ -187,6 +195,7 @@ def generate_launch_description():
             event_detector,
             force_filter,
             pick_controller,
+            stiffness_controller,
             linear_controller,
             tf_listener,
             pressure_avg,

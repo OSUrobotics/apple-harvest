@@ -2,7 +2,7 @@
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro">
     <xacro:macro name="finray_gripper_macro">
 
-    <xacro:include filename="$(find robot_custom_hardware)/urdf/_d435i.urdf.xacro"/>
+    <xacro:include filename="$(find harvest_hardware_description)/urdf/_d435i.urdf.xacro"/>
 
         <joint name="finray_gripper_scups_joint" type="fixed">
             <parent link="finray_gripper_link" />
@@ -68,7 +68,7 @@
                 </geometry> -->
                 <geometry>
                     <mesh
-                        filename="package://robot_custom_hardware/meshes/end_effectors/Fin_Ray-URDF_Collision_Body-Depth_Camera-Simplified.stl"
+                        filename="package://harvest_hardware_description/meshes/end_effectors/Fin_Ray-URDF_Collision_Body-Depth_Camera-Simplified.stl"
                         scale="0.0001 0.0001 0.0001" />
                 </geometry>
             </collision>
@@ -76,7 +76,7 @@
                 <origin xyz="0.0011  0.0017 -0.1846" rpy="1.5708 0 3.14" />
                 <geometry>
                     <mesh
-                        filename="package://robot_custom_hardware/meshes/end_effectors/Fin_Ray_2025-Gripper_Full_Assembly-Depth_Camera-Simplified.stl"
+                        filename="package://harvest_hardware_description/meshes/end_effectors/Fin_Ray_2025-Gripper_Full_Assembly-Depth_Camera-Simplified.stl"
                         scale="0.0001 0.0001 0.0001" />
                 </geometry>
                 <material name="ur5_blue">
