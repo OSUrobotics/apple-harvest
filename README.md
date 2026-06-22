@@ -23,7 +23,7 @@ There are currently two main control schemes: apple harvesting (real or simulate
     A. If using predicting apple locations via YOLO, run the vision node in another script:
     (need to ensure palm camera connects to proper idx):
     ```bash
-    ros2 launch harvest launch_vision.launch.py palm_camera_device_num:=<camera port idx>
+    ros2 launch harvest launch_vision.launch.py palm_camera_device_num:=<camera port idx> launch_realsense:=<bool>
     ```
     B. If getting manual apple locations, run position recording in another script (free-drive the robot to probe apple locations):
     ```bash

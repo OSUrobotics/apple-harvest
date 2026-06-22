@@ -4,9 +4,16 @@ from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.substitutions import FindPackageShare
 from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.conditions import IfCondition
 
 
 def generate_launch_description():
+    launch_realsense_arg = DeclareLaunchArgument(
+        "launch_realsense",
+        default_value="true",
+        description="Whether to launch realsense topics."
+    )
+
     # The base camera is currently the D435
     base_serial_arg = DeclareLaunchArgument(
         "base_serial",
@@ -58,6 +65,7 @@ def generate_launch_description():
             # "enable_accel": LaunchConfiguration("enable_imu"),
             # "unite_imu_method": "linear_interpolation",
         }.items(),
+            condition=IfCondition(LaunchConfiguration('launch_realsense')),
     )
 
     # --- Mast camera ---
@@ -75,9 +83,11 @@ def generate_launch_description():
             # "enable_accel": LaunchConfiguration("enable_imu"),
             # "unite_imu_method": "linear_interpolation",
         }.items(),
+            condition=IfCondition(LaunchConfiguration('launch_realsense')),
     )
 
     return LaunchDescription([
+        launch_realsense_arg,
         base_serial_arg,
         mast_serial_arg,
         publish_tf_arg,

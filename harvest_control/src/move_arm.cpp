@@ -110,7 +110,7 @@ void MoveArmNode::init_moveit()
 {
     // Now safe to use shared_from_this(); the object is owned by a std::shared_ptr
     move_group_ = std::make_unique<moveit::planning_interface::MoveGroupInterface>(
-        shared_from_this(), "ur_manipulator"  // group must match SRDF/kinematics
+        shared_from_this(), "ur5e_manipulator"  // group must match SRDF/kinematics
     );
 
     // // Declare with defaults so we don’t crash if unset

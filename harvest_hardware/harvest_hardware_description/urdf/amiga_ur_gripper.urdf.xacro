@@ -1,0 +1,178 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="$(arg name)">
+
+  <!-- UR5e parameters -->
+  <xacro:arg name="name" default="ur5e"/>
+  <xacro:arg name="ur_type" default="ur5e"/>
+  <xacro:arg name="tf_prefix" default=""/>
+  <xacro:arg name="transmission_hw_interface" default=""/>
+  <xacro:arg name="safety_limits" default="false"/>
+  <xacro:arg name="safety_pos_margin" default="0.15"/>
+  <xacro:arg name="safety_k_position" default="20"/>
+  <xacro:arg name="headless_mode" default="false"/>
+  <xacro:arg name="robot_ip" default="0.0.0.0"/>
+  <xacro:arg name="script_filename" default=""/>
+  <xacro:arg name="output_recipe_filename" default=""/>
+  <xacro:arg name="input_recipe_filename" default=""/>
+  <xacro:arg name="reverse_ip" default="0.0.0.0"/>
+  <xacro:arg name="script_command_port" default="50004"/>
+  <xacro:arg name="reverse_port" default="50001"/>
+  <xacro:arg name="script_sender_port" default="50002"/>
+  <xacro:arg name="trajectory_port" default="50003"/>
+  <xacro:arg name="use_tool_communication" default="false"/>
+  <xacro:arg name="tool_voltage" default="0"/>
+  <xacro:arg name="tool_parity" default="0"/>
+  <xacro:arg name="tool_baud_rate" default="115200"/>
+  <xacro:arg name="tool_stop_bits" default="1"/>
+  <xacro:arg name="tool_rx_idle_chars" default="1.5"/>
+  <xacro:arg name="tool_tx_idle_chars" default="3.5"/>
+  <xacro:arg name="tool_device_name" default="/tmp/ttyUR"/>
+  <xacro:arg name="tool_tcp_port" default="54321"/>
+  <xacro:arg name="use_fake_hardware" default="false"/> 
+  <xacro:arg name="fake_sensor_commands" default="false"/>
+  <xacro:arg name="sim_gazebo" default="false"/>
+  <xacro:arg name="sim_ignition" default="false"/>
+  <xacro:arg name="simulation_controllers" default=""/>
+  
+  <!-- Amiga args -->
+  <xacro:arg name="amiga_prefix" default="amiga__"/>
+  
+  <!-- Realsense args -->
+  <xacro:arg name="use_nominal_extrinsics" default="true" />
+  
+  <!--Gripper Args-->
+  <xacro:arg name="gripper_type" default="old"/>
+
+
+  <!-- parameter files -->
+  <xacro:arg name="joint_limit_params" default="$(find ur_description)/config/$(arg ur_type)/joint_limits.yaml"/>
+  <xacro:arg name="kinematics_params" default="$(find ur_description)/config/$(arg ur_type)/default_kinematics.yaml"/>
+  <xacro:arg name="physical_params" default="$(find ur_description)/config/$(arg ur_type)/physical_parameters.yaml"/>
+  <xacro:arg name="visual_params" default="$(find ur_description)/config/$(arg ur_type)/visual_parameters.yaml"/>
+  <xacro:arg name="initial_positions_file" default="$(find harvest_hardware_description)/config/initial_positions.yaml"/>
+  <xacro:property name="initial_positions_file" default="$(arg initial_positions_file)"/>
+
+  <!-- includes -->
+  <xacro:include filename="$(find harvest_hardware_description)/urdf/amiga.urdf.xacro"/>
+  <xacro:include filename="$(find ur_description)/urdf/ur_macro.xacro"/>
+  <xacro:include filename="$(find robot_custom_hardware)/urdf/finray_gripper.urdf.xacro"/>
+  <xacro:include filename="$(find harvest_hardware_description)/urdf/gripper.urdf.xacro"/>
+  <xacro:include filename="$(find harvest_hardware_description)/urdf/_d435i.urdf.xacro"/>
+
+  <!-- Instantiate Amiga, attached to world. 
+       NOTE: the amiga macro signature requires mesh_base_path -->
+  <xacro:property name="harvest_hardware_description" value="package://harvest_hardware_description/"/>
+  <xacro:amiga_macro amiga_prefix="$(arg amiga_prefix)" amiga_parent="" mesh_base_path="package://harvest_hardware_description/meshes/"/>
+
+  <!-- UR5e arm -->
+  <xacro:ur_robot
+      name="$(arg name)"
+      tf_prefix="$(arg tf_prefix)"
+      parent="$(arg amiga_prefix)tool0"
+
+      joint_limits_parameters_file="$(find ur_description)/config/$(arg ur_type)/joint_limits.yaml"
+      kinematics_parameters_file ="$(find ur_description)/config/$(arg ur_type)/default_kinematics.yaml"
+      physical_parameters_file   ="$(find ur_description)/config/$(arg ur_type)/physical_parameters.yaml"
+      visual_parameters_file     ="$(find ur_description)/config/$(arg ur_type)/visual_parameters.yaml"
+
+      transmission_hw_interface="$(arg transmission_hw_interface)"
+      safety_limits="$(arg safety_limits)"
+      safety_pos_margin="$(arg safety_pos_margin)"
+      safety_k_position="$(arg safety_k_position)"
+      use_fake_hardware="$(arg use_fake_hardware)"
+      fake_sensor_commands="$(arg fake_sensor_commands)"
+      sim_gazebo ="$(arg sim_gazebo)"
+      sim_ignition ="$(arg sim_ignition)"
+      headless_mode="$(arg headless_mode)"
+      initial_positions="${xacro.load_yaml(initial_positions_file)}"
+      use_tool_communication="$(arg use_tool_communication)"
+      tool_voltage="$(arg tool_voltage)"
+      tool_parity="$(arg tool_parity)"
+      tool_baud_rate="$(arg tool_baud_rate)"
+      tool_stop_bits="$(arg tool_stop_bits)"
+      tool_rx_idle_chars="$(arg tool_rx_idle_chars)"
+      tool_tx_idle_chars="$(arg tool_tx_idle_chars)"
+      tool_device_name="$(arg tool_device_name)"
+      tool_tcp_port="$(arg tool_tcp_port)"
+      robot_ip="$(arg robot_ip)"
+      script_filename="$(arg script_filename)"
+      output_recipe_filename="$(arg output_recipe_filename)"
+      input_recipe_filename="$(arg input_recipe_filename)"
+      reverse_ip="$(arg reverse_ip)"
+      script_command_port="$(arg script_command_port)"
+      reverse_port="$(arg reverse_port)"
+      script_sender_port="$(arg script_sender_port)"
+      trajectory_port="$(arg trajectory_port)">
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+  </xacro:ur_robot>
+
+  <!-- mount finray gripper -->
+  <!-- <xacro:if value="${'$(arg gripper_type)' == 'finray'}"> -->
+    <joint name="finray_gripper_joint" type="fixed">
+      <parent link="tool0"/>
+      <child  link="finray_gripper_link"/>
+      <origin xyz="0.00 0.00 0.23474" rpy="0 0 0"/>
+    </joint>
+     <xacro:finray_gripper_macro/>
+  <!-- </xacro:if> -->
+
+ 
+
+  <!-- mount gripper -->
+  <!-- <xacro:if value="${'$(arg gripper_type)' == 'old'}"> -->
+    <!-- <joint name="gripper_joint" type="fixed">
+      <parent link="tool0"/>
+      <child  link="gripper_link"/>
+      <origin xyz="0.00 0.00 0.215" rpy="0 0 0"/>
+    </joint>
+
+    <xacro:gripper_macro/> -->
+  <!-- </xacro:if> -->
+
+  <!-- MAST Realsense for apple locations -->
+  <xacro:sensor_d435i 
+    parent="$(arg amiga_prefix)base" 
+    prefix="mast_"
+    use_nominal_extrinsics="$(arg use_nominal_extrinsics)">
+    <origin xyz=" 0.36916121 -0.17930941  1.534915" rpy="0 0 1.907"/> 
+  </xacro:sensor_d435i>
+
+  <!-- Realsense for trunk detections -->
+  <xacro:sensor_d435i 
+    parent="$(arg amiga_prefix)base" 
+    prefix="base_"
+    use_nominal_extrinsics="$(arg use_nominal_extrinsics)">
+    <origin xyz="0.0 0.3937 0.555625" rpy="0 0 1.57"/> <!-- Realworld mount location -->
+    <!-- <origin xyz="0.7 -0.75 0.555625" rpy="0 0 -1.57"/> --> <!-- Location used for warthog placement (original 0.7 0.69 0.555625-->
+  </xacro:sensor_d435i>
+
+  <!-- Tracking marker frame -->
+  <joint name="tracking_marker_joint" type="fixed">
+    <parent link="$(arg tf_prefix)tool0"/>
+    <child  link="tool0_tracking_marking_link"/>
+    <origin xyz="0 0.12 0.037" rpy="0 0 0"/>
+  </joint>
+  <link name="tool0_tracking_marking_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <sphere radius="0.001"/>
+      </geometry>
+      <material name="marker_material">
+        <color rgba="1 0 0 1"/>
+      </material>
+    </visual>
+    <collision>
+      <geometry><box size="0.0 0.0 0.0"/></geometry>
+    </collision>
+  </link>
+
+ <joint name="finray_tip" type="fixed">
+      <parent link="tool0" />
+      <child link="temp" />
+      <origin xyz="0.000 -0.00 0.32" rpy="0 0 -2.618" />
+  </joint>
+
+  <link name="temp">
+  </link>
+</robot>

@@ -1,0 +1,35 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>harvest_hardware_moveit_config</name>
+  <version>0.0.1</version>
+  <description>MoveIt configuration (SRDF, kinematics, controllers, OMPL) for the harvest hardware.</description>
+
+  <maintainer email="rosettem@oregonstate.edu">Marcus Rosette</maintainer>
+  <license>BSD-3-Clause</license>
+
+  <!-- Build system (Python package) -->
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>ament_python</buildtool_depend>
+
+  <!-- Uses the description package's URDF -->
+  <exec_depend>harvest_hardware_description</exec_depend>
+
+  <!-- MoveIt and related -->
+  <exec_depend>moveit_ros_move_group</exec_depend>
+  <exec_depend>moveit_ros_planning</exec_depend>
+  <exec_depend>moveit_ros_visualization</exec_depend>
+  <exec_depend>moveit_kinematics</exec_depend>
+  <exec_depend>moveit_planners_ompl</exec_depend>
+  <exec_depend>moveit_servo</exec_depend>
+  <exec_depend>srdfdom</exec_depend>
+  <exec_depend>xacro</exec_depend>
+  <exec_depend>robot_state_publisher</exec_depend>
+  <exec_depend>rclpy</exec_depend>
+
+  <!-- RViz config lives here -->
+  <exec_depend>rviz2</exec_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>
