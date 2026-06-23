@@ -1,14 +1,11 @@
 import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch_ros.actions import Node
-from launch.actions import DeclareLaunchArgument
-from launch.substitutions import LaunchConfiguration
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
+from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 from launch.conditions import IfCondition
-import launch_ros.actions
-from launch.actions import IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 
 def generate_launch_description():
@@ -51,8 +48,10 @@ def generate_launch_description():
     
 
     ### apple_prediction presaved_images parameters
-    declared_arguments.append(DeclareLaunchArgument("presaved_images.rgbd_dir_path", default_value="/home/marcus/apple_harvest_ws/data/rgbd_at_trees_oct_2025_w_base_cam/tree_016",
-                                    description="Path to the directory containing RGB ('color.png') and depth ('depth.png') images for presaved images mode."))
+    declared_arguments.append(DeclareLaunchArgument("presaved_images.rgbd_dir_path", default_value="/home/marcus/apple_harvest_ws/data/post_slam_image_processing/test_06162026",
+                                    description="High-level path containing tree subdirectories (tree_002, tree_003, ...)."))
+    declared_arguments.append(DeclareLaunchArgument("presaved_images.tree_id", default_value="-1",
+                                    description="(Optional) Specific tree id (integer) to load when presaved_images is True. Use -1 for unset.") )
 
     ### visual_servo node parameters
     declared_arguments.append(DeclareLaunchArgument("vservo_model", default_value="v9e.pt", 
@@ -90,7 +89,7 @@ def generate_launch_description():
         )
 
     ### Nodes
-    apple_prediction_node = launch_ros.actions.Node(
+    apple_prediction_node = Node(
                 package="harvest_vision",
                 executable="apple_prediction",
                 name="apple_prediction",
@@ -113,11 +112,12 @@ def generate_launch_description():
 
                      # Parameters for presaved images mode (will be ignored if presaved_images is False)
                      "camera_type": LaunchConfiguration("camera_type"),
-                     "presaved_images.rgbd_dir_path": LaunchConfiguration("presaved_images.rgbd_dir_path"),
+                       "presaved_images.rgbd_dir_path": LaunchConfiguration("presaved_images.rgbd_dir_path"),
+                       "presaved_images.tree_id": LaunchConfiguration("presaved_images.tree_id"),
                       }
                 ])
     
-    vservo_node = launch_ros.actions.Node(
+    vservo_node = Node(
                 package="harvest_control",
                 executable="visual_servo.py",
                 name="visual_servo",
@@ -130,7 +130,7 @@ def generate_launch_description():
                       }
                 ])
 
-    palm_camera_node = launch_ros.actions.Node(
+    palm_camera_node = Node(
                 package="harvest_vision",
                 executable="gripper_palm_camera",
                 name="gripper_palm_camera",
@@ -139,7 +139,7 @@ def generate_launch_description():
                       }
                 ])
     
-    voxelize_scan_node = launch_ros.actions.Node(
+    voxelize_scan_node = Node(
             package="harvest_vision",
             executable="voxelize_scan",
             name="voxelize_scan",

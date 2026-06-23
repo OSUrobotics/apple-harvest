@@ -25,6 +25,7 @@ from harvest_interfaces.srv import ApplePrediction
 
 from tf2_geometry_msgs import do_transform_pose_stamped
 from tf2_ros import Buffer, TransformListener
+from rcl_interfaces.msg import SetParametersResult
 
 from cv_bridge import CvBridge
 from ultralytics import YOLO
@@ -176,6 +177,8 @@ class ApplePredictionNode(Node):
         """Set up presaved-image mode: load intrinsics, images, timers, publishers."""
 
         self.declare_parameter("presaved_images.rgbd_dir_path", "")
+        # tree id as integer; -1 means unset
+        self.declare_parameter("presaved_images.tree_id", -1)
 
         # ---- camera intrinsics ----
         if self.camera_type == "azure":
@@ -200,55 +203,32 @@ class ApplePredictionNode(Node):
         )
 
         # ---- load images ----
-        rgbd_dir_path   = self.get_parameter("presaved_images.rgbd_dir_path").get_parameter_value().string_value
+        # We'll load images only once a `presaved_images.tree_id` is set. The
+        # high-level directory is `presaved_images.rgbd_dir_path` and each tree
+        # sits in a subdirectory (eg. tree_002). We watch the tree_id parameter
+        # and load/reload images on changes.
+        self._rgbd_dir_path = self.get_parameter(
+            "presaved_images.rgbd_dir_path"
+        ).get_parameter_value().string_value
 
-        # ---- mast_cam (used for YOLO inference pipeline) ----
-        rgb_path   = os.path.join(rgbd_dir_path, "mast_cam", "color.png")
-        depth_path = os.path.join(rgbd_dir_path, "mast_cam", "depth.png")
+        # current tree id (-1 means not set)
+        try:
+            p = self.get_parameter("presaved_images.tree_id")
+            self.tree_id = int(p.value)
+        except Exception:
+            self.tree_id = -1
 
-        self.rgb_image   = cv2.imread(rgb_path)
-        self.depth_image = cv2.imread(depth_path, cv2.IMREAD_UNCHANGED)
+        if self.tree_id is not None and int(self.tree_id) >= 0:
+            try:
+                self._set_presaved_tree(int(self.tree_id))
+            except Exception as e:
+                self.get_logger().warn(f"Failed to load initial presaved tree '{self.tree_id}': {e}")
+        else:
+            self.get_logger().info("Presaved images enabled, waiting for 'presaved_images.tree_id' parameter to be set.")
 
-        if self.rgb_image is None:
-            raise FileNotFoundError(f"Could not load RGB image: {rgb_path}")
-        if self.depth_image is None:
-            raise FileNotFoundError(f"Could not load depth image: {depth_path}")
-
-        self.rgb_image   = cv2.resize(self.rgb_image,   self.target_size, interpolation=cv2.INTER_LINEAR)
-        self.depth_image = cv2.resize(self.depth_image, self.target_size, interpolation=cv2.INTER_NEAREST)
-
-        self.get_logger().info(
-            f"[mast_cam] Loaded RGB: dtype={self.rgb_image.dtype} shape={self.rgb_image.shape} | "
-            f"Depth: dtype={self.depth_image.dtype} min={self.depth_image.min()} "
-            f"max={self.depth_image.max()} shape={self.depth_image.shape}"
-        )
-
-        # ---- base_cam (published as-is, no inference) ----
-        base_rgb_path   = os.path.join(rgbd_dir_path, "base_cam", "color.png")
-        base_depth_path = os.path.join(rgbd_dir_path, "base_cam", "depth.png")
-
-        self.base_rgb_image   = cv2.imread(base_rgb_path)
-        self.base_depth_image = cv2.imread(base_depth_path, cv2.IMREAD_UNCHANGED)
-
-        if self.base_rgb_image is None:
-            self.get_logger().warn(
-                f"[base_cam] Could not load RGB image: {base_rgb_path}. "
-                "Base camera publishing will be skipped."
-            )
-        if self.base_depth_image is None:
-            self.get_logger().warn(
-                f"[base_cam] Could not load depth image: {base_depth_path}. "
-                "Base camera publishing will be skipped."
-            )
-
-        if self.base_rgb_image is not None and self.base_depth_image is not None:
-            self.get_logger().info(
-                f"[base_cam] Loaded RGB: dtype={self.base_rgb_image.dtype} "
-                f"shape={self.base_rgb_image.shape} | "
-                f"Depth: dtype={self.base_depth_image.dtype} "
-                f"min={self.base_depth_image.min()} max={self.base_depth_image.max()} "
-                f"shape={self.base_depth_image.shape}"
-            )
+        # Register parameter change callback so we can load a new tree when
+        # `presaved_images.tree_id` or the top-level path is updated.
+        self.add_on_set_parameters_callback(self._on_params_set)
 
         # ---- extra publishers (presaved only) ----
         latched_qos = QoSProfile(
@@ -265,8 +245,14 @@ class ApplePredictionNode(Node):
         self.base_rgb_pub   = self.create_publisher(Image, "base_cam/rgb_image",   latched_qos)
         self.base_depth_pub = self.create_publisher(Image, "base_cam/depth_image", latched_qos)
 
-        self._presaved_publish_images()
-        self._presaved_publish_pointcloud()
+
+        # If a tree was already selected earlier, publish the loaded images
+        # now that the publishers exist.
+        try:
+            self._presaved_publish_images()
+            self._presaved_publish_pointcloud()
+        except Exception as e:
+            self.get_logger().warn(f"Publishing presaved images failed: {e}")
 
         # ---- misc state ----
         self._presaved_apple_centers = None
@@ -281,6 +267,145 @@ class ApplePredictionNode(Node):
         )
 
         self.get_logger().info("ApplePredictionNode (presaved) ready.")
+
+    # ------------------------------------------------------------------ params
+
+    def _on_params_set(self, params):
+        """Called whenever parameters are set; watches for rgbd_dir_path/tree_id changes.
+
+        Returns a SetParametersResult signaling success/failure.
+        """
+        result = SetParametersResult()
+        result.successful = True
+        result.reason = ""
+
+        for p in params:
+            if p.name == "presaved_images.tree_id":
+                new_tree = p.value
+                # allow strings or ints; coerce to int
+                try:
+                    if new_tree is None or (isinstance(new_tree, str) and new_tree == ""):
+                        tid = -1
+                    else:
+                        tid = int(new_tree)
+                except Exception as e:
+                    result.successful = False
+                    result.reason = f"presaved_images.tree_id must be an integer: {e}"
+                    self.get_logger().error(result.reason)
+                    return result
+
+                if int(tid) != int(self.tree_id if self.tree_id is not None else -1):
+                    try:
+                        self._set_presaved_tree(tid)
+                        self.tree_id = int(tid)
+                        self.get_logger().info(f"Loaded presaved tree '{tid}'")
+                    except Exception as e:
+                        result.successful = False
+                        result.reason = f"Failed to load tree '{tid}': {e}"
+                        self.get_logger().error(result.reason)
+                        return result
+            elif p.name == "presaved_images.rgbd_dir_path":
+                new_path = p.value
+                if new_path is None:
+                    new_path = ""
+                if new_path != self._rgbd_dir_path:
+                    self._rgbd_dir_path = new_path
+                    # if we already have a tree_id, reload images from new path
+                    if getattr(self, "tree_id", None):
+                        try:
+                            self._set_presaved_tree(self.tree_id)
+                            self.get_logger().info(f"Reloaded tree '{self.tree_id}' from new path")
+                        except Exception as e:
+                            result.successful = False
+                            result.reason = f"Failed to reload tree '{self.tree_id}' from new path: {e}"
+                            self.get_logger().error(result.reason)
+                            return result
+
+        return result
+
+    def _set_presaved_tree(self, tree_id: str):
+        """Load images for the given tree_id from the configured high-level dir.
+
+        Accepts either 'tree_002' or '002' and normalizes to the directory name.
+        Raises FileNotFoundError on missing files.
+        """
+        # clear images when tree_id < 0
+        if tree_id is None or (isinstance(tree_id, int) and tree_id < 0):
+            self.rgb_image = None
+            self.depth_image = None
+            self.base_rgb_image = None
+            self.base_depth_image = None
+            return
+
+        # coerce and format tree directory name as tree_###
+        try:
+            tid_int = int(tree_id)
+        except Exception:
+            raise ValueError(f"tree_id must be integer-like, got: {tree_id}")
+
+        dir_name = f"tree_{tid_int:03d}"
+
+        rgbd_dir_path = self._rgbd_dir_path
+        if not rgbd_dir_path:
+            raise FileNotFoundError("presaved_images.rgbd_dir_path is empty")
+
+        tree_dir = os.path.join(rgbd_dir_path, dir_name)
+        mast_dir = os.path.join(tree_dir, "mast_cam")
+        base_dir = os.path.join(tree_dir, "base_cam")
+
+        mast_rgb = os.path.join(mast_dir, "color.png")
+        mast_depth = os.path.join(mast_dir, "depth.png")
+        self.get_logger().info(f"Loading mast_cam images from '{mast_rgb}' for tree_id='{tree_id}'")
+
+        if not os.path.exists(mast_rgb) or not os.path.exists(mast_depth):
+            raise FileNotFoundError(f"Missing mast_cam images in {mast_dir}")
+
+        # load mast images
+        rgb_img = cv2.imread(mast_rgb)
+        depth_img = cv2.imread(mast_depth, cv2.IMREAD_UNCHANGED)
+        if rgb_img is None or depth_img is None:
+            raise FileNotFoundError(f"Failed to read mast_cam images in {mast_dir}")
+
+        rgb_img = cv2.resize(rgb_img, self.target_size, interpolation=cv2.INTER_LINEAR)
+        depth_img = cv2.resize(depth_img, self.target_size, interpolation=cv2.INTER_NEAREST)
+
+        self.rgb_image = rgb_img
+        self.depth_image = depth_img
+
+        self.get_logger().info(
+            f"[mast_cam] Loaded RGB: dtype={self.rgb_image.dtype} shape={self.rgb_image.shape} | "
+            f"Depth: dtype={self.depth_image.dtype} min={self.depth_image.min()} "
+            f"max={self.depth_image.max()} shape={self.depth_image.shape}"
+        )
+
+        # try load base cam set but don't fail if missing
+        base_rgb = os.path.join(base_dir, "color.png")
+        base_depth = os.path.join(base_dir, "depth.png")
+        if os.path.exists(base_rgb) and os.path.exists(base_depth):
+            b_rgb = cv2.imread(base_rgb)
+            b_depth = cv2.imread(base_depth, cv2.IMREAD_UNCHANGED)
+            if b_rgb is not None and b_depth is not None:
+                self.base_rgb_image = cv2.resize(cv2.cvtColor(b_rgb, cv2.COLOR_BGR2RGB), self.target_size, interpolation=cv2.INTER_LINEAR)
+                self.base_depth_image = cv2.resize(b_depth, self.target_size, interpolation=cv2.INTER_NEAREST)
+                self.get_logger().info(
+                    f"[base_cam] Loaded RGB: dtype={self.base_rgb_image.dtype} shape={self.base_rgb_image.shape} | "
+                    f"Depth: dtype={self.base_depth_image.dtype} min={self.base_depth_image.min()} max={self.base_depth_image.max()}"
+                )
+        else:
+            self.base_rgb_image = None
+            self.base_depth_image = None
+
+        # Reset any cached results
+        self._presaved_apple_centers = None
+        self._presaved_apple_radii = None
+        self._presaved_yolo_result = None
+
+        # Publish loaded images/pointcloud so downstream visualisers see the change
+        try:
+            self._presaved_publish_images()
+            self._presaved_publish_pointcloud()
+        except Exception as e:
+            self.get_logger().warn(f"Publishing presaved images failed: {e}")
 
     # ================================================================== service
 
@@ -522,7 +647,7 @@ class ApplePredictionNode(Node):
 
         # base_cam — raw pass-through, no inference
         if self.base_rgb_image is not None and self.base_depth_image is not None:
-            base_rgb_msg   = self.bridge.cv2_to_imgmsg(self.base_rgb_image,   encoding="bgr8")
+            base_rgb_msg   = self.bridge.cv2_to_imgmsg(self.base_rgb_image,   encoding="rgb8")
             base_depth_msg = self.bridge.cv2_to_imgmsg(self.base_depth_image, encoding="mono16")
             base_rgb_msg.header.stamp    = self.get_clock().now().to_msg()
             base_rgb_msg.header.frame_id = "base_camera_color_optical_frame"
