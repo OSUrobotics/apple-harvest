@@ -104,7 +104,8 @@ def _launch_setup(context):
             "default_planner_request_adapters/FixStartStateBounds "
             "default_planner_request_adapters/FixStartStateCollision "
             "default_planner_request_adapters/FixStartStatePathConstraints "
-            "default_planner_request_adapters/AddRuckigTrajectorySmoothing"
+            # "default_planner_request_adapters/AddRuckigTrajectorySmoothing"
+            "default_planner_request_adapters/AddTimeOptimalParameterization"
         )
 
     ompl_yaml = {"ompl": load_yaml("harvest_hardware_moveit_config", "config/ompl_planning.yaml")}
