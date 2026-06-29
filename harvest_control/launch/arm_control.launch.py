@@ -26,6 +26,8 @@ def generate_launch_description():
         DeclareLaunchArgument('max_accel', default_value='0.05'),
         DeclareLaunchArgument('max_vel', default_value='0.05'),
         DeclareLaunchArgument('traj_time_step', default_value='0.05'),
+        DeclareLaunchArgument('source_frame', default_value='cart_body'),
+        DeclareLaunchArgument('gripper_tip_frame', default_value='gripper_scups_link'),
     ]
 
     # Pick controller based on fake hardware argument
@@ -144,7 +146,7 @@ def generate_launch_description():
         parameters=[{
             'use_sim_time': LaunchConfiguration('use_sim_time'),
         }],
-    ),
+    )
     linear_controller = Node(
         package='harvest_control', 
         executable='linear_controller.py', 
@@ -159,6 +161,8 @@ def generate_launch_description():
         name='tf_listener', 
         parameters=[{
             'use_sim_time': LaunchConfiguration('use_sim_time'),
+            'source_frame': LaunchConfiguration('source_frame'),
+            'gripper_tip_frame': LaunchConfiguration('gripper_tip_frame'),
             }],
     )
     pressure_avg = Node(

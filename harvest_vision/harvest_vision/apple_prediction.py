@@ -5,6 +5,7 @@ import open3d as o3d
 import numpy as np
 import cv2
 import torch
+import time
 
 import rclpy
 from rclpy.node import Node
@@ -248,6 +249,42 @@ class ApplePredictionNode(Node):
         )
 
         self.get_logger().info("ApplePredictionNode (presaved) ready.")
+
+
+        # ----- subscribers -----
+
+    def _cinfo_cb(self, msg: CameraInfo):
+        self._last_cinfo = msg
+
+    def _sync_cd_cb(self, color_msg: Image, depth_msg: Image):
+        self._last_pair = (color_msg, depth_msg)
+        self._new_pair_event.set()
+
+    # ----- waiting for fresh color+depth pair -----
+
+    def _wait_for_new_synced(self, timeout_sec=3.0):
+        """
+        Wait for a color+depth pair whose (color_ts, depth_ts) tuple differs from the last used.
+        Optionally allow reusing the most recent once to avoid instant timeouts.
+        Returns (color_msg, depth_msg) or None on timeout.
+        """
+        deadline = time.monotonic() + timeout_sec
+        tried_reuse = False
+        while time.monotonic() < deadline:
+            pair = self._last_pair
+            if pair is not None:
+                c, d = pair
+                key = (stamp_to_ns(c.header.stamp), stamp_to_ns(d.header.stamp))
+                if key != self._last_used_pair_key:
+                    return pair
+                if self.allow_reuse_latest and not tried_reuse:
+                    tried_reuse = True
+                    return pair
+            remaining = max(0.0, deadline - time.monotonic())
+            self._new_pair_event.clear()
+            self._new_pair_event.wait(timeout=remaining if remaining > 0 else 0)
+        return None
+
 
     # ================================================================== service
 
