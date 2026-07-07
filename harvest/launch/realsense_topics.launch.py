@@ -23,7 +23,8 @@ def generate_launch_description():
     # The mast camera is currently the D435I
     mast_serial_arg = DeclareLaunchArgument(
         "mast_serial",
-        default_value="'153122071693'", # TODO: Add sn for Jared setup
+        # default_value="'153122071693'", # TODO: Add sn for Jared setup
+        default_value = "'238722072340'",
         description="Serial number for the mast RealSense camera"
     )
 

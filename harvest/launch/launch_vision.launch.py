@@ -64,9 +64,6 @@ def generate_launch_description():
                                   description="Smoothing factor on velocity based on how far away the target apple center is from the camera center. Higher smoothing factor, faster movement when apple is far away."))
     declared_arguments.append(DeclareLaunchArgument("vservo_max_vel", default_value="0.5", 
                                   description="Maximum velocity that arm end effector can move during visual servo."))
-    declared_arguments.append(DeclareLaunchArgument("vservo_flip_frames", default_value="False", 
-                                  description="Flip direction for if the camera is installed upside down."))
-    
     ### palm camera publisher node parameters
     declared_arguments.append(DeclareLaunchArgument("palm_camera_device_num", default_value="2", 
                                   description="Device number for palm RGB camer in gripper."))
@@ -129,7 +126,6 @@ def generate_launch_description():
                      "vservo_accuracy_px": LaunchConfiguration("vservo_accuracy_px"),
                      "vservo_smoothing_factor": LaunchConfiguration("vservo_smoothing_factor"),
                      "vservo_max_vel": LaunchConfiguration("vservo_max_vel"),
-                     "flip_frames" : LaunchConfiguration("vservo_flip_frames")
                       }
                 ])
 

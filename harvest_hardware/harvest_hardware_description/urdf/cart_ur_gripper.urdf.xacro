@@ -132,7 +132,7 @@
     <joint name="finray_gripper_joint" type="fixed">
       <parent link="tool0"/>
       <child  link="finray_gripper_link"/>
-      <origin xyz="0.00 0.00 0.23474" rpy="0 0 0"/>
+      <origin xyz="0.00 0.00 0.0" rpy="0 0 0"/>
     </joint>
      <xacro:finray_gripper_macro/>
   <!-- </xacro:if> -->
