@@ -87,7 +87,7 @@ class ApplePredictionPreSaved(Node):
         self.declare_parameter("prediction_radius_min", 0.03)
         self.declare_parameter("prediction_radius_max", 0.06)
         self.declare_parameter("prediction_distance_max", 1.0)
-        self.declare_parameter("vision_experiment", "NA")
+        self.declare_parameter("vision_experiment", "a")
         self.model_path = self.get_parameter("prediction_model_path").get_parameter_value().string_value
         self.confidence_thresh = self.get_parameter("prediction_yolo_conf").get_parameter_value().double_value
         self.lower_rad_bound = self.get_parameter("prediction_radius_min").get_parameter_value().double_value
@@ -102,21 +102,24 @@ class ApplePredictionPreSaved(Node):
             share_directory = get_package_share_directory(package_name)
             
             # # Access a file or subdirectory within the share directory
-            # self.rgb_path = os.path.join(share_directory, 'data/', f'prosser_{self.vision_experiment}/', 'color_raw.png')
-            # self.depth_path = os.path.join(share_directory, 'data/', f'prosser_{self.vision_experiment}/', 'depth_to_color.png')
+            self.rgb_path = os.path.join(share_directory, 'data/', f'prosser_{self.vision_experiment}/', 'color_raw.png')
+            self.depth_path = os.path.join(share_directory, 'data/', f'prosser_{self.vision_experiment}/', 'depth_to_color.png')
 
-            self.rgb_path = '/home/marcus/apple_harvest_ws/data/rgbd_at_trees_oct_2025_v2/tree_006/color.png'
-            self.depth_path = '/home/marcus/apple_harvest_ws/data/rgbd_at_trees_oct_2025_v2/tree_006/depth.png'
+            # self.rgb_path = '/home/marcus/apple_harvest_ws/data/rgbd_at_trees_oct_2025_v2/tree_006/color.png'
+            # self.depth_path = '/home/marcus/apple_harvest_ws/data/rgbd_at_trees_oct_2025_v2/tree_006/depth.png'
 
         except Exception as e:
             self.get_logger().error(f"Error accessing share directory: {e}")
 
         # Load RGB and depth images
-        self.rgb_image = cv2.imread(self.rgb_path)
-        self.depth_image = cv2.imread(self.depth_path, cv2.IMREAD_UNCHANGED)
-        self.get_logger().debug(f"Loaded RGB: dtype={self.rgb_image.dtype}, shape={self.rgb_image.shape}")
-        self.get_logger().debug(f"Loaded depth: dtype={self.depth_image.dtype}, min={self.depth_image.min()}, max={self.depth_image.max()}, shape={self.depth_image.shape}")
-
+        try:
+            self.rgb_image = cv2.imread(self.rgb_path)
+            self.depth_image = cv2.imread(self.depth_path, cv2.IMREAD_UNCHANGED)
+            self.get_logger().debug(f"Loaded RGB: dtype={self.rgb_image.dtype}, shape={self.rgb_image.shape}")
+            self.get_logger().debug(f"Loaded depth: dtype={self.depth_image.dtype}, min={self.depth_image.min()}, max={self.depth_image.max()}, shape={self.depth_image.shape}")
+        except Exception as e:
+            self.get_logger().error(f"File {self.rgb_path} not found")
+            
         # Resize images to target size for YOLO input
         self.rgb_image = cv2.resize(self.rgb_image, self.target_size, interpolation=cv2.INTER_LINEAR)
         self.depth_image = cv2.resize(self.depth_image, self.target_size, interpolation=cv2.INTER_NEAREST)
