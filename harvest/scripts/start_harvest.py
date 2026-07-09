@@ -140,14 +140,20 @@ class StartHarvest(Node):
         self.pressure_servo_topics = [
             #'/gripper/pressure','/gripper/distance','/gripper/motor/current','/gripper/motor/position','/gripper/motor/velocity',
             '/microROS/sensor_data',
+            '/microROS/can_status',
+            '/camera/gripper_camera/color/image_raw',
+            '/camera/gripper_camera/aligned_depth_to_color/image_raw',
             '/joint_states',
             '/force_torque_sensor_broadcaster/wrench','/servo_node/delta_twist_cmds'
         ]
         self.pick_controller_topics = [
             #'/gripper/pressure','/gripper/distance',
             '/microROS/sensor_data',
-            '/joint_states', 
-            '/tool_pose','/force_torque_sensor_broadcaster/wrench','/servo_node/delta_twist_cmds'
+            '/microROS/can_status',
+            '/camera/gripper_camera/color/image_raw',
+            '/camera/gripper_camera/aligned_depth_to_color/image_raw',
+            '/joint_states',
+            '/tool_pose', '/force_torque_sensor_broadcaster/wrench','/servo_node/delta_twist_cmds'
         ]
         self.pressure_servo_and_pick_controller_topics = list(set(self.pressure_servo_topics + self.pick_controller_topics))
 

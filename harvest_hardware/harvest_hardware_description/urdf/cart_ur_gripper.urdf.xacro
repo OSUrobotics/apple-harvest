@@ -39,7 +39,8 @@
   <xacro:arg name="use_nominal_extrinsics" default="true" />
 
   <!--Gripper Args-->
-  <xacro:arg name="gripper_type" default="old"/>
+  <xacro:arg name="gripper_type" default="finray"/>
+  <xacro:property name="gripper_type" default="$(arg gripper_type)"/>
 
    <!-- Define the four args with the names the UR macro expects -->
   <!-- <xacro:arg name="joint_limit_params" default="$(find harvest_hardware_description)/config/ur5e/joint_limits.yaml"/>
@@ -128,31 +129,31 @@
 
 
   <!-- mount finray gripper -->
-  <!-- <xacro:if value="${'$(arg gripper_type)' == 'finray'}"> -->
+  <xacro:if value="${gripper_type == 'finray'}">
     <joint name="finray_gripper_joint" type="fixed">
       <parent link="tool0"/>
-      <child  link="finray_gripper_link"/>
+      <child  link="gripper_link"/>
       <origin xyz="0.00 0.00 0.0" rpy="0 0 0"/>
     </joint>
      <xacro:finray_gripper_macro/>
-  <!-- </xacro:if> -->
+  </xacro:if>
 
   <!-- mount gripper -->
-  <!-- <xacro:if value="${'$(arg gripper_type)' == 'old'}"> -->
-    <!-- <joint name="gripper_joint" type="fixed">
+  <xacro:if value="${gripper_type == 'alejo'}">
+    <joint name="gripper_joint" type="fixed">
       <parent link="tool0"/>
       <child  link="gripper_link"/>
       <origin xyz="0.00 0.00 0.215" rpy="0 0 0"/>
-    </joint> -->
+    </joint>
 
-    <!-- <xacro:gripper_macro/> -->
-  <!-- </xacro:if> -->
+    <xacro:gripper_macro/>
+  </xacro:if>
 
   <!-- Define link for manual apple location -->
    <joint name="finray_tip" type="fixed">
       <parent link="tool0" />
       <child link="temp" />
-      <origin xyz="0.000 -0.00 0.32" rpy="0 0 -2.618" />
+      <origin xyz="0.000 -0.00 0.290" rpy="0 0 -2.618" />
   </joint>
 
   <link name="temp">

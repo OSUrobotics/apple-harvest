@@ -5,7 +5,7 @@
     <xacro:include filename="$(find harvest_hardware_description)/urdf/_d435i.urdf.xacro"/>
 
         <joint name="finray_gripper_scups_joint" type="fixed">
-            <parent link="finray_gripper_link" />
+            <parent link="gripper_link" />
             <child link="gripper_scups_link" />
             <origin xyz="0.000 0.00 0.255" rpy="0 0 0.0" />
         </joint>
@@ -24,13 +24,13 @@
 
 
         <joint name="finray_gripper_palm_camera_joint" type="fixed">
-            <parent link="finray_gripper_link" />
+            <parent link="gripper_link" />
             <child link="gripper_palm_camera_optical_link" />
             <origin xyz="0.00 0 0.230" rpy="0 0 1.5708" />
         </joint>
 
         <!-- <joint name="finray_gripper_top_camera_joint" type="fixed">
-            <parent link="finray_gripper_link" />
+            <parent link="gripper_link" />
             <child link="finray_gripper_top_camera_link" />
             <origin xyz="0.00 -.072 -0.0865" rpy="0 0 0" /> -->
             <!-- <origin xyz="0.009525 -.08255 -0.0445" rpy="0 0 0"/> -->
@@ -55,7 +55,7 @@
             </visual>
         </link>
 
-        <link name="finray_gripper_link">
+        <link name="gripper_link">
             <collision>
                 <origin xyz="0.0 0.0 0.001" rpy="0.0 0  3.14159" />
                 <!-- With out Depth camera  -->
@@ -105,7 +105,7 @@
         </link>
 
         <xacro:sensor_d435i 
-            parent="finray_gripper_link" 
+            parent="gripper_link" 
             prefix="gripper_"
             use_nominal_extrinsics="$(arg use_nominal_extrinsics)">
              <!-- move out for collision problem in intial collision body stl -->

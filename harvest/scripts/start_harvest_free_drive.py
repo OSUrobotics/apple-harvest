@@ -138,12 +138,18 @@ class StartHarvest(Node):
         self.pressure_servo_topics = [
             #'/gripper/pressure','/gripper/distance','/gripper/motor/current', '/gripper/motor/position','/gripper/motor/velocity',
             '/microROS/sensor_data',
+            '/microROS/can_status',
+            '/camera/gripper_camera/color/image_raw',
+            '/camera/gripper_camera/aligned_depth_to_color/image_raw',
             '/joint_states',
             '/force_torque_sensor_broadcaster/wrench','/servo_node/delta_twist_cmds'
         ]
         self.pick_controller_topics = [
             #'/gripper/pressure','/gripper/distance',
             '/microROS/sensor_data',
+            '/microROS/can_status',
+            '/camera/gripper_camera/color/image_raw',
+            '/camera/gripper_camera/aligned_depth_to_color/image_raw',
             '/joint_states',
             '/tool_pose','/force_torque_sensor_broadcaster/wrench','/servo_node/delta_twist_cmds'
         ]
@@ -309,6 +315,33 @@ class StartHarvest(Node):
             else:
                 self.request.activate_controllers = ["scaled_joint_trajectory_controller"]
                 self.request.deactivate_controllers = ["forward_position_controller"]
+        self.request.timeout = rclpy.duration.Duration(seconds=5.0).to_msg()
+
+        
+        # TODO: Commit this Alejo's change
+        self.request.strictness = SwitchController.Request.BEST_EFFORT  # Use STRICT or BEST_EFFORT
+
+        self.future = self.switch_controller_client.call_async(self.request)
+        rclpy.spin_until_future_complete(self, self.future)
+        return self.future.result()
+    
+    def switch_free_drive_controller(self, servo=False, free_drive=False, sim=False):
+        # Switches controller from forward position controller to joint_trajectory controller
+        self.request = SwitchController.Request()
+        if free_drive:
+            if servo:
+                    self.request.deactivate_controllers = ["forward_position_controller"] 
+                    self.request.activate_controllers = ["freedrive_mode_controller"]
+            else:
+                    self.request.deactivate_controllers = ["scaled_joint_trajectory_controller"]
+                    self.request.activate_controllers = ["freedrive_mode_controller"]
+        else:
+            if servo:
+                    self.request.activate_controllers = ["forward_position_controller"] 
+                    self.request.deactivate_controllers = ["freedrive_mode_controller"]
+            else:
+                    self.request.activate_controllers = ["scaled_joint_trajectory_controller"]
+                    self.request.deactivate_controllers = ["freedrive_mode_controller"]
         self.request.timeout = rclpy.duration.Duration(seconds=5.0).to_msg()
 
         

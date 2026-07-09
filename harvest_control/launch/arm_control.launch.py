@@ -28,6 +28,7 @@ def generate_launch_description():
         DeclareLaunchArgument('traj_time_step', default_value='0.05'),
         DeclareLaunchArgument('source_frame', default_value='cart_body'),
         DeclareLaunchArgument('gripper_tip_frame', default_value='gripper_scups_link'),
+        DeclareLaunchArgument('gripper_type', default_value='finray'),
     ]
 
     # Pick controller based on fake hardware argument
@@ -73,6 +74,7 @@ def generate_launch_description():
             'initial_joint_controller': initial_controller,
             'use_sim_time': LaunchConfiguration('use_sim_time'),
             'controllers_file': ur_controller_config,
+            'gripper_type': LaunchConfiguration('gripper_type'),
         }.items(),
     )
 
@@ -87,6 +89,7 @@ def generate_launch_description():
             'description_file': LaunchConfiguration('description_file'),
             'prefix': LaunchConfiguration('prefix'),
             'use_sim_time': LaunchConfiguration('use_sim_time'),
+            'gripper_type': LaunchConfiguration('gripper_type'),
         }.items(),
     )
 
@@ -101,6 +104,7 @@ def generate_launch_description():
             'description_file': LaunchConfiguration('description_file'),
             'use_sim_time': LaunchConfiguration('use_sim_time'),
             'use_3d_sensors': LaunchConfiguration('use_3d_sensors'),
+            'gripper_type': LaunchConfiguration('gripper_type'),
         }.items(),
     )
 
