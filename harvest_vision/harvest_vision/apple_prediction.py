@@ -88,7 +88,7 @@ class ApplePredictionNode(Node):
         xyz_str = self.get_parameter("pointcloud_offset").value
         xyz = xyz_str[1:-1].split(",")
 
-        self.pointcloud_offset = (float64(xyz[0]), float64(xyz[1]), float64(xyz[2]))
+        self.pointcloud_offset = (float(xyz[0]), float(xyz[1]), float(xyz[2]))
         self.get_logger().info(f"xyz offset {self.pointcloud_offset}")
 
         # ---- YOLO ----

@@ -32,6 +32,7 @@ setup(
     entry_points={
         'console_scripts': [
             'gripper_palm_camera = harvest_hardware_description.gripper_palm_camera:main',
+            'tcp_pose_relay = harvest_hardware_description.tcp_pose_relay:main',
         ],
     },
 )

@@ -12,7 +12,33 @@ from launch.launch_description_sources import PythonLaunchDescriptionSource
 
 
 def generate_launch_description():
+    # 1. Declare a boolean flag (defaults to true)
+    use_tcp_broadcaster = LaunchConfiguration('use_tcp_broadcaster')
+
+    return LaunchDescription([
+        DeclareLaunchArgument(
+            'use_tcp_broadcaster',
+            default_value='false', # Set to false for your simulation
+            description='Whether to load the TCP pose broadcaster'
+        ),
+
+        # 2. Only spawn the controller if the condition is met
+        Node(
+            package='controller_manager',
+            executable='spawner',
+            arguments=['tcp_pose_broadcaster'],
+            condition=IfCondition(use_tcp_broadcaster),
+            output='screen',
+        ),
+    ])
+
+
+def generate_launch_description():
     declared_arguments = []
+    # Control
+    declared_arguments.append(DeclareLaunchArgument("use_fake_hardware", default_value="True",
+                                description="Use fake hardware"))
+
     ### apple_prediction node parameters & voxelize_scan (vision_experiment)
     # Segmentation model is trained on open source datasets and can give slightly more accurate 3D reconstruction results. 
     # detection models are trained on Prosser data and may be more robust to field conditions.
@@ -72,11 +98,27 @@ def generate_launch_description():
     declared_arguments.append(DeclareLaunchArgument('prediction_model_path', default_value=[PathJoinSubstitution([FindPackageShare("harvest_vision"), "yolo_networks", LaunchConfiguration("prediction_model")])]))
     declared_arguments.append(DeclareLaunchArgument('vservo_model_path', default_value=[PathJoinSubstitution([FindPackageShare("harvest_vision"), "yolo_networks", LaunchConfiguration("vservo_model")])]))
     
-    ### Offsets for where to place the point cloud
-    declared_arguments.append(DeclareLaunchArgument("pointcloud_offset", default_value="(0.0, 10.0, 0.0)", 
+    ### Offsets for where to place the point cloud. y is up/down
+    declared_arguments.append(DeclareLaunchArgument("pointcloud_offset", default_value="(-0.3, 0.0, 1.0)", 
                                   description="Tuple for x,y,z offset of apple point cloud from mast camera base"))
 
     ### Nodes
+    palm_camera = launch_ros.actions.Node(
+        package="harvest_vision",
+        executable="gripper_palm_camera",
+        name="gripper_palm_camera",
+        parameters=[
+            {"use_fake_hardware": LaunchConfiguration("use_fake_hardware")}            
+        ]
+    )
+
+    tcp_pose_relay = launch_ros.actions.Node(
+        package="harvest_hardware_description",
+        executable="tcp_pose_relay",
+        parameters=[
+            {"use_fake_hardware": LaunchConfiguration("use_fake_hardware")}            
+        ]
+    )
     apple_prediction_node = launch_ros.actions.Node(
                 package="harvest_vision",
                 executable="apple_prediction",
@@ -122,13 +164,15 @@ def generate_launch_description():
          launch_arguments ={'max_vel': '0.1', 
                             'max_accel': '0.1', 
                             'traj_time_step': '0.025', 
-                            'use_fake_hardware': 'True', 
+                            'use_fake_hardware': LaunchConfiguration("use_fake_hardware"), 
                             'rviz_file': 'view_robot_with_apples.rviz'
                             }.items()
     )
     
     return LaunchDescription(declared_arguments + [
                              apple_prediction_node,
-                             voxelize_scan_node,
+                             palm_camera,
+                             #voxelize_scan_node,
+                             tcp_pose_relay,
                              arm_control
     ])
