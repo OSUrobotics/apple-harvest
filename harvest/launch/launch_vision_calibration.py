@@ -72,6 +72,10 @@ def generate_launch_description():
     declared_arguments.append(DeclareLaunchArgument('prediction_model_path', default_value=[PathJoinSubstitution([FindPackageShare("harvest_vision"), "yolo_networks", LaunchConfiguration("prediction_model")])]))
     declared_arguments.append(DeclareLaunchArgument('vservo_model_path', default_value=[PathJoinSubstitution([FindPackageShare("harvest_vision"), "yolo_networks", LaunchConfiguration("vservo_model")])]))
     
+    ### Offsets for where to place the point cloud
+    declared_arguments.append(DeclareLaunchArgument("pointcloud_offset", default_value="(0.0, 10.0, 0.0)", 
+                                  description="Tuple for x,y,z offset of apple point cloud from mast camera base"))
+
     ### Nodes
     apple_prediction_node = launch_ros.actions.Node(
                 package="harvest_vision",
@@ -98,6 +102,7 @@ def generate_launch_description():
                      "camera_type": LaunchConfiguration("camera_type"),
                      "presaved_images.rgb_image_path": LaunchConfiguration("presaved_images.rgb_image_path"),
                      "presaved_images.depth_image_path": LaunchConfiguration("presaved_images.depth_image_path"),
+                     "pointcloud_offset": LaunchConfiguration("pointcloud_offset"),
                       }
                 ])
     

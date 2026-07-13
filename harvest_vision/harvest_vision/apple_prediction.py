@@ -72,6 +72,7 @@ class ApplePredictionNode(Node):
         self.declare_parameter("ransac_iters", 1000)
         self.declare_parameter("ransac_thresh", 0.005)
         self.declare_parameter("depth_scale", 1000.0)
+        self.declare_parameter("pointcloud_offset", "(0.0, 0.0, 0.0)")
 
         self.presaved_images = bool(self.get_parameter("presaved_images").value)
         self.conf_thr   = float(self.get_parameter("prediction_yolo_conf").value)
@@ -84,6 +85,11 @@ class ApplePredictionNode(Node):
         self.ransac_iters = int(self.get_parameter("ransac_iters").value)
         self.ransac_thresh = float(self.get_parameter("ransac_thresh").value)
         self.depth_scale = float(self.get_parameter("depth_scale").value)
+        xyz_str = self.get_parameter("pointcloud_offset").value
+        xyz = xyz_str[1:-1].split(",")
+
+        self.pointcloud_offset = (float64(xyz[0]), float64(xyz[1]), float64(xyz[2]))
+        self.get_logger().info(f"xyz offset {self.pointcloud_offset}")
 
         # ---- YOLO ----
         self.model = YOLO(self.get_parameter("prediction_model_path").value)
@@ -516,7 +522,7 @@ class ApplePredictionNode(Node):
         colors = (np.asarray(pcd.colors) * 255).astype(np.uint8)
 
         packed = [
-            (x, y, z, int(b) | (int(g) << 8) | (int(r) << 16))
+            (x + self.pointcloud_offset[0], y + self.pointcloud_offset[1], z + self.pointcloud_offset[2], int(b) | (int(g) << 8) | (int(r) << 16))
             for (x, y, z), (b, g, r) in zip(points, colors)
         ]
         header          = Header()
