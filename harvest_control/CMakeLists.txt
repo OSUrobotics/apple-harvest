@@ -60,6 +60,7 @@ install(PROGRAMS
   scripts/pull_twist_controller.py
   scripts/visual_servo.py
   scripts/stiffness_controller.py
+  scripts/pick_controller.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

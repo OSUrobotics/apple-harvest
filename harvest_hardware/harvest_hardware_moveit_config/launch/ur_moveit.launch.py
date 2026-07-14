@@ -31,6 +31,7 @@ def generate_launch_description():
         DeclareLaunchArgument("use_sim_time", default_value="false"),
         DeclareLaunchArgument("use_3d_sensors", default_value="false"),
         DeclareLaunchArgument("gripper_type", default_value="finray"),
+        DeclareLaunchArgument("camera_mount", default_value="wrist"),
     ]
     return LaunchDescription(args + [OpaqueFunction(function=_launch_setup)])
 
@@ -76,7 +77,8 @@ def _launch_setup(context):
                 ]),
                 " ",
                 "name:=ur5e ",
-                "prefix:=", LaunchConfiguration("prefix"),
+                "prefix:=", LaunchConfiguration("prefix"), " ",
+                "camera_mount:=", LaunchConfiguration("camera_mount", default="wrist"), " ",
             ]),
             value_type=str,
         )

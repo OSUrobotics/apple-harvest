@@ -1,0 +1,7 @@
+std_msgs/Float32 stop_time
+string pattern
+---
+bool success
+string message
+---
+std_msgs/Float32 pick_time

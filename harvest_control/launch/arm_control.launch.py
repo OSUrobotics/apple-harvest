@@ -29,6 +29,7 @@ def generate_launch_description():
         DeclareLaunchArgument('source_frame', default_value='cart_body'),
         DeclareLaunchArgument('gripper_tip_frame', default_value='gripper_scups_link'),
         DeclareLaunchArgument('gripper_type', default_value='finray'),
+        DeclareLaunchArgument('camera_mount', default_value='wrist'),
     ]
 
     # Pick controller based on fake hardware argument
@@ -105,6 +106,7 @@ def generate_launch_description():
             'use_sim_time': LaunchConfiguration('use_sim_time'),
             'use_3d_sensors': LaunchConfiguration('use_3d_sensors'),
             'gripper_type': LaunchConfiguration('gripper_type'),
+            'camera_mount': LaunchConfiguration('camera_mount'),
         }.items(),
     )
 
@@ -135,6 +137,15 @@ def generate_launch_description():
             'use_sim_time': LaunchConfiguration('use_sim_time'),
             }],
     )
+    pick_controllers = Node(
+        package='harvest_control',
+        executable='pick_controller.py',
+        name = 'pick_controllers',
+        parameters=[{
+            'use_sim_time': LaunchConfiguration('use_sim_time'),
+        }],
+    )
+
     pick_controller = Node(
         package='harvest_control', 
         executable='heuristic_controller.py', 
@@ -202,6 +213,7 @@ def generate_launch_description():
             coord_to_traj,
             event_detector,
             force_filter,
+            pick_controllers,
             pick_controller,
             stiffness_controller,
             linear_controller,

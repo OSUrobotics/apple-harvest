@@ -9,6 +9,7 @@ from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 from rcl_interfaces.msg import Parameter, ParameterValue, ParameterType
 from rcl_interfaces.srv import SetParameters
 from std_srvs.srv import Trigger, Empty
+from std_msgs.msg import Bool
 from geometry_msgs.msg import Point, Pose, PoseArray
 from harvest_interfaces.srv import ApplePrediction, CoordinateToTrajectory, SendTrajectory, RecordTopics, GetGripperPose, SetValue, MoveToPose
 from controller_manager_msgs.srv import SwitchController
@@ -16,14 +17,29 @@ from rclpy.action import ActionClient
 from action_msgs.msg import GoalStatus
 from harvest_interfaces.action import EventDetection
 
-# Python 
+# Python
 import numpy as np
+import threading
 import time
 import os
 import yaml
 import copy
 import re
+from enum import Enum
 from pathlib import Path
+
+
+class ControllerState(str, Enum):
+    TRAJECTORY = "scaled_joint_trajectory_controller"
+    SERVO = "forward_position_controller"
+    FREEDRIVE = "freedrive_mode_controller"
+
+
+# freedrive_mode_controller drops back out of freedrive if it doesn't see a
+# new enable message within its inactive_timeout (defaults to 1s) -- 2 Hz
+# has been confirmed to keep it engaged reliably.
+FREEDRIVE_ENABLE_TOPIC = '/freedrive_mode_controller/enable_freedrive_mode'
+FREEDRIVE_PUBLISH_RATE_HZ = 2.0
 
 def get_data_storage_dir():
     # 1. Find this file’s folder:
@@ -48,6 +64,14 @@ class StartHarvest(Node):
     def __init__(self):
         super().__init__("start_harvest_node")
         self.cb_group = MutuallyExclusiveCallbackGroup()
+
+        #Track ros2 control controller
+        self.controller_state = ControllerState.TRAJECTORY
+
+        # Create a thread to publish free drive message. Timer doesn't work since start harvest is in the main function and thus not spinning the node
+        self.freedrive_pub = self.create_publisher(Bool, FREEDRIVE_ENABLE_TOPIC, 10)
+        self._freedrive_thread = None
+        self._freedrive_stop_event = threading.Event()
 
         # Get storage directory
         self.storage_directory = get_data_storage_dir()
@@ -141,6 +165,7 @@ class StartHarvest(Node):
             '/microROS/can_status',
             '/camera/gripper_camera/color/image_raw',
             '/camera/gripper_camera/aligned_depth_to_color/image_raw',
+            '/gripper/rgb_palm_camera/image_raw',
             '/joint_states',
             '/force_torque_sensor_broadcaster/wrench','/servo_node/delta_twist_cmds'
         ]
@@ -317,40 +342,69 @@ class StartHarvest(Node):
                 self.request.deactivate_controllers = ["forward_position_controller"]
         self.request.timeout = rclpy.duration.Duration(seconds=5.0).to_msg()
 
-        
-        # TODO: Commit this Alejo's change
         self.request.strictness = SwitchController.Request.BEST_EFFORT  # Use STRICT or BEST_EFFORT
 
         self.future = self.switch_controller_client.call_async(self.request)
         rclpy.spin_until_future_complete(self, self.future)
         return self.future.result()
     
-    def switch_free_drive_controller(self, servo=False, free_drive=False, sim=False):
-        # Switches controller from forward position controller to joint_trajectory controller
-        self.request = SwitchController.Request()
-        if free_drive:
-            if servo:
-                    self.request.deactivate_controllers = ["forward_position_controller"] 
-                    self.request.activate_controllers = ["freedrive_mode_controller"]
-            else:
-                    self.request.deactivate_controllers = ["scaled_joint_trajectory_controller"]
-                    self.request.activate_controllers = ["freedrive_mode_controller"]
-        else:
-            if servo:
-                    self.request.activate_controllers = ["forward_position_controller"] 
-                    self.request.deactivate_controllers = ["freedrive_mode_controller"]
-            else:
-                    self.request.activate_controllers = ["scaled_joint_trajectory_controller"]
-                    self.request.deactivate_controllers = ["freedrive_mode_controller"]
-        self.request.timeout = rclpy.duration.Duration(seconds=5.0).to_msg()
+    def _start_freedrive_heartbeat(self):
+        if self._freedrive_thread is not None and self._freedrive_thread.is_alive():
+            return
+        self._freedrive_stop_event.clear()
+        self._freedrive_thread = threading.Thread(target=self._freedrive_heartbeat_loop, daemon=True)
+        self._freedrive_thread.start()
 
-        
-        # TODO: Commit this Alejo's change
+    def _freedrive_heartbeat_loop(self):
+        period = 1.0 / FREEDRIVE_PUBLISH_RATE_HZ
+        msg = Bool()
+        msg.data = True
+        while not self._freedrive_stop_event.is_set():
+            self.freedrive_pub.publish(msg)
+            self._freedrive_stop_event.wait(period)
+
+    def _stop_freedrive_heartbeat(self):
+        self._freedrive_stop_event.set()
+        if self._freedrive_thread is not None:
+            self._freedrive_thread.join(timeout=1.0)
+            self._freedrive_thread = None
+        self.freedrive_pub.publish(Bool(data=False))
+
+    def switch_free_drive_controller(self, controller="trajectory"):
+        # controller: "trajectory", "servo", or "freedrive"
+        target_state = {
+            "trajectory": ControllerState.TRAJECTORY,
+            "servo": ControllerState.SERVO,
+            "freedrive": ControllerState.FREEDRIVE,
+        }[controller]
+
+        if target_state == self.controller_state:
+            self.get_logger().info(f'{target_state} already active, skipping switch')
+            return None
+
+        # Deactivate whatever self.controller_state says is actually active
+        # right now, rather than assuming it from a passed-in flag.
+        self.request = SwitchController.Request()
+        self.request.deactivate_controllers = [self.controller_state.value]
+        self.request.activate_controllers = [target_state.value]
+        self.request.timeout = rclpy.duration.Duration(seconds=5.0).to_msg()
         self.request.strictness = SwitchController.Request.BEST_EFFORT  # Use STRICT or BEST_EFFORT
 
         self.future = self.switch_controller_client.call_async(self.request)
         rclpy.spin_until_future_complete(self, self.future)
-        return self.future.result()
+        result = self.future.result()
+
+        if result is not None and result.ok:
+            was_freedrive = self.controller_state == ControllerState.FREEDRIVE
+            self.controller_state = target_state
+            if target_state == ControllerState.FREEDRIVE:
+                self._start_freedrive_heartbeat()
+            elif was_freedrive:
+                self._stop_freedrive_heartbeat()
+        else:
+            self.get_logger().error(f'Failed to switch from {self.controller_state.value} to {target_state.value}')
+
+        return result
     
     def start_servo(self):
         # Starts servo node
@@ -562,7 +616,11 @@ class StartHarvest(Node):
         #         self.trigger_arm_mover(waypoints)
         #     else:
         #         self.trigger_move_arm_to_pose(coord)
-
+        #TODO: Start Free Drive Controller, and let the user move the arm to the apple location manually, then hit enter to continue
+        input('Hit enter to start free drive controller and move the arm to the apple location manually, then hit enter to continue')
+        self.switch_free_drive_controller(controller="freedrive")
+        input('Hit enter to stop free drive controller and continue')
+        self.switch_free_drive_controller(controller="trajectory")
             # Stage 4: visual servo
         if self.enable_visual_servo:
             input('hit enter to start visual servoing')

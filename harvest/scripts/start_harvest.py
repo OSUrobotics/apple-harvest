@@ -143,6 +143,7 @@ class StartHarvest(Node):
             '/microROS/can_status',
             '/camera/gripper_camera/color/image_raw',
             '/camera/gripper_camera/aligned_depth_to_color/image_raw',
+            '/gripper/rgb_palm_camera/image_raw',
             '/joint_states',
             '/force_torque_sensor_broadcaster/wrench','/servo_node/delta_twist_cmds'
         ]

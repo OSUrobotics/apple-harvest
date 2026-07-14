@@ -5,6 +5,10 @@
     A URDF file must exist for this robot as well, where the joints and the links that are referenced are defined
 -->
   <xacro:macro name="ur_srdf" params="name prefix">
+
+    <xacro:arg name="camera_mount" default="wrist"/>
+    <xacro:property name="camera_mount" default="$(arg camera_mount)"/>
+
     <!--GROUPS - Representation of a set of joints and links. This can be useful for specifying DOF to plan for, defining arms, end effectors, etc-->
     <!--LINKS - When a link is specified, the parent joint of that link (if it exists) is automatically included-->
     <!--JOINTS - When a joint is specified, the child link of that joint (which will always exist) is automatically included-->
@@ -53,7 +57,8 @@
     <disable_collisions link1="${prefix}wrist_1_link" link2="${prefix}wrist_3_link" reason="Never" />
     <disable_collisions link1="${prefix}wrist_2_link" link2="${prefix}wrist_3_link" reason="Adjacent" />
     <disable_collisions link1="${prefix}wrist_3_link" link2="gripper_link" reason="Adjacent" />
-    <disable_collisions link1="gripper_link" link2="gripper_camera_link" reason="Adjacent" />
-
+    <xacro:if value="${camera_mount == 'wrist'}">
+      <disable_collisions link1="gripper_link" link2="gripper_camera_link" reason="Adjacent" />
+    </xacro:if>
   </xacro:macro>
 </robot>

@@ -6,10 +6,12 @@ from rclpy.node import Node
 from message_filters import ApproximateTimeSynchronizer, Subscriber
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.callback_groups import ReentrantCallbackGroup
+from rclpy.action import ActionServer, ActionClient
 # Interfaces
 from sensor_msgs.msg import Image
 from std_srvs.srv import Trigger
 from geometry_msgs.msg import PoseStamped, TwistStamped
+from harvest_interfaces.action import VisualServo
 
 # Image processing
 from cv_bridge import CvBridge
@@ -46,6 +48,7 @@ class LocalPlanner(Node):
         ### Services
         # Service to start the local planner sequence
         self.start_service = self.create_service(Trigger, "start_visual_servo", self.start_sequence_srv_callback, callback_group=r_callback_group)
+        self.servo_action_server = ActionServer(self, VisualServo, 'visual_servo', self.execute_servo_callback, callback_group=r_callback_group, cancel_callback=self.cancel_servo_callback)
         
         ### Servo controller params
         self.declare_parameter("vservo_model_path", "NA")
@@ -125,6 +128,42 @@ class LocalPlanner(Node):
         self.get_logger().info("Successfully servoed in front of the apple!")
         response.success=True
         return response
+    
+    def execute_servo_callback(self, goal_handle):
+        self.get_logger().info("Activating servo node...")
+        self.start_flag = True
+        self.stall_count = 0
+        self.first_servo = True
+        self.get_logger().info("Starting visual arm servoing...")
+        # Servos until we are in front of apple
+        self.init_kalman()
+        try:
+            while rclpy.ok() and self.start_flag:
+                self.get_logger().info("Servoing arm in front of apple...")
+                self.rate.sleep()
+        except KeyboardInterrupt:
+            pass
+        self.get_logger().info("Successfully servoed in front of the apple!")
+        goal_handle.succeed()
+        result = VisualServo.Result()
+        return result
+    
+    def cancel_servo_callback(self, goal_handle):
+        self.get_logger().info("Cancelling servo node...")
+        self.start_flag = False
+
+        #Stop Moving
+        vel_vec = TwistStamped()
+        vel_vec.header.stamp = self.get_clock().now().to_msg()
+        vel_vec.header.frame_id = "tool0"
+        vel_vec.twist.linear.z = 0.0
+        vel_vec.twist.linear.x = 0.0
+        vel_vec.twist.linear.y = 0.0
+        self.servo_publisher.publish(vel_vec)
+
+        goal_handle.canceled()
+        result = VisualServo.Result()
+        return result
 
     def normalize(self, val, minimum, maximum):
         # Normalizes val between min and max
