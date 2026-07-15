@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 import rclpy
 from rclpy.node import Node
-from rclpy.action import ActionServer, ActionClient
+from rclpy.action import ActionServer, ActionClient, CancelResponse
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
 
@@ -57,26 +57,28 @@ class PickController(Node):
         self.started = False
         self.PICK_PATTERN = goal_handle.request.pattern
         self.stop_time = goal_handle.request.stop_time.data
+        result = PickControl.Result()
 
         try:
             while rclpy.ok() and self.start_pick:
+                if goal_handle.is_cancel_requested:
+                    self.cancel_pick()
+                    self.start_pick = False
+                    self.started = False
+                    goal_handle.canceled()
+                    result.success = False
+                    return result
                 self.rate.sleep()
         except KeyboardInterrupt:
             pass
 
         goal_handle.succeed()
-        result = PickControl.Result()
         result.success = True
         return result
-    
+
     def cancel_pick_callback(self, goal_handle):
-        self.get_logger().info('Pick controller action canceled.')
-        self.start_pick = False
-        self.started = False
-        goal_handle.canceled()
-        result = PickControl.Result()
-        result.success = False
-        return result
+        self.get_logger().info('Pick controller cancel requested.')
+        return CancelResponse.ACCEPT
     
     def _wait_for_future(self, future, poll_period=0.02):
         #Wait for service call to return
@@ -153,9 +155,6 @@ def main(args=None):
 
     rclpy.spin(pick_controller, executor=executor)
 
-    # Destroy the node explicitly
-    # (optional - otherwise it will be done automatically
-    # when the garbage collector destroys the node object)
     pick_controller.destroy_node()
     rclpy.shutdown()
 

@@ -6,7 +6,7 @@ from rclpy.node import Node
 from message_filters import ApproximateTimeSynchronizer, Subscriber
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.callback_groups import ReentrantCallbackGroup
-from rclpy.action import ActionServer, ActionClient
+from rclpy.action import ActionServer, ActionClient, CancelResponse
 # Interfaces
 from sensor_msgs.msg import Image
 from std_srvs.srv import Trigger
@@ -137,33 +137,38 @@ class LocalPlanner(Node):
         self.get_logger().info("Starting visual arm servoing...")
         # Servos until we are in front of apple
         self.init_kalman()
+        result = VisualServo.Result()
+
         try:
             while rclpy.ok() and self.start_flag:
+                if goal_handle.is_cancel_requested:
+                    self.start_flag = False
+                    self._publish_stop_twist()
+                    goal_handle.canceled()
+                    result.success = False
+                    result.message = "Visual servo canceled"
+                    return result
+
                 self.get_logger().info("Servoing arm in front of apple...")
                 self.rate.sleep()
         except KeyboardInterrupt:
             pass
+
         self.get_logger().info("Successfully servoed in front of the apple!")
         goal_handle.succeed()
-        result = VisualServo.Result()
+        result.success = True
+        result.message = "Servo complete"
         return result
-    
-    def cancel_servo_callback(self, goal_handle):
-        self.get_logger().info("Cancelling servo node...")
-        self.start_flag = False
 
-        #Stop Moving
+    def _publish_stop_twist(self):
         vel_vec = TwistStamped()
         vel_vec.header.stamp = self.get_clock().now().to_msg()
         vel_vec.header.frame_id = "tool0"
-        vel_vec.twist.linear.z = 0.0
-        vel_vec.twist.linear.x = 0.0
-        vel_vec.twist.linear.y = 0.0
         self.servo_publisher.publish(vel_vec)
 
-        goal_handle.canceled()
-        result = VisualServo.Result()
-        return result
+    def cancel_servo_callback(self, goal_handle):
+        self.get_logger().info("Visual servo cancel requested")
+        return CancelResponse.ACCEPT
 
     def normalize(self, val, minimum, maximum):
         # Normalizes val between min and max
