@@ -31,7 +31,7 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'gripper_palm_camera = harvest_hardware_description.gripper_palm_camera:main',
+            'gripper_palm_camera = harvest_vision.gripper_palm_camera:main',
             'tcp_pose_relay = harvest_hardware_description.tcp_pose_relay:main',
         ],
     },
