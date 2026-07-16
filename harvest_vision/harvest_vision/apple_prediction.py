@@ -534,8 +534,9 @@ class ApplePredictionNode(Node):
             PointField(name="z",   offset=8,  datatype=PointField.FLOAT32, count=1),
             PointField(name="rgb", offset=12, datatype=PointField.UINT32,  count=1),
         ]
-        self.pc_pub.publish(point_cloud2.create_cloud(header, fields, packed))
 
+        self.pc_pub.publish(point_cloud2.create_cloud(header, fields, packed))        
+        
     def _presaved_publish_pointcloud(self):
         """Timer callback: republish the full RGBD point cloud at 2 Hz."""
         if self._predict_lock.locked():

@@ -32,12 +32,16 @@ class GripperPalmCamera(Node):
         # Note: If a real camera is defined, these will come from that
         self.declare_parameter("resolution", resolution)
         self.declare_parameter("target_frame_rate", 30)
+        self.declare_parameter("source_frame", "mast_camera_color_optical_frame")
 
         # camera vars 
         self.declare_parameter("palm_camera_device_num", 2)
         self.device = self.get_parameter("palm_camera_device_num").get_parameter_value().integer_value
         self.camera = None
 
+        # Where are we getting the point cloud from?
+        self.source_frame = self.get_parameter("source_frame").value
+                
         # Where are we in space?
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
@@ -121,9 +125,9 @@ class GripperPalmCamera(Node):
         return pos_match and rot_match
 
     def pose_timer_callback(self):
-        from_frame = 'mast_camera_color_optical_frame'
+        from_frame = self.source_frame
         to_frame = 'gripper_palm_camera_optical_link'
-
+        
         try:
             # Look up the transform from to_frame to from_frame
             t = self.tf_buffer.lookup_transform(from_frame, to_frame, rclpy.time.Time())
@@ -165,8 +169,6 @@ class GripperPalmCamera(Node):
         t = self.current_pose.transform.translation
         q = self.current_pose.transform.rotation
 
-        self.get_logger().info(f"Tx {t.x}, {t.y}, {t.z}")
-
         # 2. Build the 3x3 rotation matrix (SciPy expects [x, y, z, w])
         rotation = R.from_quat([q.x, q.y, q.z, q.w])
         rotation_matrix_3x3 = rotation.as_matrix()
@@ -179,27 +181,37 @@ class GripperPalmCamera(Node):
         # Move the points
         points_transformed = (homogeneous_matrix @ self.point_cloud["points"]).transpose()
 
+        # Merge the points with the colors for the following operations (nx7 matrix)
+        points_and_colors = np.hstack((points_transformed[:, 0:3], self.point_cloud["colors"]))
+        
         # Filter on depth
-        valid_mask = points_transformed[:, 2] > 0.01
-        points_keep = points_transformed[valid_mask, :]
-        colors_keep = self.point_cloud["colors"][valid_mask, :]
+        valid_mask = points_and_colors[:, 2] > 0.01
+        points_and_colors_keep = points_and_colors[valid_mask, :]
+        
+        # Sort by depth
+        points_sorted = points_and_colors_keep[(-points_and_colors_keep[:, 2]).argsort()]
 
         # Transform to image coordinates
-        x, y, z = points_keep[:, 0], points_keep[:, 1], points_keep[:, 2]
+        x, y, z = points_sorted[:, 0], points_sorted[:, 1], points_sorted[:, 2]
+
         u = (x * self.fx / z) + self.cx
         v = (y * self.fy / z) + self.cy
 
         # Trim again, this time for u,v out of bounds
         valid_pixels = (u >= 0) & (u < self.resolution[0]) & (v >= 0) & (v < self.resolution[1])
-        
+
+        # Convert to ints for indexing
         u_idx = u[valid_pixels].astype(int)
         v_idx = v[valid_pixels].astype(int)
-        rgb = colors_keep[valid_pixels, :].astype(np.uint8)
 
+        colors = points_sorted[valid_pixels, 3:]
         for indx in range(len(u_idx)):
-            # Grayscale depth mapping for visualization
-            rgb_pix = rgb[indx, :]
-            img[v_idx[indx], u_idx[indx]] = [rgb_pix[0], rgb_pix[0], rgb_pix[0]]
+            # Colors for each pixel
+            rgb_pix = colors[indx, :]
+            # b g r
+            img[v_idx[indx], u_idx[indx]] = [rgb_pix[2], rgb_pix[1], rgb_pix[0]]
+
+            # Grayscale depth mapping for visualization (todo)
 
         """
         point_in = PointStamped()
@@ -259,19 +271,21 @@ class GripperPalmCamera(Node):
 
         points = []
         colors = []
+        indx = 0
         for point in pc2.read_points(msg, field_names=("x", "y", "z", "rgb"), skip_nans=True):
             x, y, z, rgb_packed = point
             points.append((x, y, z))
 
-            # Re-interpret float32 color bits as uint32
-            s = struct.pack('>f', rgb_packed)
-            pack = struct.unpack('>l', s)[0]
+            # Re-interpret float32 color bits as uint32 - note, don't do this if the rgb is a packed integer
+            # s = struct.pack('f', rgb_packed)
+            # pack = struct.unpack('I', s)[0]
         
             # Unpack individual channels (0 to 255)
-            r = (pack >> 16) & 0x00FF
-            g = (pack >> 8) & 0x00FF
-            b = pack & 0x00FF
+            r = (rgb_packed >> 16) & 0x00FF
+            g = (rgb_packed >> 8) & 0x00FF
+            b = rgb_packed & 0x00FF
             colors.append((r, g, b))
+            indx += 1
 
 
         self.point_cloud = {"points": np.ones((4, len(points))), "colors": np.array(colors)}

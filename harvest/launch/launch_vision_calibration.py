@@ -109,6 +109,7 @@ def generate_launch_description():
         name="gripper_palm_camera",
         parameters=[
             {"use_fake_hardware": LaunchConfiguration("use_fake_hardware"),
+             "source_frame": LaunchConfiguration("source_frame")
             }            
         ]
     )
