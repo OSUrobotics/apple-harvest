@@ -9,7 +9,12 @@ from rclpy.callback_groups import ReentrantCallbackGroup
 # Interfaces
 from sensor_msgs.msg import Image
 from std_srvs.srv import Trigger
-from geometry_msgs.msg import PoseStamped, TwistStamped
+from geometry_msgs.msg import PoseStamped, TwistStamped, Pose, PoseArray
+
+from rclpy.qos import (
+    qos_profile_sensor_data, QoSProfile,
+    ReliabilityPolicy, HistoryPolicy, DurabilityPolicy,
+)
 
 # Image processing
 from cv_bridge import CvBridge
@@ -33,11 +38,28 @@ class LocalPlanner(Node):
     def __init__(self):
         super().__init__('local_planner_node')
         ### Subscribers/ Publishers
-        self.camera_subscription = Subscriber(self,Image,'gripper/rgb_palm_camera/image_raw')
+        # This is the actual palm camera (fake or real)
+        self.yolo_locs = []
+        self.camera_subscription = Subscriber(self, Image, 'gripper/rgb_palm_camera/image_raw')
+
+        # The markers produced by the apple prediction node
+        self.projected_locs = []
+        self.apple_loc_sub = Subscriber(self, PoseArray, "gripper/apple_locs", self.proj_apple_locs_callback, 10)
+
+        # The current target apple
+        
         # Depth sub not needed if not going forward. Left in case the use case changes in the future. 
         # self.depth_sub = Subscriber(self,GripperTofDistance, "gripper/tof/depth_raw")
+
+        # Image showing the yolo boxes and the projected points in the gripper camera
+        self.proj_im_pub = self.create_publisher(Image, "visual_servo/image_debut", 
+                                                 QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT,
+                                                            history=HistoryPolicy.KEEP_LAST, depth=10))
+
+        # Timer
         self.ts = ApproximateTimeSynchronizer([self.camera_subscription],30,0.05,)
         self.ts.registerCallback(self.rgb_servoing_callback)
+
         # Publisher to end effector servo controller, sends velocity commands
         self.servo_publisher = self.create_publisher(TwistStamped, "/servo_node/delta_twist_cmds", 10)
         #specify reentrant callback group 
@@ -80,7 +102,6 @@ class LocalPlanner(Node):
         ### Kalman
         self.prev_vel = [0,0]
         self.kf_pos = KalmanFilter (dim_x=6, dim_z=4)
-
 
     def init_kalman(self):
         # Kalman filter setup, takes in a measured x,y position and velocity and estimates position, velocity and acceleration
