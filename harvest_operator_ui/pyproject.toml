@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "harvest-operator-ui"
+version = "0.1.0"
+description = "Offline PySide6 operator UI for the ROS 2 apple harvest pipeline"
+requires-python = ">=3.10"
+dependencies = ["PySide6>=6.8,<7", "PyYAML>=6,<7", "numpy>=1.24"]
+
+[project.scripts]
+harvest-operator-ui = "harvest_ui.__main__:main"
+
+[tool.setuptools]
+packages = ["harvest_ui"]

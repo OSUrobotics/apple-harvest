@@ -34,7 +34,7 @@ from rclpy.action import ActionClient
 # Interfaces
 from rcl_interfaces.msg import Parameter, ParameterValue, ParameterType
 from rcl_interfaces.srv import SetParameters
-from std_srvs.srv import Trigger
+from std_srvs.srv import SetBool, Trigger
 from std_msgs.msg import Int8, Bool, Float32
 from geometry_msgs.msg import Point, Pose, PoseArray
 from harvest_interfaces.srv import ApplePrediction, CoordinateToTrajectory, SendTrajectory, RecordTopics, GetGripperPose, SetValue, MoveToPose
@@ -62,6 +62,7 @@ import numpy as np
 import os
 import yaml
 import re
+from contextlib import contextmanager
 from enum import Enum
 from pathlib import Path
 
@@ -116,6 +117,10 @@ class StartHarvestAbort(Node):
 
         # Track ros2 control controller type
         self.controller_state = ControllerState.TRAJECTORY
+        self._controller_switch_lock = threading.RLock()
+        self._motion_lock = threading.RLock()
+        self._motion_depth = 0
+        self._motion_label = None
 
         # Add publisher for freedrive mode in a timer callback. 
         self.freedrive_pub = self.create_publisher(Bool, FREEDRIVE_ENABLE_TOPIC, 10)
@@ -124,9 +129,6 @@ class StartHarvestAbort(Node):
         self.storage_directory = get_data_storage_dir()
         self.batch_dir = self.storage_directory + '/batch/'
         self.batch_number = 0
-
-        apple_loc_path = "/home/jn2/college/data/apple_locations"
-        self.pre_saved_apple_locations = self.read_apple_locations(apple_loc_path)
 
         # Declare parameters with defaults
         self.declare_parameter('pick_pattern', 'force-heuristic')
@@ -159,6 +161,11 @@ class StartHarvestAbort(Node):
         self.freedrive_mode = self.get_parameter('freedrive').get_parameter_value().bool_value
         self.abort_on_decelerate = self.get_parameter('abort_on_decelerate').get_parameter_value().bool_value
         self.abort_recovery_mode = self.get_parameter('abort_recovery').get_parameter_value().string_value
+
+        if not self.freedrive_mode and not self.enable_apple_prediction:
+            apple_loc_path = "/home/jn2/college/data/apple_locations"
+            self.pre_saved_apple_locations = self.read_apple_locations(apple_loc_path)
+
 
         # Helper clients
         self.switch_controller_client = self.make_client(SwitchController, '/controller_manager/switch_controller')
@@ -208,6 +215,10 @@ class StartHarvestAbort(Node):
             Trigger, 'abort_harvest', self._abort_service_cb,
             callback_group=self.status_cb_group,
         )
+        self.freedrive_control_service = self.create_service(
+            SetBool, 'set_harvest_freedrive', self._freedrive_service_cb,
+            callback_group=self.status_cb_group,
+        )
 
     # Setup Functions
     def make_client(self, srv_type, name):
@@ -226,6 +237,7 @@ class StartHarvestAbort(Node):
         self.pressure_servo_topics = [
             '/microROS/sensor_data',
             '/microROS/can_status',
+            '/microROS/imu1',
             '/camera/gripper_camera/color/image_raw',
             '/camera/gripper_camera/aligned_depth_to_color/image_raw',
             '/joint_states',
@@ -234,6 +246,7 @@ class StartHarvestAbort(Node):
         self.pick_controller_topics = [
             '/microROS/sensor_data',
             '/microROS/can_status',
+            '/microROS/imu1',
             '/camera/gripper_camera/color/image_raw',
             '/camera/gripper_camera/aligned_depth_to_color/image_raw',
             '/joint_states',
@@ -315,6 +328,40 @@ class StartHarvestAbort(Node):
         response.message = "Abort requested"
         return response
 
+    def _freedrive_service_cb(self, request, response):
+        target = "freedrive" if request.data else "trajectory"
+        with self._motion_lock:
+            if request.data:
+                motion_label = self._motion_label if self._motion_depth else None
+                with self._goal_lock:
+                    action_active = self.current_goal_handle is not None
+                if motion_label or action_active or self.abort_event.is_set():
+                    if motion_label:
+                        activity = motion_label
+                    elif action_active:
+                        activity = "an action"
+                    else:
+                        activity = "abort recovery"
+                    response.success = False
+                    response.message = f"Freedrive rejected while {activity} is active"
+                    return response
+
+            # Keep the motion gate locked through the controller switch so a
+            # new motion cannot start between the safety check and activation.
+            result = self.switch_free_drive_controller(controller=target)
+        already_active = (
+            request.data and self.controller_state == ControllerState.FREEDRIVE
+        ) or (
+            not request.data and self.controller_state == ControllerState.TRAJECTORY
+        )
+        response.success = already_active or bool(result is not None and result.ok)
+        response.message = (
+            f"{self.controller_state.value} active"
+            if response.success
+            else f"Failed to activate {target} controller"
+        )
+        return response
+
     def handle_abort(self):
         self.get_logger().error("ABORT: stopping current stage and recovering")
         with self._goal_lock:
@@ -364,18 +411,8 @@ class StartHarvestAbort(Node):
     # Controller switching
     # ------------------------------------------------------------------
     def switch_controller(self, servo=False, sim=False):
-        request = SwitchController.Request()
-        if servo:
-            request.activate_controllers = ["forward_position_controller"]
-            request.deactivate_controllers = ["scaled_joint_trajectory_controller"]
-        else:
-            request.activate_controllers = ["scaled_joint_trajectory_controller"]
-            request.deactivate_controllers = ["forward_position_controller"]
-        request.timeout = rclpy.duration.Duration(seconds=5.0).to_msg()
-        request.strictness = SwitchController.Request.BEST_EFFORT
-        future = self.switch_controller_client.call_async(request)
-        self._wait_for_future(future)
-        return future.result()
+        del sim  # Retained for compatibility with the older call signature.
+        return self.switch_free_drive_controller(controller="servo" if servo else "trajectory")
 
     def _start_freedrive_heartbeat(self):
         if self.freedrive_timer is not None:
@@ -403,32 +440,51 @@ class StartHarvestAbort(Node):
             "freedrive": ControllerState.FREEDRIVE,
         }[controller]
 
-        if target_state == self.controller_state:
-            self.get_logger().info(f'{target_state.value} already active, skipping switch')
-            return None
+        with self._controller_switch_lock:
+            if target_state == self.controller_state:
+                self.get_logger().info(f'{target_state.value} already active, skipping switch')
+                return None
 
-        # Deactivate whatever self.controller_state says is actually active
-        # right now, rather than assuming it from a passed-in flag.
-        request = SwitchController.Request()
-        request.deactivate_controllers = [self.controller_state.value]
-        request.activate_controllers = [target_state.value]
-        request.timeout = rclpy.duration.Duration(seconds=5.0).to_msg()
-        request.strictness = SwitchController.Request.BEST_EFFORT
-        future = self.switch_controller_client.call_async(request)
-        self._wait_for_future(future)
-        result = future.result()
+            # Deactivate whatever is actually tracked as active, including
+            # freedrive, before activating the requested controller.
+            previous_state = self.controller_state
+            request = SwitchController.Request()
+            request.deactivate_controllers = [previous_state.value]
+            request.activate_controllers = [target_state.value]
+            request.timeout = rclpy.duration.Duration(seconds=5.0).to_msg()
+            request.strictness = SwitchController.Request.BEST_EFFORT
+            future = self.switch_controller_client.call_async(request)
+            self._wait_for_future(future)
+            result = future.result()
 
-        if result is not None and result.ok:
-            was_freedrive = self.controller_state == ControllerState.FREEDRIVE
-            self.controller_state = target_state
-            if target_state == ControllerState.FREEDRIVE:
-                self._start_freedrive_heartbeat()
-            elif was_freedrive:
-                self._stop_freedrive_heartbeat()
-        else:
-            self.get_logger().error(f'Failed to switch from {self.controller_state.value} to {target_state.value}')
+            if result is not None and result.ok:
+                self.controller_state = target_state
+                if target_state == ControllerState.FREEDRIVE:
+                    self._start_freedrive_heartbeat()
+                elif previous_state == ControllerState.FREEDRIVE:
+                    self._stop_freedrive_heartbeat()
+            else:
+                self.get_logger().error(f'Failed to switch from {previous_state.value} to {target_state.value}')
 
-        return result
+            return result
+
+    @contextmanager
+    def _motion_activity(self, label):
+        with self._motion_lock:
+            if self._motion_depth == 0:
+                if self.controller_state == ControllerState.FREEDRIVE:
+                    result = self.switch_free_drive_controller(controller="trajectory")
+                    if result is not None and not result.ok:
+                        raise RuntimeError("Cannot start arm motion: trajectory controller activation failed")
+                self._motion_label = str(label)
+            self._motion_depth += 1
+        try:
+            yield
+        finally:
+            with self._motion_lock:
+                self._motion_depth = max(0, self._motion_depth - 1)
+                if self._motion_depth == 0:
+                    self._motion_label = None
 
     def start_servo(self):
         future = self.start_servo_client.call_async(Trigger.Request())
@@ -447,14 +503,16 @@ class StartHarvestAbort(Node):
     # Arm motion helpers
     # ------------------------------------------------------------------
     def go_to_home(self):
-        future = self.start_move_arm_to_home_client.call_async(Trigger.Request())
-        self._wait_for_future(future)
-        return future.result()
+        with self._motion_activity("move arm home"):
+            future = self.start_move_arm_to_home_client.call_async(Trigger.Request())
+            self._wait_for_future(future)
+            return future.result()
 
     def go_to_scan_position(self):
-        future = self.trigger_move_arm_to_config_client.call_async(Trigger.Request())
-        self._wait_for_future(future)
-        return future.result()
+        with self._motion_activity("move arm to scan position"):
+            future = self.trigger_move_arm_to_config_client.call_async(Trigger.Request())
+            self._wait_for_future(future)
+            return future.result()
 
     def start_apple_prediction(self):
         future = self.start_apple_prediction_client.call_async(ApplePrediction.Request())
@@ -473,20 +531,22 @@ class StartHarvestAbort(Node):
         return future.result().waypoints
 
     def trigger_arm_mover(self, trajectory):
-        request = SendTrajectory.Request()
-        request.waypoints = trajectory
-        future = self.trigger_arm_mover_client.call_async(request)
-        self._wait_for_future(future)
-        return future.result()
+        with self._motion_activity("execute arm trajectory"):
+            request = SendTrajectory.Request()
+            request.waypoints = trajectory
+            future = self.trigger_arm_mover_client.call_async(request)
+            self._wait_for_future(future)
+            return future.result()
 
     def trigger_move_arm_to_pose(self, apple_pose):
-        request = MoveToPose.Request()
-        request.orientation = apple_pose.orientation
-        request.position = apple_pose.position
-        request.position.y = request.position.y - 0.3
-        future = self.trigger_move_arm_to_pose_client.call_async(request)
-        self._wait_for_future(future)
-        return future.result()
+        with self._motion_activity("move arm to apple pose"):
+            request = MoveToPose.Request()
+            request.orientation = apple_pose.orientation
+            request.position = apple_pose.position
+            request.position.y = request.position.y - 0.3
+            future = self.trigger_move_arm_to_pose_client.call_async(request)
+            self._wait_for_future(future)
+            return future.result()
 
     def configure_controller(self):
         pick_force = 20.0
@@ -590,43 +650,41 @@ class StartHarvestAbort(Node):
     def run_stage(self, topics, prefix, servo_frame=None, use_servo=True, action_fn=None):
         stage_name = prefix if isinstance(prefix, str) else str(prefix)
         print(f"--- Running stage: {stage_name} ---")
+        with self._motion_activity(stage_name):
+            if self.abort_event.is_set():
+                # Caught here rather than only after action_fn(), so a manual
+                # abort requested while idle between stages (e.g. at an input()
+                # prompt) is honored before spinning up recording/servo again.
+                self.handle_abort()
+                raise HarvestAborted(stage_name)
 
-        if self.abort_event.is_set():
-            # Caught here rather than only after action_fn(), so a manual
-            # abort requested while idle between stages (e.g. at an input()
-            # prompt) is honored before spinning up recording/servo again.
-            self.handle_abort()
-            raise HarvestAborted(stage_name)
+            if self.enable_recording:
+                self.start_recording(topics, self.base_data_dir + prefix)
+                time.sleep(self.recording_startup_delay)
 
-        if self.enable_recording:
-            self.start_recording(topics, self.base_data_dir + prefix)
-            time.sleep(self.recording_startup_delay)
+            self.switch_controller(servo=use_servo)
+            if use_servo:
+                self.start_servo()
+            if servo_frame:
+                self.configure_servo(servo_frame)
+            if action_fn:
+                action_fn()
 
-        self.switch_controller(servo=use_servo)
-        if use_servo:
-            self.start_servo()
-        if servo_frame:
-            self.configure_servo(servo_frame)
-        if action_fn:
-            action_fn()
+            if self.abort_event.is_set():
+                self.handle_abort()
+                raise HarvestAborted(stage_name)
 
-        if self.abort_event.is_set():
-            self.handle_abort()
-            raise HarvestAborted(stage_name)
-
-        self.switch_controller(servo=not use_servo)
-        if self.enable_recording:
-            self.stop_recording()
+            self.switch_controller(servo=not use_servo)
+            if self.enable_recording:
+                self.stop_recording()
 
     # ------------------------------------------------------------------
     # Stage sets
     # ------------------------------------------------------------------
-    def _run_manual_single_apple_flow(self):
-        """Mirrors start_harvest_free_drive.py: no scan/prediction, single
-        hardcoded apple directory, input-gated for manual/free-driven setup
-        between stages."""
-        base_dir = self.batch_dir + 'apple_1/'
-
+    def _run_freedrive_apple(self, base_dir):
+        """One manual, free-driven apple cycle: user free-drives the arm to
+        the apple, then the normal visual-servo / pressure-servo / pick /
+        release stages run and record exactly like the automated flow."""
         input('Hit enter to start free drive controller and move the arm to the apple location manually, then hit enter to continue')
         self.switch_free_drive_controller(controller="freedrive")
         input('Hit enter to stop free drive controller and continue')
@@ -660,9 +718,31 @@ class StartHarvestAbort(Node):
                 action_fn=pick_action,
             )
 
-        input('Done with pick, hit enter to return home')
+        input('Done with pick, hit enter to release and continue')
         if self.enable_pressure_servo:
             self.release_controller()
+
+    def _run_freedrive_loop(self, start_idx=1):
+        """Repeats _run_freedrive_apple, incrementing the apple index each
+        time since freedrive has no predicted locations to key off of.
+        Keeps going until the user stops it -- this is also where abort
+        recovery drops back into when abort_recovery is 'freedrive', so an
+        abort no longer just ends the program."""
+        idx = start_idx
+        while True:
+            base_dir = self.batch_dir + f'apple_{idx}/'
+            try:
+                self.get_logger().info(f'Freedrive apple {idx}')
+                self._run_freedrive_apple(base_dir)
+            except HarvestAborted:
+                self.get_logger().error(f'Aborted during freedrive apple {idx} -- back in freedrive, ready to retry')
+            idx += 1
+
+            again = input('Hit enter to freedrive to another apple, or type q then enter to stop freedrive: ')
+            if again.strip().lower() == 'q':
+                break
+
+    def _finish_batch(self):
         if self.enable_recording:
             self.save_metadata()
         self.get_logger().info('Batch Complete')
@@ -754,18 +834,20 @@ class StartHarvestAbort(Node):
                     self.release_controller()
 
             except HarvestAborted:
-                self.get_logger().error(f'Aborted while working on apple {idx} -- ending batch early')
+                self.get_logger().error(f'Aborted while working on apple {idx}')
+                if self.abort_recovery_mode == 'freedrive':
+                    self.get_logger().warn('Recovered into freedrive -- continue picking manually, or stop to end the batch')
+                    self._run_freedrive_loop(start_idx=idx + 1)
+                else:
+                    self.get_logger().error('Ending batch early')
                 break
-
-        if self.enable_recording:
-            self.save_metadata()
-        self.get_logger().info('Batch Complete')
 
     def start(self):
         if self.freedrive_mode:
-            self._run_manual_single_apple_flow()
+            self._run_freedrive_loop()
         else:
             self._run_full_batch_flow()
+        self._finish_batch()
 
 
 def main(args=None):

@@ -1,0 +1,6 @@
+__pycache__/
+*.py[cod]
+config/last_used.yaml
+*.egg-info/
+build/
+dist/

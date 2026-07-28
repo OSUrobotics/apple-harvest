@@ -75,6 +75,8 @@ def generate_launch_description():
     ## launch realsense topics conditionally 
     declared_arguments.append(DeclareLaunchArgument("launch_realsense", default_value="true", 
                                 description="Whether to launch realsense topics."))
+    declared_arguments.append(DeclareLaunchArgument("mast_serial", default_value="040322070611",
+                                description="Serial number of the mast RealSense camera."))
 
     # Reasense launch file path
     realsense_launch_path = os.path.join(
@@ -84,6 +86,9 @@ def generate_launch_description():
     
     realsense_topics_node = IncludeLaunchDescription(
             PythonLaunchDescriptionSource(realsense_launch_path),
+            launch_arguments={
+                "mast_serial": LaunchConfiguration("mast_serial"),
+            }.items(),
             condition=IfCondition(LaunchConfiguration('launch_realsense')),
         )
 
