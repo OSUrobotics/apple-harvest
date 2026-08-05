@@ -44,7 +44,10 @@ class LocalPlanner(Node):
 
         # The markers produced by the apple prediction node
         self.projected_locs = []
-        self.apple_loc_sub = Subscriber(self, PoseArray, "gripper/apple_locs", self.proj_apple_locs_callback, 10)
+        # The ones from yolo
+        self.apple_centers = []  
+        self.apple_radii = []
+        self.apple_loc_sub = self.create_subscription(PoseArray, "gripper/apple_locs", self.proj_apple_locs_callback, 10)
 
         # The current target apple
         
@@ -52,7 +55,7 @@ class LocalPlanner(Node):
         # self.depth_sub = Subscriber(self,GripperTofDistance, "gripper/tof/depth_raw")
 
         # Image showing the yolo boxes and the projected points in the gripper camera
-        self.proj_im_pub = self.create_publisher(Image, "visual_servo/image_debut", 
+        self.proj_im_pub = self.create_publisher(Image, "visual_servo/image_debug", 
                                                  QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT,
                                                             history=HistoryPolicy.KEEP_LAST, depth=10))
 
@@ -62,7 +65,7 @@ class LocalPlanner(Node):
 
         # Publisher to end effector servo controller, sends velocity commands
         self.servo_publisher = self.create_publisher(TwistStamped, "/servo_node/delta_twist_cmds", 10)
-        #specify reentrant callback group 
+        # specify reentrant callback group 
         r_callback_group = ReentrantCallbackGroup()
 
         ### Services
@@ -213,6 +216,28 @@ class LocalPlanner(Node):
     def calculate_euclidean(self, pos1, pos2):
         return math.sqrt((pos1[0] - pos2[0])**2 + (pos1[1] - pos2[1])**2)
 
+    def proj_apple_locs_callback(self, proj_pts_msg: PoseArray):
+        """ From the gripper camera, the projected points of the apple centers """
+        self.projected_locs = []
+        for p in proj_pts_msg.poses:
+            self.projected_locs.append((p.position.x, p.position.y, p.position.z))
+
+    def debug_image(self, img):
+        """ Show the projected apple centers, the yolo bounding boxes
+        @param img is an opencv image format of the camera image"""
+        for pt in self.projected_locs:
+            cv2.drawMarker(img, (pt[0], pt[1]), color=(255, 255, 255), markerType=cv2.MARKER_CROSS, 
+                           markerSize=4, thickness=2)    
+        for pt, r in zip(self.apple_centers, self.apple_radii):
+            cv2.circle(img, (pt[0], pt[1]), r, color=(255, 0, 0), thickness=2) 
+
+        cv2.imwrite('yolo.png', img)
+        img_msg = self.bridge.cv2_to_imgmsg(img, encoding="bgr8")
+        
+        img_msg.header.frame_id = "gripper_palm_camera_optical_link"
+        img_msg.header.stamp = self.get_clock().now().to_msg()
+        self.debug_image.publish(img_msg)
+
     def rgb_servoing_callback(self, rgb):
         if self.start_flag:
             # Convert to opencv format from msg
@@ -223,25 +248,27 @@ class LocalPlanner(Node):
             # Get apple bounding boxes from yolo model
             # results = self.model(image, conf=self.yolo_conf, device='cuda', verbose=False)[0]
             results = self.model(image, conf=self.yolo_conf, verbose=False)[0]
-            apple_centers = []
+            self.apple_centers = []
+            self.apple_radii = []
             z_dist = []
             for i in results:
                 # find center of each bounding box and calculate distance to center of image
                 x,y,w,h = i.boxes.xyxy.cpu().numpy()[0]
-                apple_centers.append([(x + w)/2, (y+h)/2])
+                self.apple_centers.append([(x + w)/2, (y+h)/2])
+                self.apple_radii.append(0.5 * (w + h))
 
                 if self.first_servo:
-                    dist_to_apple = self.calculate_euclidean([width//2,height//2], apple_centers[-1])
+                    dist_to_apple = self.calculate_euclidean([width//2,height//2], self.apple_centers[-1])
                 else: 
-                    dist_to_apple = self.calculate_euclidean(self.prev_pos, apple_centers[-1])
+                    dist_to_apple = self.calculate_euclidean(self.prev_pos, self.apple_centers[-1])
 
                 z_dist.append(dist_to_apple)
 
-            if apple_centers:
+            if self.apple_centers:
                 # reset stall counter if we saw apples
                 self.stall_count = 0
                 # get closest apple center
-                closest_apple_raw = apple_centers[np.argmin(z_dist)]
+                closest_apple_raw = self.apple_centers[np.argmin(z_dist)]
 
                 # If this is the first iteration, set our initial estimate of the apple location in the kalman filter to the apple center measured
                 if self.first_servo:

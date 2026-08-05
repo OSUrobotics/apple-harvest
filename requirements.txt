@@ -13,3 +13,4 @@ torch
 pyrealsense2
 open3d
 setuptools
+filterpy

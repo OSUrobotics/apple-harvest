@@ -98,30 +98,55 @@ class ApplePredictionNode(Node):
         except Exception:
             pass
 
+        # For saving the debug image
+        self._yolo_debug_image : np.array = None
+
+        # -- control publication rates ---
+        if self.presaved_images:
+           qos_profile = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT,
+                                    durability=DurabilityPolicy.TRANSIENT_LOCAL,
+                                    history=HistoryPolicy.KEEP_LAST, depth=1)
+        else:
+            qos_profile = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT,
+                                     history=HistoryPolicy.KEEP_LAST,
+                                     depth=3)
+ 
         # ---- shared I/O ----
         self.bridge = CvBridge()
         self._predict_lock = Lock()
         self.service_group = MutuallyExclusiveCallbackGroup()
 
-        self.marker_pub = self.create_publisher(MarkerArray, "apple_markers", 10)
-        self.annotated_pub = self.create_publisher(
-            Image, "apple_annotated",
-            QoSProfile(reliability=ReliabilityPolicy.RELIABLE,
-                       history=HistoryPolicy.KEEP_LAST, depth=10),
-        )
-        self.pc_pub = self.create_publisher(PointCloud2, "rgbd_pointcloud", 10)
+        # ---- Data published everytime the service is called ----
+        self.marker_pub = self.create_publisher(MarkerArray, "apple_markers", qos_profile)
+        self.annotated_pub = self.create_publisher(Image, "apple_annotated", qos_profile)
+        self.pc_pub = self.create_publisher(PointCloud2, "rgbd_pointcloud", qos_profile)
+        self.apple_poses_pub = self.create_publisher(PoseArray, "apple_poses", qos_profile)
 
         # ---- TF ----
         self.tf_buffer   = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
 
+        # ----- Saved image/camera variables for prediction/debugging
+        self.rgb_image : np.array = None
+        self.depth_image : np.array = None
+        self.fx, self.fy = (0.0, 0.0)
+        self.cx, self.cy = (0.0, 0.0)
+        self._last_cinfo = None
+        
         # ---- mode-specific setup ----
         if self.presaved_images:
             self._init_presaved()
         else:
             self._init_live()
 
-    # ------------------------------------------------------------------ live init
+
+        # ---- Getting a new point cloud and predicting locations is done on a service call ----
+        self.srv = self.create_service(
+            ApplePrediction, "apple_prediction",
+            self.on_predict, callback_group=self.service_group,
+        )
+
+    # ------------------------------------------------------------------ live init 
 
     def _init_live(self):
         """Set up live-camera subscriptions and sync."""
@@ -143,7 +168,6 @@ class ApplePredictionNode(Node):
             self.depth_topic = f"/{self.ns}/depth/image_rect_raw"
             self.cinfo_topic = f"/{self.ns}/depth/camera_info"
 
-        self._last_cinfo = None
         self.cinfo_sub = self.create_subscription(
             CameraInfo, self.cinfo_topic, self._cinfo_cb,
             qos_profile=qos_profile_sensor_data,
@@ -163,17 +187,63 @@ class ApplePredictionNode(Node):
         self._new_pair_event     = Event()
         self._last_used_pair_key = None
 
-        self.srv = self.create_service(
-            ApplePrediction, "apple_prediction",
-            self.on_predict, callback_group=self.service_group,
-        )
-
         self.get_logger().info(
             "ApplePredictionNode (live) ready.\n"
             f"  color: {self.color_topic}\n"
             f"  depth: {self.depth_topic}\n"
             f"  cinfo: {self.cinfo_topic}"
         )
+
+    # ------------------------------------------------------------------ live image read
+
+    def _on_predict_live_get_point_cloud(self):
+        """ Call just before predicting images if running live"""
+
+        # Clear out old images
+        self.rgb_image = None
+        self.depth_image = None
+
+        # Get image
+        if self._last_cinfo is None:
+            self.get_logger().warn("No CameraInfo received yet.")
+            return
+
+        pair = self._wait_for_new_synced(timeout_sec=3.0)
+        if pair is None:
+            self.get_logger().warn("Timed out waiting for fresh synced frames.")
+            return
+
+        color_msg, depth_msg = pair
+        cinfo_msg = self._last_cinfo
+
+        self._last_used_pair_key = (
+            stamp_to_ns(color_msg.header.stamp),
+            stamp_to_ns(depth_msg.header.stamp),
+        )
+
+        self.rgb_image = self.bridge.imgmsg_to_cv2(color_msg, desired_encoding="bgr8")
+        self.depth_image  = self.bridge.imgmsg_to_cv2(depth_msg, desired_encoding="passthrough")
+
+        Hc, Wc = self.rgb_image.shape[:2]
+        self.target_size = (Wc, Hc)
+
+        if (cinfo_msg.height != Hc) or (cinfo_msg.width != Wc):
+            self.get_logger().warn(
+                f"CameraInfo size ({cinfo_msg.width}x{cinfo_msg.height}) "
+                f"!= color size ({Wc}x{Hc}). Using color size for back-projection."
+            )
+        if self.use_aligned and (self.depth_image.shape[:2] != (Hc, Wc)):
+            self.get_logger().warn(
+                f"Aligned depth size {self.depth_image.shape[1]}x{self.depth_image.shape[0]} "
+                f"!= color size {Wc}x{Hc}; masks will be resized."
+            )
+
+        self.fx = float(cinfo_msg.k[0]); self.fy = float(cinfo_msg.k[4])
+        self.cx = float(cinfo_msg.k[2]); self.cy = float(cinfo_msg.k[5])
+        self.target_size = (Wc, Hc)
+
+        # Publish full RGBD point cloud
+        self._publish_pointcloud(stamp=color_msg.header.stamp)
 
     # ------------------------------------------------------------------ presaved init
 
@@ -230,224 +300,142 @@ class ApplePredictionNode(Node):
         self.rgb_pub   = self.create_publisher(Image, "rgb_image", 10)
         self.depth_pub = self.create_publisher(Image, "depth_image", 10)
 
-        latched_qos = QoSProfile(
-            depth=1,
-            durability=DurabilityPolicy.TRANSIENT_LOCAL,
-            reliability=ReliabilityPolicy.RELIABLE,
-        )
-        self.apple_poses_pub = self.create_publisher(PoseArray, "apple_poses", latched_qos)
-
-        # ---- timers ----
-        self.create_timer(0.1, self._presaved_publish_images)
-        self.create_timer(0.5, self._presaved_publish_pointcloud)
-
-        # ---- misc state ----
-        self._presaved_apple_centers = None
-        self._presaved_apple_radii   = None
-        self._presaved_yolo_result   = None
-        self._marker_counter         = 0
-
-        # ---- service ----
-        self.srv = self.create_service(
-            ApplePrediction, "apple_prediction",
-            self.on_predict, callback_group=self.service_group,
-        )
+        # ---- timers - used to make the inititial point cloud from saved data ----
+        self.image_timer = self.create_timer(0.1, self._presaved_publish_images_timer)
+        self.pointcloud_timer = self.create_timer(0.5, self._presaved_publish_pointcloud_timer)
 
         self.get_logger().info("ApplePredictionNode (presaved) ready.")
 
+    # ================================================================== Timers to kick stuff off
+    def _presaved_publish_images_timer(self):
+        """Timer callback: republish the loaded RGB and depth images at 10 Hz."""
+        if self._predict_lock.locked():
+            return  # service callback is running — skip this cycle
+
+        # This timer should be triggered after _init_presaved was run, but if it wasn't, don't kill the timer
+        if self.rgb_image is None or self.depth_image is None:
+            return
+        
+        rgb_msg   = self.bridge.cv2_to_imgmsg(self.rgb_image,   encoding="bgr8")
+        depth_msg = self.bridge.cv2_to_imgmsg(self.depth_image, encoding="mono16")
+        self.rgb_pub.publish(rgb_msg)
+        self.depth_pub.publish(depth_msg)
+
+        # Kill - if doing pre-saved, we won't get another set of images
+        self.image_timer.cancel()
+
+    def _presaved_publish_pointcloud_timer(self):
+        """Timer callback: republish the full RGBD point cloud at 2 Hz."""
+        if self._predict_lock.locked():
+            return  # service callback is running — skip this cycle
+        
+        # This timer should be triggered after _init_presaved was run, but if it wasn't, don't kill the timer
+        if self.rgb_image is None or self.depth_image is None:
+            return
+        
+        # Publish the point cloud
+        self._publish_pointcloud()
+
+        # Kill - if doing pre-saved, we won't get another point cloud
+        self.pointcloud_timer.cancel()
+
     # ================================================================== service
 
-    def on_predict(self, req, res):
-        with self._predict_lock:
-            if self.presaved_images:
-                return self._on_predict_presaved(req, res)
-            else:
-                return self._on_predict_live(req, res)
-
-    # ------------------------------------------------------------------ live predict
-
-    def _on_predict_live(self, req, res):
-        if self._last_cinfo is None:
-            self.get_logger().warn("No CameraInfo received yet.")
-            res.apple_poses = PoseArray()
-            return res
-
-        pair = self._wait_for_new_synced(timeout_sec=3.0)
-        if pair is None:
-            self.get_logger().warn("Timed out waiting for fresh synced frames.")
-            res.apple_poses = PoseArray()
-            return res
-
-        color_msg, depth_msg = pair
-        cinfo_msg = self._last_cinfo
-
-        self._last_used_pair_key = (
-            stamp_to_ns(color_msg.header.stamp),
-            stamp_to_ns(depth_msg.header.stamp),
-        )
-
-        color_bgr = self.bridge.imgmsg_to_cv2(color_msg, desired_encoding="bgr8")
-        depth_mm  = self.bridge.imgmsg_to_cv2(depth_msg, desired_encoding="passthrough")
-
-        Hc, Wc = color_bgr.shape[:2]
-        if (cinfo_msg.height != Hc) or (cinfo_msg.width != Wc):
-            self.get_logger().warn(
-                f"CameraInfo size ({cinfo_msg.width}x{cinfo_msg.height}) "
-                f"!= color size ({Wc}x{Hc}). Using color size for back-projection."
-            )
-        if self.use_aligned and (depth_mm.shape[:2] != (Hc, Wc)):
-            self.get_logger().warn(
-                f"Aligned depth size {depth_mm.shape[1]}x{depth_mm.shape[0]} "
-                f"!= color size {Wc}x{Hc}; masks will be resized."
-            )
-
-        fx = float(cinfo_msg.k[0]); fy = float(cinfo_msg.k[4])
-        cx = float(cinfo_msg.k[2]); cy = float(cinfo_msg.k[5])
-
-        # Publish full RGBD point cloud
-        self._publish_pointcloud(
-            rgb_bgr=color_bgr,
-            depth=depth_mm,
-            fx=fx, fy=fy, cx=cx, cy=cy,
-            stamp=color_msg.header.stamp,
-        )
-
-        # 1) YOLO
+    # ----------------------------- Prediction helper functions
+    def _yolo_prediction(self):
+        """ Run YOLO """
         with torch.inference_mode():
-            results = self.model(color_bgr, conf=self.conf_thr, verbose=False)[0]
+            yolo_results = self.model(self.rgb_image, conf=self.conf_thr, verbose=False)[0]
 
-        # 2) Masks & boxes
-        masks, bboxes = self._build_instance_masks_and_boxes(results, Hc, Wc)
+        return yolo_results
 
-        # 3) Back-project → RANSAC sphere fit
-        centers, radii, kept_bboxes = self._estimate_apples_backproject(
-            depth_mm, masks, bboxes, fx, fy, cx, cy
+    def _build_instance_masks_and_boxes(self, yolo_results):
+        """ Get masks, boxes, and confidence from yolo results """
+
+        inst_n = int(len(yolo_results.boxes) if yolo_results.boxes is not None else 0)
+        if inst_n == 0:
+            self.get_logger().warn(f"No apples found - sadness - in yolo result")
+            return [], [], []
+
+        W, H = self.target_size
+        
+        masks  = [None] * inst_n
+        bboxes = [None] * inst_n
+        xyxy   = yolo_results.boxes.xyxy.cpu().numpy().astype(int)
+        confidences = [
+                        float(box.conf.cpu().numpy()[0])
+                        for box in yolo_results.boxes
+                      ]
+        if getattr(yolo_results, "masks", None) is not None and \
+                getattr(yolo_results.masks, "xy", None) is not None:
+            polys = yolo_results.masks.xy
+            for i in range(inst_n):
+                mask = np.zeros((H, W), dtype=np.uint8)
+                pl   = polys[i]
+                if isinstance(pl, np.ndarray):
+                    cv2.fillPoly(mask, [pl.astype(np.int32)], 255)
+                else:
+                    for poly in pl:
+                        cv2.fillPoly(mask, [poly.astype(np.int32)], 255)
+                masks[i]  = mask
+                x1, y1, x2, y2 = xyxy[i]
+                bboxes[i] = (x1, y1, x2, y2)
+        else:
+            for i in range(inst_n):
+                x1, y1, x2, y2 = xyxy[i]
+                mask = np.zeros((H, W), dtype=np.uint8)
+                cv2.rectangle(mask,
+                              (max(0, x1), max(0, y1)),
+                              (min(W - 1, x2), min(H - 1, y2)), 255, -1)
+                masks[i]  = mask
+                bboxes[i] = (x1, y1, x2, y2)
+
+        pairs = [(m, b) for m, b in zip(masks, bboxes) if m is not None and m.any()]
+        if not pairs:
+            return [], []
+        masks, bboxes = zip(*pairs)
+        return list(masks), list(bboxes), list(confidences)
+
+    def _ransac_sphere(self, pts):
+        # Fit a sphere to the points. The sphere class handles removing outliers and doing ransac
+        sph = Sphere()
+        center, radius, inliers = sph.fit(
+            pts,
+            thresh=self.ransac_thresh,
+            maxIteration=self.ransac_iters,
+            lower_rad_bound=self.rad_min,
+            upper_rad_bound=self.rad_max,
         )
 
-        self.get_logger().info(
-            f"Live predict ts=({color_msg.header.stamp.sec}."
-            f"{color_msg.header.stamp.nanosec:09d}) → {len(centers)} detections."
-        )
-
-        # 4) Transform to target frame
-        poses_world = self._to_pose_array(centers, self.source_frame, self.target_frame)
-
-        # 5) Filter by |x| in target frame
-        poses_world_f, radii_f, bboxes_f, _ = self._filter_by_x_range(
-            poses_world, radii, kept_bboxes, self.x_tol
-        )
-        if len(poses_world.poses) != len(poses_world_f.poses):
-            self.get_logger().info(
-                f"Filtered {len(poses_world.poses) - len(poses_world_f.poses)} detections "
-                f"by |x| <= {self.x_tol} in '{self.target_frame}'. "
-                f"Kept {len(poses_world_f.poses)}."
-            )
-
-        # 6) Publish
-        self._publish_markers(poses_world_f, radii_f, frame_id=self.target_frame)
-        self._publish_annotated_image(color_bgr, bboxes_f, header=color_msg.header)
-
-        res.apple_poses = poses_world_f
-        return res
-
-    # ------------------------------------------------------------------ presaved predict
-
-    def _on_predict_presaved(self, req, res):
-        # 1) Segment with YOLO
-        apple_masks = self._presaved_segment_apples(self.rgb_image)
-        self.get_logger().info(f"[1] YOLO found {len(apple_masks)} apple mask(s)")
-
-        resized_masks = [
-            cv2.resize(m, self.target_size, interpolation=cv2.INTER_NEAREST)
-            for m in apple_masks
-        ]
-
-        # 2) Build point clouds per mask → RANSAC sphere fit
-        rgb_rgb = cv2.cvtColor(self.rgb_image, cv2.COLOR_BGR2RGB)
-        centers, radii = self._presaved_get_apple_centers(rgb_rgb, self.depth_image, resized_masks)
-        self.get_logger().info(f"[2] get_apple_centers returned {len(centers)} center(s)")
-
-        # 3) Transform to target frame
-        poses_world = self._to_pose_array(centers, self.source_frame, self.target_frame)
-        self.get_logger().info(f"[3] transform_apple_poses returned {len(poses_world.poses)} pose(s)")
-
-        # 4) Publish
-        self._publish_markers(poses_world, radii, frame_id=self.target_frame)
-
-        # Extract bboxes from the stored YOLO result for the annotated image
-        bboxes = []
-        if self._presaved_yolo_result is not None \
-                and self._presaved_yolo_result.boxes is not None:
-            bboxes = [
-                tuple(box.xyxy.cpu().numpy()[0].astype(int))
-                for box in self._presaved_yolo_result.boxes
-            ]
-        self._publish_annotated_image(self.rgb_image, bboxes)
-
-        # Latched poses topic
-        poses_world.header.stamp    = self.get_clock().now().to_msg()
-        poses_world.header.frame_id = self.target_frame
-        self.apple_poses_pub.publish(poses_world)
-        self.get_logger().info(
-            f"Published {len(poses_world.poses)} apple pose(s) to 'apple_poses'."
-        )
-
-        # Cache for timer-based republishing
-        self._presaved_apple_centers = poses_world
-        self._presaved_apple_radii   = radii
-
-        res.apple_poses = poses_world
-        return res
-
-    # ================================================================== presaved helpers
-
-    def _presaved_segment_apples(self, image):
-        """Run YOLO on *image* and return a list of per-apple uint8 masks."""
-        results = self.model(image, conf=self.conf_thr)[0]
-        self._presaved_yolo_result = results
-        apple_masks = []
-
-        for det in results:
-            if results.masks is not None:
-                img_h, img_w = results.masks.orig_shape
-                mask = np.zeros((img_h, img_w), dtype=np.uint8)
-                for poly in det.masks.xy:
-                    cv2.fillPoly(mask, [poly.astype(np.int32)], 255)
-            else:
-                img_h, img_w = results.orig_shape
-                mask = np.zeros((img_h, img_w), dtype=np.uint8)
-                x1, y1, x2, y2 = det.boxes.xyxy.cpu().numpy()[0]
-                cv2.rectangle(mask, (int(x1), int(y1)), (int(x2), int(y2)), 255, -1)
-            apple_masks.append(mask)
-
-        return apple_masks
-
-    def _presaved_get_apple_centers(self, rgb, depth, masks):
+        return center, radius
+    
+    def _get_apple_centers(self, masks):
         """
         For each mask: build an open3d RGBD point cloud, run RANSAC sphere fit.
-        Returns (centers, radii) lists.
+        Returns (centers, radii) lists and which indices were kept.
         """
         self.get_logger().info(
-            f"Depth dtype={depth.dtype} min={depth.min()} max={depth.max()} "
-            f"nonzero={np.count_nonzero(depth)} shape={depth.shape}"
+            f"Depth dtype={self.depth_image.dtype} min={self.depth_image.min()} max={self.depth_image.max()} "
+            f"nonzero={np.count_nonzero(self.depth_image)} shape={self.depth_image.shape}"
         )
         apple_centers = []
         apple_radii   = []
+        kept_indices  = []
 
         intrinsic = o3d.camera.PinholeCameraIntrinsic(
             width=self.target_size[0], height=self.target_size[1],
             fx=self.fx, fy=self.fy, cx=self.cx, cy=self.cy,
         )
 
-        for mask in masks:
-            depth_seg = np.where(mask.astype(bool), depth, 0).astype(np.uint16)
+        for indx, mask in enumerate(masks):
+            depth_seg = np.where(mask.astype(bool), self.depth_image, 0).astype(np.uint16)
             valid_vals = depth_seg[depth_seg > 0]
             if valid_vals.size == 0:
                 continue
             if np.median(valid_vals) > self.dist_max * self.depth_scale:
                 continue
 
-            rgb_o3d   = o3d.geometry.Image(rgb)
+            rgb_o3d   = o3d.geometry.Image(self.rgb_image)
             depth_o3d = o3d.geometry.Image(depth_seg.astype(np.uint16))
             rgbd      = o3d.geometry.RGBDImage.create_from_color_and_depth(
                 rgb_o3d, depth_o3d,
@@ -461,55 +449,92 @@ class ApplePredictionNode(Node):
             if pts.shape[0] < 50:
                 continue
 
-            center, radius = self._presaved_ransac_sphere(pts)
+            center, radius = self._ransac_sphere(pts)
             if center is not None and radius is not None:
-                apple_centers.append(center)
+                # adding in the shift, if any
+                center_shifted = (center[0] + self.pointcloud_offset[0],
+                                  center[1] + self.pointcloud_offset[1],
+                                  center[2] + self.pointcloud_offset[2])
+                apple_centers.append(center_shifted)
                 apple_radii.append(float(radius))
+                kept_indices.append(indx)
 
-        return apple_centers, apple_radii
+        return apple_centers, apple_radii, kept_indices
 
-    def _presaved_ransac_sphere(self, pts):
-        sph = Sphere()
-        center, radius, _ = sph.fit(
-            pts,
-            thresh=self.ransac_thresh,
-            maxIteration=self.ransac_iters,
-            lower_rad_bound=self.rad_min,
-            upper_rad_bound=self.rad_max,
+    def on_predict(self, req, res):
+        """ Get either the saved point cloud or a new one and then run YOLO, then fit spheres and publish results """
+        if not self.presaved_images:
+            # Snag the new point cloud if live
+            with self._predict_lock:
+                self._on_predict_live_get_point_cloud() 
+
+        # We have either a pre-saved rgb and depth image or we just got one from the camera
+        if self.rgb_image is None or self.depth_image is None:
+            self.get_logger().warn(f"Predicting images: No rgb or depth image")
+            return
+
+        # 1) Run yolo
+        yolo_results = self._yolo_prediction()
+
+        # 2) Masks & boxes from yolo result
+        masks, bboxes, confidences = self._build_instance_masks_and_boxes(yolo_results)
+        self.get_logger().info(f"[1] YOLO found {len(masks)} apple mask(s)")
+        
+        # 3) Back-project → RANSAC sphere fit
+        centers, radii, kept_indices = self._get_apple_centers(masks)
+        self.get_logger().info(f"[2] get_apple_centers returned {len(centers)} center(s)")
+
+        # 4) Transform to target frame
+        poses_world = self._to_pose_array(centers, self.source_frame, self.target_frame)
+        self.get_logger().info(f"[3] transform_apple_poses src {self.source_frame} dst {self.target_frame} returned {len(poses_world.poses)} pose(s)")
+
+        # 5) Publish markers and poses and annotated debug image
+        self._publish_markers(poses_world, radii, frame_id=self.target_frame)
+
+        # Latched poses topic
+        poses_world.header.stamp    = self.get_clock().now().to_msg()
+        poses_world.header.frame_id = self.target_frame
+        self.apple_poses_pub.publish(poses_world)
+        self.get_logger().info(
+            f"Published {len(poses_world.poses)} apple pose(s) to 'apple_poses'."
         )
-        return center, radius
 
-    def _presaved_publish_images(self):
-        """Timer callback: republish the loaded RGB and depth images at 10 Hz."""
-        if self._predict_lock.locked():
-            return  # service callback is running — skip this cycle
-        rgb_msg   = self.bridge.cv2_to_imgmsg(self.rgb_image,   encoding="bgr8")
-        depth_msg = self.bridge.cv2_to_imgmsg(self.depth_image, encoding="mono16")
-        self.rgb_pub.publish(rgb_msg)
-        self.depth_pub.publish(depth_msg)
+        # Publish the annotated images
+        self._publish_annotated_image(yolo_bboxes=bboxes, confidences=confidences, kept_indices=kept_indices)
 
-    def _publish_pointcloud(self, rgb_bgr, depth, fx, fy, cx, cy, stamp=None):
+        res.apple_poses = poses_world
+        return res
+
+    # ================================================================== Publication/debug/visualization
+
+    def _publish_pointcloud(self, stamp=None):
         """Build and publish an XYZRGB PointCloud2 from a BGR image and depth map.
 
         Works for both live and presaved modes.  *stamp* defaults to now when
         not supplied (presaved / timer path).  The image is converted BGR→RGB
         internally so callers can pass the raw OpenCV frame either way.
 
+        Uses self variables
+        rgb_image:  uint8 BGR image (H×W×3).
+        depth_image:    uint16 depth image in the node's depth_scale units.
+        fx, fy:   focal lengths in pixels.
+        cx, cy:   principal point in pixels.
+
         Args:
-            rgb_bgr:  uint8 BGR image (H×W×3).
-            depth:    uint16 depth image in the node's depth_scale units.
-            fx, fy:   focal lengths in pixels.
-            cx, cy:   principal point in pixels.
             stamp:    rospy/rclpy stamp to embed in the header; uses clock.now() if None.
         """
-        H, W = rgb_bgr.shape[:2]
+        if self.rgb_image is None or self.depth_image is None:
+            self.get_logger().warn(f"Trying to publish point cloud, but no rgb or depth image")
+            return 
+        
+        H, W = self.rgb_image.shape[:2]
         if self.presaved_images:
-            rgb_o3d   = o3d.geometry.Image(rgb_bgr)
+            rgb_o3d   = o3d.geometry.Image(self.rgb_image)
         else:
-            rgb_o3d   = o3d.geometry.Image(cv2.cvtColor(rgb_bgr, cv2.COLOR_BGR2RGB))
-        depth_o3d = o3d.geometry.Image(depth.astype(np.uint16))
+            rgb_o3d   = o3d.geometry.Image(cv2.cvtColor(self.rgb_image, cv2.COLOR_BGR2RGB))
+        depth_o3d = o3d.geometry.Image(self.depth_image.astype(np.uint16))
         intrinsic = o3d.camera.PinholeCameraIntrinsic(
-            width=W, height=H, fx=fx, fy=fy, cx=cx, cy=cy,
+            width=W, height=H, fx=self.fx, fy=self.fy, cx=self.cx, cy=self.cy,
         )
         rgbd = o3d.geometry.RGBDImage.create_from_color_and_depth(
             rgb_o3d, depth_o3d,
@@ -536,157 +561,6 @@ class ApplePredictionNode(Node):
         ]
 
         self.pc_pub.publish(point_cloud2.create_cloud(header, fields, packed))        
-        
-    def _presaved_publish_pointcloud(self):
-        """Timer callback: republish the full RGBD point cloud at 2 Hz."""
-        if self._predict_lock.locked():
-            return  # service callback is running — skip this cycle
-        self._publish_pointcloud(
-            rgb_bgr=self.rgb_image,
-            depth=self.depth_image,
-            fx=self.fx, fy=self.fy, cx=self.cx, cy=self.cy,
-        )
-
-    def _publish_annotated_image(self, bgr_img, bboxes, header=None):
-        """Draw bounding boxes on bgr_img and publish to apple_annotated.
-
-        In presaved mode, labels show confidence scores pulled from the stored
-        YOLO result.  In live mode, labels show the detection index.
-        """
-        if bgr_img is None:
-            return
-        annotated = bgr_img.copy()
-        H, W = annotated.shape[:2]
-
-        # Pull per-box confidence scores in presaved mode
-        confidences = []
-        if self.presaved_images \
-                and self._presaved_yolo_result is not None \
-                and self._presaved_yolo_result.boxes is not None:
-            confidences = [
-                float(box.conf.cpu().numpy()[0])
-                for box in self._presaved_yolo_result.boxes
-            ]
-
-        for i, (x1, y1, x2, y2) in enumerate(bboxes):
-            x1 = int(max(0, min(W - 1, x1))); y1 = int(max(0, min(H - 1, y1)))
-            x2 = int(max(0, min(W - 1, x2))); y2 = int(max(0, min(H - 1, y2)))
-            if x2 <= x1 or y2 <= y1:
-                continue
-
-            cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 255, 0), 2)
-
-            if self.presaved_images and i < len(confidences):
-                label       = f"apple {confidences[i]:.2f}"
-                font_scale  = 0.5
-                thickness   = 1
-            else:
-                label       = str(i)
-                font_scale  = 0.9
-                thickness   = 2
-
-            (tw, th), baseline = cv2.getTextSize(
-                label, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness
-            )
-            bg_y1 = max(0, y1 - th - baseline - 6)
-            cv2.rectangle(annotated,
-                          (x1, bg_y1),
-                          (min(W - 1, x1 + tw + 8), y1),
-                          (0, 255, 0), -1)
-            cv2.putText(annotated, label, (x1 + 4, max(0, y1 - 6)),
-                        cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 0, 0),
-                        thickness, cv2.LINE_AA)
-
-        msg = self.bridge.cv2_to_imgmsg(annotated, encoding="bgr8")
-        if header is not None:
-            msg.header = header
-        else:
-            msg.header.stamp    = self.get_clock().now().to_msg()
-            msg.header.frame_id = self.source_frame
-        self.annotated_pub.publish(msg)
-
-    def _build_instance_masks_and_boxes(self, results, H, W):
-        inst_n = int(len(results.boxes) if results.boxes is not None else 0)
-        if inst_n == 0:
-            return [], []
-
-        masks  = [None] * inst_n
-        bboxes = [None] * inst_n
-        xyxy   = results.boxes.xyxy.cpu().numpy().astype(int)
-
-        if getattr(results, "masks", None) is not None and \
-                getattr(results.masks, "xy", None) is not None:
-            polys = results.masks.xy
-            for i in range(inst_n):
-                mask = np.zeros((H, W), dtype=np.uint8)
-                pl   = polys[i]
-                if isinstance(pl, np.ndarray):
-                    cv2.fillPoly(mask, [pl.astype(np.int32)], 255)
-                else:
-                    for poly in pl:
-                        cv2.fillPoly(mask, [poly.astype(np.int32)], 255)
-                masks[i]  = mask
-                x1, y1, x2, y2 = xyxy[i]
-                bboxes[i] = (x1, y1, x2, y2)
-        else:
-            for i in range(inst_n):
-                x1, y1, x2, y2 = xyxy[i]
-                mask = np.zeros((H, W), dtype=np.uint8)
-                cv2.rectangle(mask,
-                              (max(0, x1), max(0, y1)),
-                              (min(W - 1, x2), min(H - 1, y2)), 255, -1)
-                masks[i]  = mask
-                bboxes[i] = (x1, y1, x2, y2)
-
-        pairs = [(m, b) for m, b in zip(masks, bboxes) if m is not None and m.any()]
-        if not pairs:
-            return [], []
-        masks, bboxes = zip(*pairs)
-        return list(masks), list(bboxes)
-
-    def _estimate_apples_backproject(self, depth_mm, masks, bboxes, fx, fy, cx, cy):
-        """Back-project depth pixels to 3-D then fit a sphere with RANSAC."""
-        centers, radii, kept_bboxes = [], [], []
-        Hd, Wd = depth_mm.shape[:2]
-
-        for m, bbox in zip(masks, bboxes):
-            if m.shape != depth_mm.shape:
-                m = cv2.resize(m, (Wd, Hd), interpolation=cv2.INTER_NEAREST)
-
-            ys, xs = np.where(m > 0)
-            if xs.size == 0:
-                continue
-            z = depth_mm[ys, xs].astype(np.float32) / 1000.0
-            valid = z > 0
-            if not np.any(valid):
-                continue
-            xs, ys, z = xs[valid], ys[valid], z[valid]
-            if z.size < 50:
-                continue
-            if float(np.median(z)) > self.dist_max:
-                continue
-
-            X   = (xs - cx) * z / fx
-            Y   = (ys - cy) * z / fy
-            pts = np.column_stack((X, Y, z))
-
-            fitter = Sphere()
-            c, r, ok = fitter.fit(
-                pts,
-                thresh=self.ransac_thresh,
-                maxIteration=self.ransac_iters,
-                lower_rad_bound=self.rad_min,
-                upper_rad_bound=self.rad_max,
-            )
-            if ok is False or c is None or r is None \
-                    or not np.isfinite(c).all() or not np.isfinite(r):
-                continue
-
-            centers.append(c)
-            radii.append(float(r))
-            kept_bboxes.append(tuple(bbox))
-
-        return centers, radii, kept_bboxes
 
     def _to_pose_array(self, centers_xyz, source_frame, target_frame):
         pa  = PoseArray()
@@ -727,35 +601,73 @@ class ApplePredictionNode(Node):
 
         return pa
 
-    def _filter_by_x_range(self, poses_world: PoseArray, radii, bboxes, x_abs_max: float):
-        kept_indices = []
-        out = PoseArray()
-        out.header = poses_world.header
-
-        for i, p in enumerate(poses_world.poses):
-            if abs(float(p.position.x)) <= x_abs_max:
-                kept_indices.append(i)
-                out.poses.append(p)
-
-        radii_f  = [radii[i]  for i in kept_indices] if radii  else []
-        bboxes_f = [bboxes[i] for i in kept_indices] if bboxes else []
-        return out, radii_f, bboxes_f, kept_indices
-
     def _publish_markers(self, poses, radii, frame_id="world"):
         arr = MarkerArray()
-        for i, pose in enumerate(poses.poses):
+        for indx, pose in enumerate(poses.poses):
             m = Marker()
             m.header.frame_id = frame_id
             m.header.stamp    = self.get_clock().now().to_msg()
-            m.id              = i
+            m.id              = indx
             m.type            = Marker.SPHERE
             m.action          = Marker.ADD
-            r = float(radii[i]) if i < len(radii) else 0.04
+            r = float(radii[indx]) if indx < len(radii) else 0.04
             m.scale.x = m.scale.y = m.scale.z = 2.0 * r
+            # Color red if not filtered as out of reach, otherwise yellow
             m.color.r = 1.0; m.color.a = 1.0
             m.pose    = pose
             arr.markers.append(m)
         self.marker_pub.publish(arr)
+
+    def _publish_annotated_image(self, yolo_bboxes, confidences, kept_indices, header=None):
+        """Draw bounding boxes on bgr_img and publish to apple_annotated.
+
+        Show confidence scores pulled from Yolo result.
+        """
+        if self.rgb_image is None:
+            return
+        
+        annotated_image = self.rgb_image.copy()
+        H, W = annotated_image.shape[:2]
+
+        # Color by kept indices
+        color_apple = (255, 0, 0)
+        color_not_apple = (125, 125, 0)
+        for indx, (x1, y1, x2, y2) in enumerate(yolo_bboxes):
+            x1 = int(max(0, min(W - 1, x1))); y1 = int(max(0, min(H - 1, y1)))
+            x2 = int(max(0, min(W - 1, x2))); y2 = int(max(0, min(H - 1, y2)))
+            if x2 <= x1 or y2 <= y1:
+                continue
+
+            if indx in kept_indices:
+                color = color_apple
+            else:
+                color = color_not_apple
+            cv2.rectangle(annotated_image, (x1, y1), (x2, y2), color, 1)
+
+
+            label       = f"apple {indx} {confidences[indx]:.2f}"
+            font_scale  = 0.5
+            thickness   = 1
+
+            (tw, th), baseline = cv2.getTextSize(
+                label, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness
+            )
+            bg_y1 = max(0, y1 - th - baseline - 6)
+            cv2.rectangle(annotated_image,
+                          (x1, bg_y1),
+                          (min(W - 1, x1 + tw + 8), y1),
+                          color, -1)
+            cv2.putText(annotated_image, label, (x1 + 4, max(0, y1 - 6)),
+                        cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 0, 0),
+                        thickness, cv2.LINE_AA)
+
+        msg = self.bridge.cv2_to_imgmsg(annotated_image, encoding="bgr8")
+        if header is not None:
+            msg.header = header
+        else:
+            msg.header.stamp    = self.get_clock().now().to_msg()
+            msg.header.frame_id = self.source_frame
+        self.annotated_pub.publish(msg)
 
 
 def main():

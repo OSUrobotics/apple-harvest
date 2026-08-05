@@ -27,21 +27,26 @@ class GripperPalmCamera(Node):
     def __init__(self, resolution=(800, 600), target_fr=30):
         super().__init__("gripper_palm_camera_publisher")
 
+        # For virtual camera
+        self.declare_parameter("use_fake_hardware", False)
+        
         # image publisher - the actual image from the camera
-        self.camera_pub = self.create_publisher(Image, "gripper/rgb_palm_camera/image_raw", 
-                                                QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT,
-                                                           history=HistoryPolicy.KEEP_LAST, depth=10))
+        if self.get_parameter('use_fake_hardware').value:
+            qos_profile = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT,
+                                                           durability=DurabilityPolicy.TRANSIENT_LOCAL,
+                                                           history=HistoryPolicy.KEEP_LAST, depth=1)
+        else:
+            qos_profile = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT,
+                                     history=HistoryPolicy.KEEP_LAST,
+                                     depth=3)
+            
+        self.camera_pub = self.create_publisher(Image, "gripper/rgb_palm_camera/image_raw", qos_profile)
         # The point cloud from the rgbd camera projected onto the gripper camera
-        self.proj_im_pub = self.create_publisher(Image, "gripper/rgb_palm_camera/image_proj", 
-                                                 QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT,
-                                                            history=HistoryPolicy.KEEP_LAST, depth=10))
+        self.proj_im_pub = self.create_publisher(Image, "gripper/rgb_palm_camera/image_proj", qos_profile)
         
         # cv bridge to convert to ros image msg
         self.bridge = CvBridge()
 
-        # For virtual camera
-        self.declare_parameter("use_fake_hardware", False)
-        
         # Note: If a real camera is defined, these will come from that
         self.declare_parameter("resolution", resolution)
         self.declare_parameter("target_frame_rate", 30)
@@ -63,9 +68,8 @@ class GripperPalmCamera(Node):
         self.create_subscription(MarkerArray, "apple_markers", self.project_image_frame_callback, 10)
 
         # Keep the projected centers and publish them
-        self.apple_loc_pub = self.create_publisher(PoseArray, "gripper/apple_locs", 
-                                                   QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT,
-                                                              history=HistoryPolicy.KEEP_LAST, depth=10))
+        self.apple_locs = []
+        self.apple_loc_pub = self.create_publisher(PoseArray, "gripper/apple_locs", qos_profile=qos_profile)
 
         # Check the pose every frame rate second
         timer_hz = 1.0 / self.get_parameter('target_frame_rate').value
@@ -146,8 +150,8 @@ class GripperPalmCamera(Node):
         return pos_match and rot_match
 
     def pose_timer_callback(self):
-        from_frame = self.source_frame
-        to_frame = 'gripper_palm_camera_optical_link'
+        to_frame = self.source_frame
+        from_frame = 'gripper_palm_camera_optical_link'
         
         try:
             # Look up the transform from to_frame to from_frame
@@ -238,6 +242,9 @@ class GripperPalmCamera(Node):
             rgb_pix = colors[indx, :]
             # b g r
             img[v_idx[indx], u_idx[indx]] = [rgb_pix[2], rgb_pix[1], rgb_pix[0]]
+
+        for pt in self.apple_locs:
+            cv2.drawMarker(img, (pt[0], pt[1]), color=(255, 255, 255), markerType=cv2.MARKER_CROSS, thickness=2)
 
         # 6. Publish the image and info messages        
         cv2.imwrite('check.png', img)

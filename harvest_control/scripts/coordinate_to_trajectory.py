@@ -49,7 +49,7 @@ class CoordinateToTrajectoryService(Node):
         # Load data
         tree_wire_filter_file = os.path.join(package_share_directory, 'resource', 'tree_wire_mask.json')
         self.load_tree_wire_filter_ranges(tree_wire_filter_file)
-        self.voxel_data = np.loadtxt(os.path.join(package_share_directory, 'resource', 'reachable_voxels_centers_fine.csv'))
+        self.voxel_data = np.loadtxt(os.path.join(package_share_directory, 'resource', 'reachable_voxel_centers_fine.csv'))
         self.trajectories = np.load(os.path.join(package_share_directory, 'resource', 'reachable_paths_fine.npy'))
         self.ik_data = np.loadtxt(os.path.join(package_share_directory, 'resource', 'voxel_ik_data_fine.csv'), delimiter=',', skiprows=1)
 

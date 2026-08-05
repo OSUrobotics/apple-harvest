@@ -9,6 +9,7 @@ from launch_ros.substitutions import FindPackageShare
 import launch_ros.actions
 from launch.substitutions import TextSubstitution
 from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.conditions import IfCondition
 
 
 def generate_launch_description():
@@ -170,11 +171,25 @@ def generate_launch_description():
                             'rviz_file': 'view_robot_with_apples.rviz'
                             }.items()
     )
-    
+
+    vservo_node = launch_ros.actions.Node(
+                package="harvest_control",
+                executable="visual_servo.py",
+                name="visual_servo",
+                parameters=[
+                    {"vservo_model_path": LaunchConfiguration("vservo_model_path"),
+                     "vservo_yolo_conf": LaunchConfiguration("vservo_yolo_conf"),
+                     "vservo_accuracy_px": LaunchConfiguration("vservo_accuracy_px"),
+                     "vservo_smoothing_factor": LaunchConfiguration("vservo_smoothing_factor"),
+                     "vservo_max_vel": LaunchConfiguration("vservo_max_vel")
+                      }
+                ])
+
     return LaunchDescription(declared_arguments + [
                              apple_prediction_node,
                              palm_camera,
                              #voxelize_scan_node,
                              tcp_pose_relay,
-                             arm_control
+                             arm_control,
+                             vservo_node
     ])
