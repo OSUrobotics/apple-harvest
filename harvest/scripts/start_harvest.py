@@ -5,6 +5,9 @@ import rclpy
 from rclpy.node import Node
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
+from tf2_ros.buffer import Buffer
+from tf2_ros.transform_listener import TransformListener
+from std_msgs.msg import Int32
 # Interfaces
 from rcl_interfaces.msg import Parameter, ParameterValue, ParameterType
 from rcl_interfaces.srv import SetParameters
@@ -15,6 +18,8 @@ from controller_manager_msgs.srv import SwitchController
 from rclpy.action import ActionClient
 from action_msgs.msg import GoalStatus
 from harvest_interfaces.action import EventDetection
+from tf2_geometry_msgs import TransformStamped
+from tf2_ros import TransformException
 
 # Python 
 import numpy as np
@@ -25,24 +30,6 @@ import copy
 import re
 from pathlib import Path
 
-def get_data_storage_dir():
-    # 1. Find this file’s folder:
-    current_dir = Path(__file__).resolve().parent
-    # 2. Climb up to the workspace root (ros2_ws)
-    #    scripts → harvest → apple-harvest → src → ros2_ws
-    #    so we need to go up 4 levels:
-    workspace_root = current_dir.parents[3]  
-    # 3. Define your data directory alongside src/
-    data_dir = workspace_root / 'data'
-
-    # 4. Create it if it doesn’t already exist
-    data_dir.mkdir(parents=True, exist_ok=True)
-
-    data_dir = str(data_dir)
-
-    print(f"Using data directory: {data_dir}")
-
-    return data_dir
 
 class StartHarvest(Node):
     def __init__(self):
@@ -50,13 +37,9 @@ class StartHarvest(Node):
         self.cb_group = MutuallyExclusiveCallbackGroup()
 
         # Get storage directory
-        self.storage_directory = get_data_storage_dir()
+        self.storage_directory = self._get_data_storage_dir()
         self.batch_dir = self.storage_directory + '/batch/'
         self.batch_number = 0
-
-        # Load pre-saved apple locations
-        apple_loc_path = os.path.join(self.storage_directory, 'apple_locations/')
-        self.pre_saved_apple_locations = self.read_apple_locations(apple_loc_path)
 
         # Declare parameters with defaults
         self.declare_parameter('pick_pattern', 'force-heuristic')
@@ -65,6 +48,7 @@ class StartHarvest(Node):
         self.declare_parameter('base_data_dir', self.storage_directory)
         self.declare_parameter('enable_recording', True)
         self.declare_parameter('enable_visual_servo', True)
+        # Read from file OR get from apple prediction node
         self.declare_parameter('enable_apple_prediction', True)
         self.declare_parameter('enable_pressure_servo', True)    
         self.declare_parameter('enable_picking', True)           
@@ -118,6 +102,53 @@ class StartHarvest(Node):
             self._event_client = ActionClient(self, EventDetection, 'event_detection')
             self.status = GoalStatus.STATUS_EXECUTING
 
+        # Which apple are we processing?
+        self.current_apple_index_pub = self.create_publisher(Int32, 'start_harvest/current_apple_index', 5)
+
+       # Where is the base of the arm (for determining sort order)?
+        self.tf_buffer = Buffer()
+        self.tf_listener = TransformListener(self.tf_buffer, self)
+
+        # One-time timer to get the arm base location
+        self.arm_base = (0, 0, 0)
+        self.pose_timer = self.create_timer(0.1, self.pose_timer_callback)
+
+    @staticmethod
+    def _get_data_storage_dir():
+        # 1. Find this file’s folder:
+        current_dir = Path(__file__).resolve().parent
+        # 2. Climb up to the workspace root (ros2_ws)
+        #    scripts → harvest → apple-harvest → src → ros2_ws
+        #    so we need to go up 4 levels:
+        workspace_root = current_dir.parents[3]  
+        # 3. Define your data directory alongside src/
+        data_dir = workspace_root / 'data'
+
+        # 4. Create it if it doesn’t already exist
+        data_dir.mkdir(parents=True, exist_ok=True)
+
+        data_dir = str(data_dir)
+
+        print(f"Using data directory: {data_dir}")
+
+        return data_dir
+
+    def pose_timer_callback(self):
+        to_frame = 'shoulder_link'
+        from_frame = 'amiga__base'
+        
+        try:
+            # Look up the transform from to_frame to from_frame
+            t = self.tf_buffer.lookup_transform(from_frame, to_frame, rclpy.time.Time())
+            p = t.transform.translation
+            self.arm_base = (p.x, p.y, p.z)
+
+            self.get_logger().info(f"Arm base location {self.arm_base}")
+            # Done once, don't need to do again
+            self.pose_timer.cancel()
+            
+        except TransformException as ex:
+            self.get_logger().info(f'Could not transform {to_frame} to {from_frame}: {ex}')
 
     def make_client(self, srv_type, name):
         client = self.create_client(srv_type, name, callback_group=self.cb_group)
@@ -220,11 +251,20 @@ class StartHarvest(Node):
 
     def read_apple_locations(self, directory):
         csv_file = Path(directory) / 'apple_locations.csv'
-        data = np.loadtxt(str(csv_file), delimiter=',')
-        if data.ndim == 1:
-            data = data[np.newaxis, :]
-        return data  # shape is now (N, 3)
+        apple_poses = PoseArray()
+        try:
+            data = np.loadtxt(str(csv_file), delimiter=',')
+            if data.ndim == 1:
+                data = data[np.newaxis, :]
+            apple_poses.poses = [
+                Pose(position=Point(x=row[0], y=row[1], z=row[2]))
+                for row in data
+            ]
+        except FileNotFoundError:
+            self.get_logger().warn(f"No data to load from published {csv_file}")
 
+        return apple_poses
+    
     def get_current_gripper_pose(self):
         request = GetGripperPose.Request()
 
@@ -280,8 +320,8 @@ class StartHarvest(Node):
         feedback = feedback_msg.feedback
         self.get_logger().info('Received feedback: {0}'.format(feedback.listening))
 
-    def start_visual_servo(self):
-        # Starts global planning sequence
+    def start_visual_servo(self, pose):
+        # Starts local planning sequence
         self.request = Trigger.Request()
         self.future = self.start_vservo_client.call_async(self.request)
         rclpy.spin_until_future_complete(self, self.future)
@@ -363,6 +403,7 @@ class StartHarvest(Node):
         return self.future.result().waypoints
 
     def trigger_arm_mover(self, trajectory):
+        """ I think this is the one that uses the saved trajectory"""
         request = SendTrajectory.Request()
         request.waypoints = trajectory  # Pass the entire Float32MultiArray message
 
@@ -372,6 +413,7 @@ class StartHarvest(Node):
         return future.result()
     
     def trigger_move_arm_to_pose(self, apple_pose):
+        """ This one just goes to the pose location"""
         request = MoveToPose.Request()
         request.orientation = apple_pose.orientation
         request.position = apple_pose.position
@@ -491,6 +533,37 @@ class StartHarvest(Node):
         if self.enable_recording:
             self.stop_recording()
 
+    def _sort_poses(self, poses: PoseArray):
+        d_z = []
+        d_ang = []
+        min_z = 1e30
+        max_z = 0
+        for pose in poses:
+            d_z.append(np.abs(pose.y - self.arm_base[1]))
+            if d_z[-1] < max_z:
+                max_z = d_z[-1]
+            if d_z[-1] > min_z:
+                min_z = d_z[-1]
+
+            d_ang_height = np.abs(np.arctan2(pose.z - self.arm_base[2], pose.y - self.arm_base[1]))
+            d_ang_width = np.abs(np.arctan2(pose.x - self.arm_base[0], pose.y - self.arm_base[1]))
+            d_ang.append(0.5 * (d_ang_height + d_ang_width))
+        
+        self.get_logger().info(f"Apple locations by z, ang {d_z}, {d_ang}")
+        indices = []
+        n_bins = 6
+        z_range = np.linspace(min_z, max_z, n_bins)
+        ang_range = np.linspace(0.0, np.pi, n_bins)
+        n_ang_range = 2
+        for l_z, r_z in zip(z_range(0, n_bins - 1), z_range(1, n_bins)):
+            for l_a, r_a in zip(ang_range[0, n_ang_range - 1], ang_range[1, n_ang_range]):
+                for indx in range(0, len(poses.poses)):
+                    if l_z <= d_z[indx] <= r_z:
+                        if l_a <= d_ang <= r_a:
+                            indices.append(indx)
+        # Remove duplicates
+        return list(dict.fromkeys(indices))    
+        
     def start(self): 
         # Stage 1: Reset arm to home position
         self.get_logger().info(f'Resetting arm to home position')
@@ -502,28 +575,39 @@ class StartHarvest(Node):
             apple_poses = self.start_apple_prediction()
         else:
             self.get_logger().info('Skipping apple prediction, using pre-saved locations')
-            apple_poses = PoseArray()
-            apple_poses.poses = [
-                Pose(position=Point(x=row[0], y=row[1], z=row[2]))
-                for row in self.pre_saved_apple_locations
-            ]
+            # If we're not getting apple locations from apple prediction node, read from file 
+
+            apple_loc_path = os.path.join(self.storage_directory, 'apple_locations/')
+            apple_poses = self.read_apple_locations(apple_loc_path)
+
+        # For writing meta data
         self.apple_coordinates = {f'apple_{i+1}': [p.position.x,p.position.y,p.position.z]
                                     for i,p in enumerate(apple_poses.poses)}
         self.get_logger().info(f'Found {len(apple_poses.poses)} apples!')
 
+        # Sort order - closest first, then by location in center of graspable region
+        sort_order = self.sort_poses(apple_poses)
+
         # Loop over apple locations
-        for idx, coord in enumerate(apple_poses.poses):
+        for idx in sort_order:
+            # Publish which apple we're working on
+            msg = Int32()
+            msg.data = idx
+            self.current_apple_index_pub.publish(msg)
+            
             # Update base directory for new apple location
             base_dir = self.batch_dir + f'apple_{idx}/'
 
             # Stage 3: Approach apple
+            coord = apple_poses.poses[idx]
+
             input(f'Hit enter to start with apple {idx}')
             self.get_logger().info(f'Approaching apple {idx}: Coord {coord}')
             if self.use_optimal_trajectory:
                 waypoints = self.call_coord_to_traj(coord)
                 self.trigger_arm_mover(waypoints)
-            else:
-                self.trigger_move_arm_to_pose(coord)
+            # Finish aligning the arm with the actual point (or move it there in the first place)
+            self.trigger_move_arm_to_pose(coord)
 
             # Stage 4: visual servo
             if self.enable_visual_servo:

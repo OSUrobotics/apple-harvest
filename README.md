@@ -43,7 +43,8 @@ There are currently two main control schemes: apple harvesting (real or simulate
       -p enable_visual_servo:=true \
       -p enable_apple_prediction:=true \
       -p enable_pressure_servo:=true \
-      -p enable_picking:=true
+      -p enable_picking:=true \
+      -p read_poses_from_file:=true
     ```
 
     **Defaults** (if you don’t pass `-p` flags):  

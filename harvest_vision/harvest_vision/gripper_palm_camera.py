@@ -11,10 +11,7 @@ from tf2_geometry_msgs import TransformStamped
 from geometry_msgs.msg import Pose, PoseArray
 from scipy.spatial.transform import Rotation as R
 import sensor_msgs_py.point_cloud2 as pc2
-import struct
-from visualization_msgs.msg import Marker, MarkerArray
-from rclpy.qos import (
-    qos_profile_sensor_data, QoSProfile,
+from rclpy.qos import (QoSProfile,
     ReliabilityPolicy, HistoryPolicy, DurabilityPolicy,
 )
 
@@ -40,6 +37,7 @@ class GripperPalmCamera(Node):
                                      history=HistoryPolicy.KEEP_LAST,
                                      depth=3)
             
+        # This is the real camera image (if there is one), otherwise it's the same as the projected point cloud image
         self.camera_pub = self.create_publisher(Image, "gripper/rgb_palm_camera/image_raw", qos_profile)
         # The point cloud from the rgbd camera projected onto the gripper camera
         self.proj_im_pub = self.create_publisher(Image, "gripper/rgb_palm_camera/image_proj", qos_profile)
@@ -65,7 +63,7 @@ class GripperPalmCamera(Node):
         self.tf_listener = TransformListener(self.tf_buffer, self)
         
         # Listen for 3D marker locations (project them into current camera frame)
-        self.create_subscription(MarkerArray, "apple_markers", self.project_image_frame_callback, 10)
+        self.create_subscription(PoseArray, "apple_poses", self.project_image_frame_callback, 10)
 
         # Keep the projected centers and publish them
         self.apple_locs = []
@@ -81,7 +79,7 @@ class GripperPalmCamera(Node):
         if self.get_parameter('use_fake_hardware').value:
             # Grab the data from the point cloud
             self.sub = self.create_subscription(PointCloud2, '/rgbd_pointcloud', self.pc_callback, 10)
-            # Publish camera info - probably don't need to, but...
+            # Publish camera info - needed for visual servo (what is the camra angle?)
             self.cam_info_pub = self.create_publisher(CameraInfo, '/gripper/rgb_palm_camera/camera_info', 10)
             self.resolution = resolution
             focal = 0.5 * (resolution[0] + resolution[1])
@@ -268,7 +266,7 @@ class GripperPalmCamera(Node):
 
         self.get_logger().info("Done")
         
-    def project_image_frame_callback(self, msg: MarkerArray):
+    def project_image_frame_callback(self, msg: PoseArray):
         """ Get the markers from the 3D apple prediction and project them into the image"""
         if not self.current_pose:
             return
@@ -283,8 +281,9 @@ class GripperPalmCamera(Node):
         frame_id = "gripper_palm_camera_optical_link"
         pa.header.stamp = now
         pa.header.frame_id = frame_id
-        for marker in msg.markers:
-            pose = marker.pose
+        
+        # Project all of the points, even if they end up behind the camera
+        for pose in msg.poses:
             pt[0] = pose.position.x
             pt[1] = pose.position.y
             pt[2] = pose.position.z
@@ -293,8 +292,6 @@ class GripperPalmCamera(Node):
             x = pt_in_image[0]
             y = pt_in_image[1]
             z = pt_in_image[2]
-            if z < 0.01:
-                continue
 
             u = (x * self.fx / z) + self.cx
             v = (y * self.fy / z) + self.cy
