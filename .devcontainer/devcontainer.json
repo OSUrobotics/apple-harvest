@@ -1,0 +1,64 @@
+{
+  "name": "apple-harvest (ROS2 Humble)",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": "..",
+    "args": {
+      "ROS_DISTRO": "humble"
+    }
+  },
+
+  // Repo is cloned to /ros2_ws/src/apple-harvest so colcon sees a normal
+  // <ws>/src/<pkg...> layout. Bind mount keeps edits live on the host.
+  "workspaceMount": "source=${localWorkspaceFolder},target=/ros2_ws/src/apple-harvest,type=bind",
+  "workspaceFolder": "/ros2_ws/src/apple-harvest",
+
+  "remoteUser": "ros",
+
+  // Runs on the HOST (not in the container) before it's created/started.
+  // Grants local X11 clients (this container, via the /tmp/.X11-unix mount
+  // below) permission to draw on the host display, so rviz etc. "just work"
+  // without a manual `xhost` step. Silently no-ops on hosts without xhost
+  // (e.g. macOS without XQuartz, or a headless CI build) rather than failing
+  // the container build/start.
+  "initializeCommand": "xhost +local: 2>/dev/null || true",
+
+  // Host networking so ROS2/DDS discovery and the UR robot_ip connection
+  // work the same as running natively. Devices are for the Realsense D435i
+  // and any USB/UVC cameras; extend as needed for your hardware.
+  "runArgs": [
+    "--network=host",
+    "--privileged",
+    "--device=/dev/bus/usb:/dev/bus/usb"
+  ],
+
+  "mounts": [
+    "source=/tmp/.X11-unix,target=/tmp/.X11-unix,type=bind"
+  ],
+
+  "containerEnv": {
+    "DISPLAY": "${localEnv:DISPLAY}",
+    "ROS_DOMAIN_ID": "0",
+    "LIBGL_ALWAYS_SOFTWARE": "1"
+  },
+
+  "postCreateCommand": "sudo rosdep update && sudo rosdep install --from-paths /ros2_ws/src --ignore-src -r -y && python3 -m pip install --no-cache-dir -r /ros2_ws/src/apple-harvest/requirements.txt",
+
+  "postAttachCommand": "bash -lc 'cd /ros2_ws && colcon build --symlink-install'",
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "ms-vscode.cpptools",
+        "ms-iot.vscode-ros",
+        "redhat.vscode-yaml",
+        "ms-azuretools.vscode-docker"
+      ],
+      "settings": {
+        "python.defaultInterpreterPath": "/usr/bin/python3",
+        "terminal.integrated.defaultProfile.linux": "bash"
+      }
+    }
+  }
+}
