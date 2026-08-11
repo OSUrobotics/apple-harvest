@@ -281,7 +281,7 @@ class GripperPalmCamera(Node):
         frame_id = "gripper_palm_camera_optical_link"
         pa.header.stamp = now
         pa.header.frame_id = frame_id
-        
+
         # Project all of the points, even if they end up behind the camera
         for pose in msg.poses:
             pt[0] = pose.position.x
@@ -345,115 +345,6 @@ def main(args=None):
     rclpy.spin(camera_publisher)
     rclpy.shutdown()
 
-"""
-import rclpy
-from rclpy.node import Node
-import numpy as np
-import cv2
-from cv_bridge import CvBridge
-from sensor_msgs.msg import PointCloud2, Image, CameraInfo
-import sensor_msgs_py.point_cloud2 as pc2
 
-class PointCloudToCameraNode(Node):
-    def __init__(self):
-        super().__init__('pc_to_camera_sim')
-        self.bridge = CvBridge()
-        
-        # Camera configuration (640x480 resolution)
-        self.width = 640
-        self.height = 480
-        self.fx = 525.0  # Focal length X
-        self.fy = 525.0  # Focal length Y
-        self.cx = 320.0  # Principal point X
-        self.cy = 240.0  # Principal point Y
-
-        # Subscribers and Publishers
-        self.sub = self.create_subscription(PointCloud2, '/your_point_cloud_topic', self.pc_callback, 10)
-        self.img_pub = self.create_publisher(Image, '/usb_cam/image_raw', 10)
-        self.info_pub = self.create_publisher(CameraInfo, '/usb_cam/camera_info', 10)
-
-    def pc_callback(self, msg):
-        # 1. Read points from the cloud (assuming XYZ and intensity/RGB fields if available)
-        points = np.array(list(pc2.read_points(msg, field_names=("x", "y", "z"), skip_nans=True)))
-        if len(points) == 0:
-            return
-
-        # 2. Filter points that are behind the camera (Z <= 0)
-        valid_mask = points[:, 2] > 0.1
-        points = points[valid_mask]
-        
-        # 3. Project 3D points to 2D image coordinates
-        x, y, z = points[:, 0], points[:, 1], points[:, 2]
-        u = (x * self.fx / z) + self.cx
-        v = (y * self.fy / z) + self.cy
-
-        # 4. Map projections to image boundary limits
-        img = np.zeros((self.height, self.width, 3), dtype=np.uint8)
-        valid_pixels = (u >= 0) & (u < self.width) & (v >= 0) & (v < self.height)
-        
-        u_idx = u[valid_pixels].astype(int)
-        v_idx = v[valid_pixels].astype(int)
-        z_depth = z[valid_pixels]
-
-        # 5. Color pixels based on distance (or intensity)
-        norm_depth = cv2.normalize(z_depth, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
-        for i in range(len(u_idx)):
-            # Grayscale depth mapping for visualization
-            img[v_idx[i], u_idx[i]] = [norm_depth[i], norm_depth[i], norm_depth[i]]
-
-        # 6. Publish the image and info messages
-        timestamp = self.get_clock().now().to_msg()
-        
-        img_msg = self.bridge.cv2_to_imgmsg(img, encoding="bgr8")
-        img_msg.header = msg.header  # Match frame_id and timestamp
-        img_msg.header.stamp = timestamp
-        self.img_pub.publish(img_msg)
-
-        info_msg = CameraInfo()
-        info_msg.header = img_msg.header
-        info_msg.width = self.width
-        info_msg.height = self.height
-        info_msg.k = [self.fx, 0.0, self.cx, 0.0, self.fy, self.cy, 0.0, 0.0, 1.0]
-        self.info_pub.publish(info_msg)
-
-def main(args=None):
-    rclpy.init(args=args)
-    node = PointCloudToCameraNode()
-    rclpy.spin(node)
-    node.destroy_node()
-    rclpy.shutdown()
-
-if __name__ == '__main__':
-    main()
-
-import numpy as np
-from tf_transformations import quaternion_matrix, translation_matrix
-
-# Assuming 'transform_msg' is a geometry_msgs/msg/TransformStamped
-# Extract translation
-t = transform_msg.transform.translation
-trans_mat = translation_matrix([t.x, t.y, t.z])
-
-# Extract quaternion
-q = transform_msg.transform.rotation
-rot_mat = quaternion_matrix([q.x, q.y, q.z, q.w])
-
-# Construct the full 4x4 homogeneous transformation matrix
-homogeneous_matrix = np.dot(trans_mat, rot_mat)
-
-# 1. Define your array of points: shape (N, 3) where N is number of points
-# 2. Append 1s to make them homogeneous: shape (N, 4)
-points_3d = np.array([[x1, y1, z1], [x2, y2, z2]])
-ones = np.ones((points_3d.shape[0], 1))
-homogeneous_points = np.hstack((points_3d, ones))
-
-# 3. Apply the transformation
-# Transpose matrix because numpy expects column vectors: (4, 4) @ (4, N)
-transformed_homogeneous = np.dot(homogeneous_matrix, homogeneous_points.T)
-
-# 4. Extract just the 3D coordinates (back to shape N, 3)
-transformed_points = transformed_homogeneous[:3, :].T
-
-"""
 if __name__ == '__main__':
     main()

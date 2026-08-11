@@ -37,6 +37,10 @@ from ultralytics import YOLO
 import torch
 
 from enum import Enum
+from collections import deque
+from math import sqrt
+from scipy.optimize import linear_sum_assignment
+
 
 class LocalPlanner(Node):
     ### Control of state
@@ -45,7 +49,29 @@ class LocalPlanner(Node):
         CONSTELLATION_ALIGNMENT = 1
         BBOX_CENTERING = 2
         APPROACHING = 3
-        DONE = 4
+        BAILING = 4
+        DONE = 5
+
+    class RunningFilterStats:
+        def __init__(self, size: int, value: float = 0.0):
+            self.n = size
+            self.data = deque([value] * size, maxlen=size)
+            self.mean = value
+            self.variance = 0.0
+
+        def update(self, x: float) -> tuple[float, float]:
+            old_val = self.data[0]
+            # O(1) mean update
+            new_mean = self.mean + (x - old_val) / self.n
+            
+            # O(1) variance update using Welford-style sliding adjustment
+            self.variance += (x - old_val) * ((x - new_mean) + (old_val - self.mean)) / (self.n - 1)
+            
+            self.mean = new_mean
+            self.data.append(x)
+            
+            std_dev = sqrt(max(0.0, self.variance))
+            return self.mean, std_dev
 
     def __init__(self):
         super().__init__('local_planner_node')
@@ -111,7 +137,7 @@ class LocalPlanner(Node):
 
         # The apple locations produced by the apple prediction node and projected into the gripper frame
         self.last_projected_apple_locs = None
-        self.projected_apple_locs = None
+        self.projected_apple_locs = None        
         self.vec_proj_image_motion = [0, 0, 0]
 
         # Current target apple 
@@ -123,17 +149,22 @@ class LocalPlanner(Node):
         self.k = np.identity(3)
 
         # The ones from yolo
-        self.yolo_last_apple_centers = None  
-        self.yolo_last_apple_radii = []
         self.yolo_apple_centers = None  
         self.yolo_apple_radii = []
-        self.vec_yolo_image_motion = [0, 0]
         self.yolo_apple_index = -1
+        self.yolo_last_apple_centers = None  
+        self.yolo_last_apple_radii = []
         self.last_yolo_apple_index = -1
-
-        # Track alignment error
-        self.vec_align_error = np.zeros((0, 2))
-
+        self.vec_yolo_image_motion = [0, 0]
+        
+        # Track camera alignment error in x, y, and z with a smoothed average
+        self.vec_align_yolo_proj = None
+        # This is tracking how well yolo is matching from one frame to the next
+        self.vec_yolo_ee_match = None
+        self.yolo_match_error = None
+        self.aligned_depth = 0
+        self._init_error_tracking()
+        
         # Save the value of the current time of flight, averaged over time
         self.tof_depth = -1.0
 
@@ -171,29 +202,58 @@ class LocalPlanner(Node):
                                   [0, 0,0,10]]) * 2
         self.kf_pos.Q = np.eye(6) * 1
 
+    def _init_error_tracking(self):
+        self.vec_align_error = []
+        for _ in range(0, 3):
+            self.vec_align_error.append(self.RunningFilterStats(size=3, value= 0.0))
+
+        self.vec_yolo_ee_match = self.RunningFilterStats(size=5, value=0.0)
+        
+        self.yolo_match_error = []
+        for _ in range(0, 3):
+            self.yolo_match_error.append(self.RunningFilterStats(size=5, value=0.0))
+
+        self.aligned_depth = 0
+
+    def _init_yolo(self):
+        self.yolo_last_apple_centers = []
+        self.yolo_last_apple_radii = []
+        self.last_yolo_apple_index = -1
+
+        self.yolo_apple_centers = []
+        self.yolo_apple_radii = []
+        self.yolo_apple_index = -1
+
+        self.vec_yolo_image_motion = [0, 0]        
+
     # ================================================================== Service
+    def done(self):
+        if self.state is LocalPlanner.VisualServoState.DONE:
+            return True
+        if self.state is LocalPlanner.VisualServoState.IDLE:
+            return True
+        if self.state is LocalPlanner.VisualServoState.BAILING:
+            return True
+        return False
+        
     def start_sequence_srv_callback(self, request, response):
         # Starts servo node it it hasnt been started already
         self.get_logger().info("Activating servo node...")
         if not (self.state is LocalPlanner.VisualServoState.IDLE or self.state is LocalPlanner.VisualServoState.DONE):
             self.get_logger().warn(f"Starting Visual servo, but not in done or idle state {self.state.name}")
         
+        self.get_logger().info("Starting visual arm servoing...")
+
         self.state = LocalPlanner.VisualServoState.CONSTELLATION_ALIGNMENT
         self.stall_count = 0
         # Reset all of these
-        self.yolo_last_apple_centers = None
-        self.yolo_apple_centers = None
-        self.last_projected_apple_locs = None
-        self.projected_apple_locs = None
-        self.vec_proj_image_motion = [0, 0, 0]
-        self.vec_yolo_image_motion = [0, 0]
-        self.vec_align_error = np.zeros((0, 2))
-
-        self.get_logger().info("Starting visual arm servoing...")
-        # Servos until we are in front of apple
+        self._init_yolo()
+        self._init_error_tracking()
         self.init_kalman()
+
+        # Loop until done
         try:
-            while rclpy.ok() and self.start_flag:
+            while rclpy.ok() and not self.done():
                 self.get_logger().info("Servoing arm in front of apple...")
                 self.rate.sleep()
         except KeyboardInterrupt:
@@ -271,14 +331,16 @@ class LocalPlanner(Node):
             self.get_logger().warn(f"No valid depth estimate")
             return 10.0
 
-    # ================================================================== Scoring match functions
+    # ================================================================== error functions
     def _estimate_alignment_error(self):
         """Estimate how much the camera alignment is off in the image plane, and pick the best yolo box"""
         self.yolo_apple_index, vec_trans = self._match_points(self.projected_apple_locs[:, 0:2], self.yolo_apple_centers, self.current_apple_index)
 
-        alpha = 0.2
-        self.vec_align_error[0:2] = alpha * vec_trans + (1.0 - alpha) * self.vec_align_error[0:2]
+        # Running filter + mean/std of the error between the project points and the yolo bboxes
+        for indx in range(0, 2):
+            self.vec_align_error[indx].update(vec_trans[indx])
 
+        # See if one of the shifted projected points lies under the cone for the time of flight sensor
         pts_proj = np.array(shape=self.projected_apple_locs)
         pts_proj[:, 0] -= vec_trans[0]
         pts_proj[:, 1] -= vec_trans[1]
@@ -299,19 +361,29 @@ class LocalPlanner(Node):
         dist_y = pt[2] * np.cos(pt_ang[1])
         if dist_x < self.apple_width and dist_y < self.apple_width:
             self.get_loger().info(f"Updating depth estimate {self.get_depth()}")
-            self.vec_align_error[2] = alpha * self.get_depth() + (1.0 - alpha) * self.vec_align_error[2]
+            self.vec_align_error[2].update(self.get_depth() - pt[2])
+            self.aligned_depth += 1
 
-    def _score_match(self, pts1: list, pts1_vecs: np.array, pts2: list, pts2_vecs: np.array, match_index: list, missing: float = 0.0):
-        """ Score the match by how well the vectors between points match"""
-        score = 0.0
-        for indx, match in enumerate(match_index):
-            if match == -1:
-                score += missing
-                continue
+    def _score_match(self, pts1: list, pts2: list, vec_shift_pts1_to_pts2: list):
+        """ Score the match by how many points match (within 1/2 apple width in image)"""
+        dist_vals = np.zeros((len(pts1), len(pts2)))
+        for indx2, p2 in enumerate(pts2):
+            px = p2[0] - vec_shift_pts1_to_pts2[0]
+            py = p2[1] - vec_shift_pts1_to_pts2[1]
+            for indx1, p1 in enumerate(pts1):
+                diff_x = np.abs(p1[0] - px)
+                diff_y = np.abs(p1[1] - py)
+                dist_vals[indx1, indx2] = diff_x + diff_y
 
-            pt1 = pts1[indx]
-            pt2 = pts2[match]
-            for neigh in 
+        row_ind, col_ind = linear_sum_assignment(dist_vals)
+
+        # View the optimal matching results
+        print("Optimal Row Indices:", row_ind)  # Output: [0 1 2]
+        print("Optimal Col Indices:", col_ind)  # Output: [1 0 2]
+
+        # Calculate total minimum cost
+        width_apple = self.apple_width * self.k[0] / self.get_depth()
+        return np.count(dist_vals[row_ind, col_ind]) < width_apple
 
     def _match_points(self, pts1: np.array, pts2: np.array, indx_in_pts2: int):
         # Initialize the solver (handles missing points seamlessly via a probabilistic framework)
@@ -328,7 +400,59 @@ class LocalPlanner(Node):
 
         self.get_logger().info(f"Matching points, found {scale}, {rotation_matrix}, {translation_vector}")
         return pt2_indx, translation_vector
+            
+    def _update_error_metrics(self):
+        """Call once the yolo and projected apple locs have been updated.
+           Calculates cummulative error statistics"""
+        
+        # Yolo to projected points
+        self._estimate_alignment_error()
+        
+        # Yolo to yolo
+        if len(self.yolo_apple_centers) > 0 and len(self.yolo_last_apple_centers) > 0:
+            err_match = self._score_match(self.yolo_apple_centers, self.yolo_last_apple_centers, self.vec_yolo_image_motion)
+            err_match /= np.min(len(self.yolo_apple_centers), len(self.yolo_last_apple_centers))
+        else:
+            err_match = 0
+        # Put between 0 and 1
+        self.vec_yolo_ee_match.update(err_match)
+        self.get_logger().info(f"Match error yolo to yolo {err_match} of {len(self.yolo_apple_centers)}")
+
+        # Yolo to projected points
+        vec_move = (self.vec_align_yolo_proj[0].mean, self.self.vec_align_error[1].mean)
+        err_match = self._score_match(self.projected_apple_locs, self.yolo_apple_centers, vec_move)
+        self.yolo_match_error.update(err_match)
+        self.get_logger().info(f"Match error yolo to projected {err_match} of {len(self.yolo_apple_centers)}")
       
+    def _check_valid(self):
+        """Check the error metrics"""
+        if self.stall_count < 5:
+            # Just let run a bit
+            return True
+        if self.stall_count < 10:
+            if self.yolo_match_error.mean < 3 and len(self.projected_apple_locs) > 10:
+                self.get_logger().info(f"Bailing, not finding apples in gripper image {self.yolo_match_error} ")
+                return False
+            
+            for indx in range(0, 2):
+                if self.vec_align_error[indx].variance > self.apple_width:
+                    self.get_logger().info(f"Bailing, variance in yolo to project diff big variance {self.vec_align_error} ")
+                    return False
+            if self.vec_align_error[2].variance > 5 * self.apple_width:
+                self.get_logger().info(f"Bailing, variance in yolo to project diff big variance in depth {self.vec_align_error} ")
+                return False
+            
+        if self.stall_count < 20:
+            if self.state is LocalPlanner.VisualServoState.CONSTELLATION_ALIGNMENT:
+                self.get_logger().info(f"Bailing, not centering on apple")
+                return False
+
+        if self.stall_count > 3 and self.state is not LocalPlanner.VisualServoState.APPROACHING:
+            if self.vec_yolo_ee_match.mean < 0.5:
+                self.get_logger().info(f"Bailing, not getting good yolo to yolo match")
+                return False
+        return True
+        
     # ================================================================== YOLO
     def _estimate_image_movement_from_yolo(self):
         """Find the best match between the last yolo boxes and this one, and calculate an estimated shift"""
@@ -399,6 +523,8 @@ class LocalPlanner(Node):
             # Average along the rows
             self.vec_proj_image_motion = diff.mean(axis=0)
             self.get_logger().info(f"Projected image motion {self.vec_proj_image_motion}")
+        else:
+            self.get_logger().info(f"Projected image motion point set different sizes {self.last_projected_apple_locs.shape[0]}")
 
     def _aligned_xy_and_depth(self, image, distance: float):
         """ Return True if xy is within a threshold and close enough"""
@@ -524,13 +650,32 @@ class LocalPlanner(Node):
     
     def rgb_servoing_callback(self, rgb):
         """ Called when we get a new camera image. If we're not idle/done we do the following
-        Calculate the difference (in image space) from the last projected points to the current ones
-        Run yolo and try to match the old boxes to the new ones (also calculates an image space difference)
-        If the stars <sic> are aligned, then the image space motion of both of those should be the same
-        If we're just starting, we've lost alignment, or there's no good bbox match for a few frames,
-           do a full match between the projected points and the yolo ones
-        Otherwise, we can assume the match is still correct and just propagate the current apple center
-        Also track an estimate of the mis-alignment between the point cloud and it's projection on the image plane"""
+        Calculate the new yolo bounding boxes
+          - Find the shift between the new boxes and the old ones (via a match)
+        Calculate the estimated shift between the last set of projected points and this one (should mirror EE motion)
+        Calculate the estimated shift between the yolo bboxes and the projected points (2D from bboxes, 3D from tof)
+        If there is both a yolo bbox over the center of the image and a projected point over the center
+          - Can estimate the depth from the time of flight
+          - Assumes bbox/projected point is in the cone of the time of flight (estimate depth from 3D pc)
+        If the stars <sic> are aligned, then the following should hold:
+          - The image-space motion of the yolo bboxes should match the image-space motion of the projected points
+          - The 3D alignment between the yolo boxes and the projected points should be within a few apple widths
+          - When the camera is pointing at the selected apple (accounting for alignment error) then there should be
+               - A yolo bbox somewhat centered in the image
+               - Depth values from the TOF that are roughly correct (in the expected plane of the tree)
+        Motion plan
+          - If still in the alignment stage, then move the camera in a zig-zag or box (xy change only) keeping the 
+             projected apple location in the center-ish. 
+              - eye in hand camera should be far enough back (0.25 m is a good estimate for a 90 degree fov camera) to see
+                  approx 5 apples spaced 2 inches apart on 2 different wires space 18 inches apart
+              - If yolo box motion is not roughly projected point motion, something is really wrong
+          - During alignment and approach, should have 
+               - estimated apple location (with offset vector) in center of frame
+               - a bbox in center of frame (at least until too close)
+               - decreasing distance
+        Error assumptions
+          - Use width of apple projected into image plane (subtended angle) as overall normalization factor
+          - Depth from point cloud/apple locations is broadly correct"""
 
         # Run YOLO to get all bounding boxes    
         self._run_yolo(rgb)
