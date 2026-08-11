@@ -169,6 +169,14 @@ def generate_launch_description():
             'use_sim_time': LaunchConfiguration('use_sim_time'),
             }],
     )
+    sweep_controller = Node(
+        package='harvest_control',
+        executable='sweep_controller.py',
+        name='sweep_controller',
+        parameters=[{
+            'use_sim_time': LaunchConfiguration('use_sim_time'),
+            }],
+    )
     recorder = Node(
         package='harvest', 
         executable='record.py', 
@@ -191,6 +199,7 @@ def generate_launch_description():
             tf_listener,
             pressure_avg,
             pull_twist,
+            sweep_controller,
             recorder,
         ]
     )

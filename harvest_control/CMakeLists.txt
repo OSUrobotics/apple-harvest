@@ -58,6 +58,8 @@ install(PROGRAMS
   scripts/pose_listener.py
   scripts/pressure_averager.py
   scripts/pull_twist_controller.py
+  scripts/sweep_controller.py
+  scripts/test_sweep.py
   scripts/visual_servo.py
   scripts/stiffness_controller.py
   DESTINATION lib/${PROJECT_NAME}

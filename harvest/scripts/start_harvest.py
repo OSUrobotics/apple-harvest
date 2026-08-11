@@ -15,6 +15,7 @@ from controller_manager_msgs.srv import SwitchController
 from rclpy.action import ActionClient
 from action_msgs.msg import GoalStatus
 from harvest_interfaces.action import EventDetection
+from std_msgs.msg import Bool, Float64
 
 # Python 
 import numpy as np
@@ -54,10 +55,6 @@ class StartHarvest(Node):
         self.batch_dir = self.storage_directory + '/batch/'
         self.batch_number = 0
 
-        # Load pre-saved apple locations
-        apple_loc_path = os.path.join(self.storage_directory, 'apple_locations/')
-        self.pre_saved_apple_locations = self.read_apple_locations(apple_loc_path)
-
         # Declare parameters with defaults
         self.declare_parameter('pick_pattern', 'force-heuristic')
         self.declare_parameter('event_sensitivity', 0.43)
@@ -66,9 +63,10 @@ class StartHarvest(Node):
         self.declare_parameter('enable_recording', True)
         self.declare_parameter('enable_visual_servo', True)
         self.declare_parameter('enable_apple_prediction', True)
-        self.declare_parameter('enable_pressure_servo', True)    
-        self.declare_parameter('enable_picking', True)           
+        self.declare_parameter('enable_pressure_servo', True)
+        self.declare_parameter('enable_picking', True)
         self.declare_parameter('optimal_trajectory', True)
+        self.declare_parameter('sweep_theta_deg', 90.0)
 
         # Retrieve parameter values
         self.PICK_PATTERN = self.get_parameter('pick_pattern').get_parameter_value().string_value
@@ -80,14 +78,22 @@ class StartHarvest(Node):
         self.enable_apple_prediction = self.get_parameter('enable_apple_prediction').get_parameter_value().bool_value
         self.enable_pressure_servo = self.get_parameter('enable_pressure_servo').get_parameter_value().bool_value 
         self.enable_picking = self.get_parameter('enable_picking').get_parameter_value().bool_value 
-        self.use_optimal_trajectory = self.get_parameter('optimal_trajectory').get_parameter_value().bool_value 
+        self.use_optimal_trajectory = self.get_parameter('optimal_trajectory').get_parameter_value().bool_value
+        self.SWEEP_THETA_DEG = self.get_parameter('sweep_theta_deg').get_parameter_value().double_value
+
+        if not self.enable_apple_prediction:
+            self.get_logger().warn(
+                "Apple prediction is disabled; pre-saved apple locations will be used instead.")
+            # Load pre-saved apple locations
+            apple_loc_path = os.path.join(self.storage_directory, 'apple_locations/')
+            self.pre_saved_apple_locations = self.read_apple_locations(apple_loc_path)
 
         # Helper clients
         self.switch_controller_client = self.make_client(SwitchController, '/controller_manager/switch_controller')
         self.start_servo_client = self.make_client(Trigger, '/servo_node/start_servo')
         self.configure_servo_cli = self.make_client(SetParameters, '/servo_node/set_parameters')
         self.start_move_arm_to_home_client = self.make_client(Trigger, '/move_arm_to_home')
-        self.coord_to_traj_client = self.make_client(CoordinateToTrajectory, 'coordinate_to_trajectory')
+        # self.coord_to_traj_client = self.make_client(CoordinateToTrajectory, 'coordinate_to_trajectory')
         self.trigger_arm_mover_client = self.make_client(SendTrajectory, 'send_arm_trajectory')
         self.trigger_move_arm_to_pose_client =  self.make_client(MoveToPose, 'move_arm_to_pose')
         # self.get_gripper_pose_client = self.make_client(GetGripperPose, 'get_gripper_pose')
@@ -106,15 +112,35 @@ class StartHarvest(Node):
             self.grasp_controller_client = self.make_client(Trigger, 'grasp_apple')
             self.release_controller_client = self.make_client(Trigger, 'release_apple')
         if self.enable_picking:
-            self.start_controller_cli = self.make_client(Empty, 'start_controller')
-            self.start_stiffness_controller_cli = self.make_client(Empty, 'start_stiffness_controller')
-            self.stop_controller_cli = self.make_client(Empty, 'stop_controller')
-            self.stop_stiffness_controller_cli = self.make_client(Empty, 'stop_stiffness_controller')
-            self.pull_twist_start_cli = self.make_client(Empty, 'pull_twist/start_controller')
-            self.pull_twist_stop_cli = self.make_client(Empty, 'pull_twist/stop_controller')
-            self.linear_pull_start_cli = self.make_client(Empty, 'linear/start_controller')
-            self.linear_pull_stop_cli = self.make_client(Empty, 'linear/stop_controller')
-            self.set_goal_cli = self.make_client(SetValue, 'set_goal')
+            # Only stand up clients (and wait on their services) for the selected pick_pattern
+            if self.PICK_PATTERN == 'force-heuristic':
+                self.start_controller_cli = self.make_client(Empty, 'start_controller')
+                self.stop_controller_cli = self.make_client(Empty, 'stop_controller')
+                self.set_goal_cli = self.make_client(SetValue, 'set_goal')
+            elif self.PICK_PATTERN == 'pull-twist':
+                self.pull_twist_start_cli = self.make_client(Empty, 'pull_twist/start_controller')
+                self.pull_twist_stop_cli = self.make_client(Empty, 'pull_twist/stop_controller')
+            elif self.PICK_PATTERN == 'linear-pull':
+                self.linear_pull_start_cli = self.make_client(Empty, 'linear/start_controller')
+                self.linear_pull_stop_cli = self.make_client(Empty, 'linear/stop_controller')
+            elif self.PICK_PATTERN == 'sweep':
+                self.sweep_start_cli = self.make_client(Trigger, 'sweep/start_controller')
+                self.sweep_stop_cli = self.make_client(Empty, 'sweep/stop_controller')
+                self.sweep_set_theta_cli = self.make_client(SetValue, 'sweep/set_theta_deg')
+                self.sweep_running = False
+                self.sweep_tracking_error = None
+                self.sweep_subscription = self.create_subscription(
+                    Bool, '/sweep/status', self.sweep_status_callback, 10)
+                self.sweep_error_subscription = self.create_subscription(
+                    Float64, '/sweep/tracking_error', self.sweep_error_callback, 10)
+            elif self.PICK_PATTERN == 'stiffness-seeking':
+                self.start_stiffness_controller_cli = self.make_client(Empty, 'start_stiffness_controller')
+                self.stop_stiffness_controller_cli = self.make_client(Empty, 'stop_stiffness_controller')
+            else:
+                self.get_logger().warn(
+                    f"Unknown pick_pattern '{self.PICK_PATTERN}' -- no pick-controller "
+                    f"services will be started; pick_controller() will no-op.")
+
             self._event_client = ActionClient(self, EventDetection, 'event_detection')
             self.status = GoalStatus.STATUS_EXECUTING
 
@@ -140,7 +166,8 @@ class StartHarvest(Node):
         ]
         self.pick_controller_topics = [
             '/gripper/pressure','/gripper/distance','/joint_states',
-            '/tool_pose','/force_torque_sensor_broadcaster/wrench','/servo_node/delta_twist_cmds'
+            '/tool_pose','/force_torque_sensor_broadcaster/wrench','/servo_node/delta_twist_cmds',
+            '/sweep/status','/sweep/tracking_error'
         ]
         self.pressure_servo_and_pick_controller_topics = list(set(self.pressure_servo_topics + self.pick_controller_topics))
 
@@ -231,6 +258,19 @@ class StartHarvest(Node):
         future = self.get_gripper_pose_client.call_async(request)
         rclpy.spin_until_future_complete(self, future) 
         return future.result().point
+
+    def sweep_status_callback(self, msg):
+        self.sweep_running = msg.data
+
+    def sweep_error_callback(self, msg):
+        self.sweep_tracking_error = msg.data
+
+    def set_sweep_theta(self, theta_deg):
+        request = SetValue.Request()
+        request.val = theta_deg
+        self.future = self.sweep_set_theta_cli.call_async(request)
+        rclpy.spin_until_future_complete(self, self.future)
+        return self.future.result()
 
     def wait_for_srv(self, srv):
         #service waiter because Miranda is lazy :3
@@ -428,7 +468,36 @@ class StartHarvest(Node):
             time.sleep(stop_time)
             self.future = self.linear_pull_stop_cli.call_async(req)
             rclpy.spin_until_future_complete(self, self.future)
-            
+
+        elif self.PICK_PATTERN == 'sweep':
+            theta_result = self.set_sweep_theta(self.SWEEP_THETA_DEG)
+            if not (theta_result and theta_result.success):
+                self.get_logger().error(
+                    f"failed to set sweep theta to {self.SWEEP_THETA_DEG} deg -- "
+                    f"continuing with sweep_controller's current value")
+
+            self.sweep_tracking_error = None
+            self.future = self.sweep_start_cli.call_async(Trigger.Request())
+            rclpy.spin_until_future_complete(self, self.future)
+
+            if not self.future.result().success:
+                self.get_logger().error(
+                    f"sweep failed to start: {self.future.result().message}")
+            else:
+                # wait for sweep_controller to report it has started...
+                while not self.sweep_running:
+                    rclpy.spin_once(self, timeout_sec=0.1)
+                # ...then wait for it to report it has finished
+                while self.sweep_running:
+                    rclpy.spin_once(self, timeout_sec=0.1)
+                    if self.sweep_tracking_error is not None:
+                        self.get_logger().info(
+                            f'sweep tracking error: {self.sweep_tracking_error:.4f}',
+                            throttle_duration_sec=0.5)
+
+            self.future = self.sweep_stop_cli.call_async(req)  # idempotent safety call
+            rclpy.spin_until_future_complete(self, self.future)
+
         elif self.PICK_PATTERN == 'stiffness-seeking':
             stop_time = 5
             self.future = self.start_stiffness_controller_cli.call_async(req)
