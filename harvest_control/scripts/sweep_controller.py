@@ -179,10 +179,7 @@ class SweepController(Node):
         self.stop_service = self.create_service(Empty, 'sweep/stop_controller', self.stop)
         self.set_theta_service = self.create_service(SetValue, 'sweep/set_theta_deg', self.set_theta)
 
-        # Without this, the self.* attributes above are frozen at the values
-        # read during __init__ -- a `ros2 param set` after launch updates
-        # what the parameter server reports back, but nothing re-reads it, so
-        # the timer/service callbacks keep using the launch-time values.
+        # --- Live parameter updates ----
         self.add_on_set_parameters_callback(self._on_param_update)
 
     # ---- Parameters ----
@@ -193,40 +190,40 @@ class SweepController(Node):
         in-progress sweep were already fixed by start()."""
         for p in params:
             if p.name == 'pivot_tool_z':
-                self.pivot_tool_z = p.value.double_value
+                self.pivot_tool_z = p.value
             elif p.name == 'pivot_world_z':
-                self.pivot_world_z = p.value.double_value
+                self.pivot_world_z = p.value
             elif p.name == 'forward_axis_body':
-                arr = np.array(p.value.double_array_value)
+                arr = np.array(p.value)
                 if arr.shape != (3,):
                     return SetParametersResult(
                         successful=False,
                         reason='forward_axis_body must have exactly 3 elements')
                 self.forward_axis_body = arr
             elif p.name == 'theta_deg':
-                self.theta = np.deg2rad(p.value.double_value)
+                self.theta = np.deg2rad(p.value)
             elif p.name == 'duration':
-                if p.value.double_value <= 0.0:
+                if p.value <= 0.0:
                     return SetParametersResult(successful=False, reason='duration must be > 0')
-                self.duration = p.value.double_value
+                self.duration = p.value
             elif p.name == 'rate_hz':
-                if p.value.double_value <= 0.0:
+                if p.value <= 0.0:
                     return SetParametersResult(successful=False, reason='rate_hz must be > 0')
-                self.dt = 1.0 / p.value.double_value
+                self.dt = 1.0 / p.value
                 self.destroy_timer(self.timer)
                 self.timer = self.create_timer(self.dt, self.timer_callback)
             elif p.name == 'kp_lin':
-                self.kp_lin = p.value.double_value
+                self.kp_lin = p.value
             elif p.name == 'kp_ang':
-                self.kp_ang = p.value.double_value
+                self.kp_ang = p.value
             elif p.name == 'error_pause_threshold':
-                self.error_pause_threshold = p.value.double_value
+                self.error_pause_threshold = p.value
             elif p.name == 'max_duration':
-                self.max_duration = p.value.double_value
+                self.max_duration = p.value
             elif p.name == 'base_frame':
-                self.base_frame = p.value.string_value
+                self.base_frame = p.value
             elif p.name == 'gripper_tip_frame':
-                self.gripper_tip_frame = p.value.string_value
+                self.gripper_tip_frame = p.value
         return SetParametersResult(successful=True)
 
     # ---- Services ----
