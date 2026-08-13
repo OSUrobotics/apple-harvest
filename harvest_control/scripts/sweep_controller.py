@@ -36,6 +36,7 @@ from geometry_msgs.msg import TwistStamped
 from std_msgs.msg import Bool, Float64
 from std_srvs.srv import Empty, Trigger
 from harvest_interfaces.srv import SetValue
+from rcl_interfaces.msg import SetParametersResult
 from scipy.spatial.transform import Rotation
 from tf2_ros import Buffer, TransformListener
 from tf2_ros import LookupException, ConnectivityException, ExtrapolationException
@@ -114,7 +115,7 @@ class SweepController(Node):
         self.declare_parameter('pivot_tool_z', 0.04)   # m, along the tool's local z-axis
         self.declare_parameter('pivot_world_z', 0.08)  # m, straight up in world Z
         self.declare_parameter('forward_axis_body', [0.0, 0.0, 1.0])  # gripper's pointing axis
-        self.declare_parameter('theta_deg', 90.0)
+        self.declare_parameter('theta_deg', 45.0)
         self.declare_parameter('duration', 8.0)
         self.declare_parameter('rate_hz', 100.0)
         self.declare_parameter('kp_lin', 4.0)
@@ -177,6 +178,56 @@ class SweepController(Node):
         self.start_service = self.create_service(Trigger, 'sweep/start_controller', self.start)
         self.stop_service = self.create_service(Empty, 'sweep/stop_controller', self.stop)
         self.set_theta_service = self.create_service(SetValue, 'sweep/set_theta_deg', self.set_theta)
+
+        # Without this, the self.* attributes above are frozen at the values
+        # read during __init__ -- a `ros2 param set` after launch updates
+        # what the parameter server reports back, but nothing re-reads it, so
+        # the timer/service callbacks keep using the launch-time values.
+        self.add_on_set_parameters_callback(self._on_param_update)
+
+    # ---- Parameters ----
+
+    def _on_param_update(self, params):
+        """Live-apply `ros2 param set` changes to the cached self.* attributes.
+        Only affects sweeps started *after* the change -- p0/R0/c/k_hat for an
+        in-progress sweep were already fixed by start()."""
+        for p in params:
+            if p.name == 'pivot_tool_z':
+                self.pivot_tool_z = p.value.double_value
+            elif p.name == 'pivot_world_z':
+                self.pivot_world_z = p.value.double_value
+            elif p.name == 'forward_axis_body':
+                arr = np.array(p.value.double_array_value)
+                if arr.shape != (3,):
+                    return SetParametersResult(
+                        successful=False,
+                        reason='forward_axis_body must have exactly 3 elements')
+                self.forward_axis_body = arr
+            elif p.name == 'theta_deg':
+                self.theta = np.deg2rad(p.value.double_value)
+            elif p.name == 'duration':
+                if p.value.double_value <= 0.0:
+                    return SetParametersResult(successful=False, reason='duration must be > 0')
+                self.duration = p.value.double_value
+            elif p.name == 'rate_hz':
+                if p.value.double_value <= 0.0:
+                    return SetParametersResult(successful=False, reason='rate_hz must be > 0')
+                self.dt = 1.0 / p.value.double_value
+                self.destroy_timer(self.timer)
+                self.timer = self.create_timer(self.dt, self.timer_callback)
+            elif p.name == 'kp_lin':
+                self.kp_lin = p.value.double_value
+            elif p.name == 'kp_ang':
+                self.kp_ang = p.value.double_value
+            elif p.name == 'error_pause_threshold':
+                self.error_pause_threshold = p.value.double_value
+            elif p.name == 'max_duration':
+                self.max_duration = p.value.double_value
+            elif p.name == 'base_frame':
+                self.base_frame = p.value.string_value
+            elif p.name == 'gripper_tip_frame':
+                self.gripper_tip_frame = p.value.string_value
+        return SetParametersResult(successful=True)
 
     # ---- Services ----
 
