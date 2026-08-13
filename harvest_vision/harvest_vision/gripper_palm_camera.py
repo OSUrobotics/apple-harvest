@@ -14,20 +14,22 @@ import sensor_msgs_py.point_cloud2 as pc2
 from rclpy.qos import (QoSProfile,
     ReliabilityPolicy, HistoryPolicy, DurabilityPolicy,
 )
+from std_msgs.msg import Header
 
 # Image processing
 from cv_bridge import CvBridge
 import cv2
 import numpy as np
 
+
 class GripperPalmCamera(Node):
     def __init__(self, resolution=(800, 600), target_fr=30):
         super().__init__("gripper_palm_camera_publisher")
 
-        # For virtual camera
+        # For virtual camera or real one
         self.declare_parameter("use_fake_hardware", False)
         
-        # image publisher - the actual image from the camera
+        # If we're using fake hardware then only publish new image when end effector moves
         if self.get_parameter('use_fake_hardware').value:
             qos_profile = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT,
                                                            durability=DurabilityPolicy.TRANSIENT_LOCAL,
@@ -55,32 +57,37 @@ class GripperPalmCamera(Node):
         self.device = self.get_parameter("palm_camera_device_num").get_parameter_value().integer_value
         self.camera = None
 
-        # Where are we getting the point cloud from?
+        # which camera frame are we getting the point cloud from? (usually mast or down low one)
         self.source_frame = self.get_parameter("source_frame").value
                 
-        # Where are we in space?
+        # End effector location, for generating point cloud image
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
         
-        # Listen for 3D marker locations (project them into current camera frame)
+        # Listen for 3D marker locations. These will be projected into the image and published as another set of points
+        #  at the same time as the new image comes in
         self.create_subscription(PoseArray, "apple_poses", self.project_image_frame_callback, 10)
 
-        # Keep the projected centers and publish them
+        # Keep the projected centers and publish them whenever there's a new image
         self.apple_locs = []
         self.apple_loc_pub = self.create_publisher(PoseArray, "gripper/apple_locs", qos_profile=qos_profile)
 
-        # Check the pose every frame rate second
+        # This is for producing the 3d point cloud projected image and (if fake hardware) also generating the fake camera image
         timer_hz = 1.0 / self.get_parameter('target_frame_rate').value
         self.get_logger().info(f"Setting callback rate as {timer_hz}")
-        self.pose_timer = self.create_timer(timer_hz, self.pose_timer_callback)
+        self.projected_image_timer = self.create_timer(timer_hz, self.projected_image_timer_callback)
+        # Just use the last image if the arm is not moving and doing fake hardware
+        self.last_projected_image: np.array = None
         self.current_pose: TransformStamped = None
+        # If there is a point cloud that we're projecting from this camera viewpoint...
+        self.point_cloud: PointCloud2 = None
 
         # camera setup
         if self.get_parameter('use_fake_hardware').value:
             # Grab the data from the point cloud
             self.sub = self.create_subscription(PointCloud2, '/rgbd_pointcloud', self.pc_callback, 10)
-            # Publish camera info - needed for visual servo (what is the camra angle?)
-            self.cam_info_pub = self.create_publisher(CameraInfo, '/gripper/rgb_palm_camera/camera_info', 10)
+            # Publish camera info - needed for visual servo (needs the k matrix)
+            self.cam_info_pub = self.create_publisher(CameraInfo, '/gripper/rgb_palm_camera/camera_info', 2)
             self.resolution = resolution
             focal = 0.5 * (resolution[0] + resolution[1])
             self.fx = focal  # Focal length X - square pixels
@@ -88,7 +95,7 @@ class GripperPalmCamera(Node):
             self.cx = resolution[0] / 2.0
             self.cy = resolution[1] / 2.0
             self.get_logger().info(f"Started virtual camera, resolution {resolution} {self.fx}, {self.fy}")
-            self.point_cloud = None
+            self.published_camera_info = False
         else:
             camera_setup_result = self.create_camera()
             if not camera_setup_result:
@@ -96,8 +103,8 @@ class GripperPalmCamera(Node):
             else:
                 self.get_logger().info("Succesfully setup camera with device number: {0}".format(self.device)) 
 
-        
     def create_camera(self):
+        """ See if there's a real camera out there on the gripper """
         try: 
             self.camera = cv2.VideoCapture(self.device, cv2.CAP_V4L2)
             self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, self.get_parameter('resolution')[0])
@@ -121,6 +128,8 @@ class GripperPalmCamera(Node):
                     img_msg.header.stamp = self.get_clock().now().to_msg()
                     img_msg.header.frame_id = "gripper_palm_camera_optical_link"
                     self.camera_pub.publish(img_msg)
+                    if self.point_cloud is not None:
+                        self._publish_projection_image()
         except KeyboardInterrupt:
             return
         cv2.destroyAllWindows()
@@ -147,32 +156,34 @@ class GripperPalmCamera(Node):
                     
         return pos_match and rot_match
 
-    def pose_timer_callback(self):
+    def projected_image_timer_callback(self):
         to_frame = self.source_frame
         from_frame = 'gripper_palm_camera_optical_link'
+
+        if self.point_cloud is None:
+            return
         
         try:
-            # Look up the transform from to_frame to from_frame
-            t = self.tf_buffer.lookup_transform(from_frame, to_frame, rclpy.time.Time())
+            new_pose = self.tf_buffer.transform(from_frame, to_frame, rclpy.duration.Duration(seconds=1))
+
             b_changed = False
             if self.current_pose != None:
-                if not self._is_transform_equivalent(t, self.current_pose):
+                if not self._is_transform_equivalent(new_pose, self.current_pose):
                     b_changed = True
             else:
                 b_changed = True
 
-            self.current_pose = t
+            self.current_pose = new_pose
             if b_changed:
-                p = t.transform.translation
-                r = t.transform.rotation
+                p = new_pose.transform.translation
+                r = new_pose.transform.rotation
                 self.get_logger().info(f"Pose changed {p.x:0.2f} {p.y:0.2f} {p.z:0.2f} {r.w:0.2f}")
-                self._publish_projection_image()
 
-            #self.get_logger().info(
-            #    f'Pose -> Translation: X={t.transform.translation.x}, '
-            #    f'Y={t.transform.translation.y}, Z={t.transform.translation.z}'
-            #    f'Rotation={t.transform.rotation}'
-            #)
+                header = Header()
+                header.frame_id = self.source_frame
+                header.stamp = self.get_clock().now().to_msg()
+                self._publish_projection_image(header=header)
+
         except TransformException as ex:
             self.get_logger().info(f'Could not transform {to_frame} to {from_frame}: {ex}')
 
@@ -195,7 +206,8 @@ class GripperPalmCamera(Node):
         homogeneous_matrix[0:3, 3] = [t.x, t.y, t.z]
         return homogeneous_matrix
 
-    def _publish_projection_image(self):
+    def _publish_projection_image(self, header: Header):
+        """ Publish both the point cloud projected to this camera (if available) and the 3D points projected to this camera"""
         if self.current_pose == None:
             return
         if self.point_cloud is None:
@@ -247,12 +259,12 @@ class GripperPalmCamera(Node):
         # 6. Publish the image and info messages        
         cv2.imwrite('check.png', img)
         img_msg = self.bridge.cv2_to_imgmsg(img, encoding="bgr8")
-        
+
+        img_msg.header = header
         img_msg.header.frame_id = "gripper_palm_camera_optical_link"
-        img_msg.header.stamp = self.get_clock().now().to_msg()
         self.proj_im_pub.publish(img_msg)
 
-        if self.get_parameter('use_fake_hardware').value:
+        if self.get_parameter('use_fake_hardware').value and not self.published_camera_info:
             info_msg = CameraInfo()
             info_msg.header.stamp = self.get_clock().now().to_msg()
             info_msg.header.frame_id = "gripper_palm_camera_optical_link"
@@ -263,6 +275,7 @@ class GripperPalmCamera(Node):
 
             # And the fake image
             self.camera_pub.publish(img_msg)
+            self.published_camera_info = True
 
         self.get_logger().info("Done")
         
@@ -335,7 +348,7 @@ class GripperPalmCamera(Node):
 
         self.point_cloud = {"points": np.ones((4, len(points))), "colors": np.array(colors)}
         self.point_cloud["points"][0:3, :] = np.array(points).transpose()
-        self._publish_projection_image()
+        self._publish_projection_image(header=msg.header)
 
 
 def main(args=None):
