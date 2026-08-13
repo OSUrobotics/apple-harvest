@@ -38,8 +38,10 @@ from std_msgs.msg import Bool, Float64, Int8
 from sensor_msgs.msg import JointState
 from rcl_interfaces.msg import Parameter, ParameterValue, ParameterType
 from rcl_interfaces.srv import SetParameters
-from controller_manager_msgs.srv import SwitchController
+from controller_manager_msgs.srv import SwitchController, ListControllers
 
+
+TRAJ_CONTROLLER_CANDIDATES = ('scaled_joint_trajectory_controller', 'joint_trajectory_controller')
 
 SERVO_STATUS_NAMES = {
     -1: 'INVALID',
@@ -59,6 +61,11 @@ class TestSweep(Node):
 
         self.switch_controller_client = self.make_client(
             SwitchController, '/controller_manager/switch_controller')
+        self.list_controllers_client = self.make_client(
+            ListControllers, '/controller_manager/list_controllers')
+        self.traj_controller_name = self.detect_active_trajectory_controller()
+        self.get_logger().info(
+            f"Detected active trajectory controller: {self.traj_controller_name}")
         self.start_servo_client = self.make_client(Trigger, '/servo_node/start_servo')
         self.configure_servo_cli = self.make_client(SetParameters, '/servo_node/set_parameters')
         self.sweep_start_cli = self.make_client(Trigger, 'sweep/start_controller')
@@ -78,6 +85,25 @@ class TestSweep(Node):
         while not client.wait_for_service(timeout_sec=1.0):
             self.get_logger().info(f"Waiting for service '{name}', retrying...")
         return client
+
+    def call_service(self, client, request, timeout_sec=3.0, retries=5):
+        for attempt in range(1, retries + 1):
+            future = client.call_async(request)
+            rclpy.spin_until_future_complete(self, future, timeout_sec=timeout_sec)
+            if future.done():
+                result = future.result()
+                if result is not None:
+                    return result
+                self.get_logger().warn(
+                    f"Call to '{client.srv_name}' completed with no result "
+                    f"(attempt {attempt}/{retries}); retrying...")
+            else:
+                future.cancel()
+                self.get_logger().warn(
+                    f"Call to '{client.srv_name}' timed out after "
+                    f"{timeout_sec}s (attempt {attempt}/{retries}); retrying...")
+        raise RuntimeError(
+            f"Call to '{client.srv_name}' failed after {retries} attempts")
 
     def _status_cb(self, msg):
         self.sweep_running = msg.data
@@ -99,32 +125,47 @@ class TestSweep(Node):
                 self.get_logger().warn(f'  joint_states at that instant: {joints}')
         self._last_servo_status = msg.data
 
+    def detect_active_trajectory_controller(self):
+        result = self.call_service(self.list_controllers_client, ListControllers.Request())
+        by_name = {c.name: c.state for c in result.controller}
+
+        for name in TRAJ_CONTROLLER_CANDIDATES:
+            if by_name.get(name) == 'active':
+                return name
+
+        # Fall back to whichever candidate is at least known/loaded, so the
+        # rest of the script has a name to switch to/from.
+        for name in TRAJ_CONTROLLER_CANDIDATES:
+            if name in by_name:
+                self.get_logger().warn(
+                    f"Neither trajectory controller is active; defaulting to "
+                    f"'{name}' (state: {by_name[name]}).")
+                return name
+
+        raise RuntimeError(
+            f"None of {TRAJ_CONTROLLER_CANDIDATES} found in "
+            f"/controller_manager/list_controllers: {sorted(by_name)}")
+
     def switch_controller(self, to_servo):
         req = SwitchController.Request()
         if to_servo:
             req.activate_controllers = ['forward_position_controller']
-            req.deactivate_controllers = ['joint_trajectory_controller']
+            req.deactivate_controllers = [self.traj_controller_name]
         else:
-            req.activate_controllers = ['joint_trajectory_controller']
+            req.activate_controllers = [self.traj_controller_name]
             req.deactivate_controllers = ['forward_position_controller']
         req.timeout = rclpy.duration.Duration(seconds=5.0).to_msg()
         req.strictness = SwitchController.Request.BEST_EFFORT
-        future = self.switch_controller_client.call_async(req)
-        rclpy.spin_until_future_complete(self, future)
-        return future.result()
+        return self.call_service(self.switch_controller_client, req)
 
     def start_servo(self):
-        future = self.start_servo_client.call_async(Trigger.Request())
-        rclpy.spin_until_future_complete(self, future)
-        return future.result()
+        return self.call_service(self.start_servo_client, Trigger.Request())
 
     def configure_servo_frame(self, frame):
         req = SetParameters.Request()
         val = ParameterValue(type=ParameterType.PARAMETER_STRING, string_value=frame)
         req.parameters = [Parameter(name='moveit_servo.robot_link_command_frame', value=val)]
-        future = self.configure_servo_cli.call_async(req)
-        rclpy.spin_until_future_complete(self, future)
-        return future.result()
+        return self.call_service(self.configure_servo_cli, req)
 
     def run(self):
         self.get_logger().info('Switching to forward_position_controller...')
@@ -145,9 +186,7 @@ class TestSweep(Node):
             self.get_logger().info('robot_link_command_frame set to base_link (confirmed).')
 
         self.get_logger().info('Triggering sweep...')
-        future = self.sweep_start_cli.call_async(Trigger.Request())
-        rclpy.spin_until_future_complete(self, future)
-        result = future.result()
+        result = self.call_service(self.sweep_start_cli, Trigger.Request())
 
         if not result.success:
             self.get_logger().error(f'Sweep failed to start: {result.message}')
@@ -165,7 +204,7 @@ class TestSweep(Node):
 
         self.sweep_stop_cli.call_async(Empty.Request())  # idempotent safety call
 
-        self.get_logger().info('Switching back to joint_trajectory_controller...')
+        self.get_logger().info(f'Switching back to {self.traj_controller_name}...')
         self.switch_controller(to_servo=False)
 
 
