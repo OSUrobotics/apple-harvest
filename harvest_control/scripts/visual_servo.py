@@ -84,11 +84,11 @@ class LocalPlanner(Node):
         qos_profile = rclpy.qos.qos_profile_sensor_data
 
         # This is the actual palm camera (fake or real)
-        self.camera_subscription = message_filters.Subscriber(Image, 'gripper/rgb_palm_camera/image_raw', qos_profile)
+        self.camera_subscription = message_filters.Subscriber(self, Image, 'gripper/rgb_palm_camera/image_raw', qos_profile)
         # The projected locations
-        self.apple_loc_subscription = message_filters.Subscriber(PoseArray, "gripper/apple_locs", qos_profile)
+        self.apple_loc_subscription = message_filters.Subscriber(self, PoseArray, "gripper/apple_locs", qos_profile)
         # Depth at time of image capture
-        self.depth_subscription = message_filters.Subscriber(Float32, "gripper/tof/depth_raw", qos_profile)
+        self.depth_subscription = message_filters.Subscriber(self Float32, "gripper/tof/depth_raw", qos_profile)
 
         ## Subscriptions that only need to happen once at the start of the service
         # Current selected apple - should be set before this service is called
