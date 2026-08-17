@@ -23,6 +23,8 @@ def generate_launch_description():
     # The mast camera is currently the D435I
     mast_serial_arg = DeclareLaunchArgument(
         "mast_serial",
+        # default_value="'153122071693'", # TODO: Add sn for Jared setup
+        # default_value = "'238722072340'", JN Personal Realsense
         default_value="'040322070611'",
         description="Serial number for the mast RealSense camera"
     )
@@ -73,7 +75,7 @@ def generate_launch_description():
         rs_launch,
         launch_arguments={
             "serial_no": LaunchConfiguration("mast_serial"),
-            "camera_name": "mast_camera",
+            "camera_name": "gripper_camera",
             "enable_color": "true",
             "enable_depth": "true",
             "align_depth.enable": LaunchConfiguration("align_depth"),
@@ -94,6 +96,6 @@ def generate_launch_description():
         align_depth_arg,
         pointcloud_enable_arg,
         enable_imu_arg,
-        base_camera,
+        # base_camera,
         mast_camera,
     ])

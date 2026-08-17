@@ -5,6 +5,7 @@ import open3d as o3d
 import numpy as np
 import cv2
 import torch
+import time
 
 import rclpy
 from rclpy.node import Node
@@ -248,6 +249,42 @@ class ApplePredictionNode(Node):
         )
 
         self.get_logger().info("ApplePredictionNode (presaved) ready.")
+
+
+        # ----- subscribers -----
+
+    def _cinfo_cb(self, msg: CameraInfo):
+        self._last_cinfo = msg
+
+    def _sync_cd_cb(self, color_msg: Image, depth_msg: Image):
+        self._last_pair = (color_msg, depth_msg)
+        self._new_pair_event.set()
+
+    # ----- waiting for fresh color+depth pair -----
+
+    def _wait_for_new_synced(self, timeout_sec=3.0):
+        """
+        Wait for a color+depth pair whose (color_ts, depth_ts) tuple differs from the last used.
+        Optionally allow reusing the most recent once to avoid instant timeouts.
+        Returns (color_msg, depth_msg) or None on timeout.
+        """
+        deadline = time.monotonic() + timeout_sec
+        tried_reuse = False
+        while time.monotonic() < deadline:
+            pair = self._last_pair
+            if pair is not None:
+                c, d = pair
+                key = (stamp_to_ns(c.header.stamp), stamp_to_ns(d.header.stamp))
+                if key != self._last_used_pair_key:
+                    return pair
+                if self.allow_reuse_latest and not tried_reuse:
+                    tried_reuse = True
+                    return pair
+            remaining = max(0.0, deadline - time.monotonic())
+            self._new_pair_event.clear()
+            self._new_pair_event.wait(timeout=remaining if remaining > 0 else 0)
+        return None
+
 
     # ================================================================== service
 
@@ -597,6 +634,26 @@ class ApplePredictionNode(Node):
             msg.header.stamp    = self.get_clock().now().to_msg()
             msg.header.frame_id = self.source_frame
         self.annotated_pub.publish(msg)
+
+    def _filter_by_x_range(self, poses_world: PoseArray, radii, bboxes, x_abs_max: float):
+        """
+        Keep only detections whose x (in target_frame) satisfies |x| <= x_abs_max.
+        Returns: (filtered_pose_array, filtered_radii, filtered_bboxes, kept_indices)
+        """
+        kept_indices = []
+        out = PoseArray()
+        out.header = poses_world.header  # preserve header if set
+
+        for i, p in enumerate(poses_world.poses):
+            if abs(float(p.position.x)) <= x_abs_max:
+                kept_indices.append(i)
+                out.poses.append(p)
+
+        # Filter radii and bboxes by kept indices
+        radii_f = [radii[i] for i in kept_indices] if radii else []
+        bboxes_f = [bboxes[i] for i in kept_indices] if bboxes else []
+
+        return out, radii_f, bboxes_f, kept_indices
 
     def _build_instance_masks_and_boxes(self, results, H, W):
         inst_n = int(len(results.boxes) if results.boxes is not None else 0)

@@ -55,7 +55,9 @@ class StartHarvest(Node):
         self.batch_number = 0
 
         # Load pre-saved apple locations
-        apple_loc_path = os.path.join(self.storage_directory, 'apple_locations/')
+        # apple_loc_path = os.path.join(self.storage_directory, 'apple_locations/')
+        apple_loc_path = "/home/jn2/college/data/apple_locations"
+        print(apple_loc_path)
         self.pre_saved_apple_locations = self.read_apple_locations(apple_loc_path)
 
         # Declare parameters with defaults
@@ -90,6 +92,7 @@ class StartHarvest(Node):
         self.coord_to_traj_client = self.make_client(CoordinateToTrajectory, 'coordinate_to_trajectory')
         self.trigger_arm_mover_client = self.make_client(SendTrajectory, 'send_arm_trajectory')
         self.trigger_move_arm_to_pose_client =  self.make_client(MoveToPose, 'move_arm_to_pose')
+        self.trigger_move_arm_to_config_client =  self.make_client(Trigger, 'move_arm_to_config')
         # self.get_gripper_pose_client = self.make_client(GetGripperPose, 'get_gripper_pose')
 
         # Conditional clients
@@ -129,18 +132,29 @@ class StartHarvest(Node):
         self.apple_coordinates = {}
         self.pick_pattern = {'pick controller': self.PICK_PATTERN}
 
+        #TODO: Switch topics for which gripper
         # Recording topics
         self.prediction_topics = ['/apple_markers']
         self.approach_trajectory_topics = ['/apple_markers']
         self.visual_servo_topics = ['/gripper/rgb_palm_camera/image_raw','/joint_states','/servo_node/delta_twist_cmds']
         self.pressure_servo_topics = [
-            '/gripper/pressure','/gripper/distance','/gripper/motor/current',
-            '/gripper/motor/position','/gripper/motor/velocity','/joint_states',
+            #'/gripper/pressure','/gripper/distance','/gripper/motor/current','/gripper/motor/position','/gripper/motor/velocity',
+            '/microROS/sensor_data',
+            '/microROS/can_status',
+            '/camera/gripper_camera/color/image_raw',
+            '/camera/gripper_camera/aligned_depth_to_color/image_raw',
+            '/gripper/rgb_palm_camera/image_raw',
+            '/joint_states',
             '/force_torque_sensor_broadcaster/wrench','/servo_node/delta_twist_cmds'
         ]
         self.pick_controller_topics = [
-            '/gripper/pressure','/gripper/distance','/joint_states',
-            '/tool_pose','/force_torque_sensor_broadcaster/wrench','/servo_node/delta_twist_cmds'
+            #'/gripper/pressure','/gripper/distance',
+            '/microROS/sensor_data',
+            '/microROS/can_status',
+            '/camera/gripper_camera/color/image_raw',
+            '/camera/gripper_camera/aligned_depth_to_color/image_raw',
+            '/joint_states',
+            '/tool_pose', '/force_torque_sensor_broadcaster/wrench','/servo_node/delta_twist_cmds'
         ]
         self.pressure_servo_and_pick_controller_topics = list(set(self.pressure_servo_topics + self.pick_controller_topics))
 
@@ -220,7 +234,7 @@ class StartHarvest(Node):
 
     def read_apple_locations(self, directory):
         csv_file = Path(directory) / 'apple_locations.csv'
-        data = np.loadtxt(str(csv_file), delimiter=',')
+        data = np.loadtxt(str(csv_file), delimiter=',', skiprows=1)
         if data.ndim == 1:
             data = data[np.newaxis, :]
         return data  # shape is now (N, 3)
@@ -293,16 +307,16 @@ class StartHarvest(Node):
         if servo:
             if not sim:
                 self.request.activate_controllers = ["forward_position_controller"] 
-                self.request.deactivate_controllers = ["joint_trajectory_controller"]
+                self.request.deactivate_controllers = ["scaled_joint_trajectory_controller"]
             else:
                 self.request.activate_controllers = ["forward_position_controller"] 
-                self.request.deactivate_controllers = ["joint_trajectory_controller"]
+                self.request.deactivate_controllers = ["scaled_joint_trajectory_controller"]
         else:
             if not sim:
-                self.request.activate_controllers = ["joint_trajectory_controller"]
+                self.request.activate_controllers = ["scaled_joint_trajectory_controller"]
                 self.request.deactivate_controllers = ["forward_position_controller"]
             else:
-                self.request.activate_controllers = ["joint_trajectory_controller"]
+                self.request.activate_controllers = ["scaled_joint_trajectory_controller"]
                 self.request.deactivate_controllers = ["forward_position_controller"]
         self.request.timeout = rclpy.duration.Duration(seconds=5.0).to_msg()
 
@@ -341,6 +355,13 @@ class StartHarvest(Node):
         # Starts go to home
         self.request = Trigger.Request()
         self.future = self.start_move_arm_to_home_client.call_async(self.request)
+        rclpy.spin_until_future_complete(self, self.future) 
+        return self.future.result()
+
+    def go_to_scan_position(self):
+        # Starts go to home
+        self.request = Trigger.Request()
+        self.future = self.trigger_move_arm_to_config_client.call_async(self.request)
         rclpy.spin_until_future_complete(self, self.future) 
         return self.future.result()
     
@@ -492,9 +513,9 @@ class StartHarvest(Node):
             self.stop_recording()
 
     def start(self): 
-        # Stage 1: Reset arm to home position
-        self.get_logger().info(f'Resetting arm to home position')
-        self.go_to_home()
+        # Scan position
+        self.get_logger().info("Moving to scan position")
+        self.go_to_scan_position()
 
         # Stage 2: Request apple location prediction
         if self.enable_apple_prediction:
@@ -510,13 +531,17 @@ class StartHarvest(Node):
         self.apple_coordinates = {f'apple_{i+1}': [p.position.x,p.position.y,p.position.z]
                                     for i,p in enumerate(apple_poses.poses)}
         self.get_logger().info(f'Found {len(apple_poses.poses)} apples!')
+        
+        # Stage 1: Reset arm to home position
+        self.get_logger().info(f'Resetting arm to home position')
+        self.go_to_home()
 
         # Loop over apple locations
         for idx, coord in enumerate(apple_poses.poses):
             # Update base directory for new apple location
             base_dir = self.batch_dir + f'apple_{idx}/'
-
-            # Stage 3: Approach apple
+        # base_dir = self.batch_dir + f'apple_1/'
+        #     # Stage 3: Approach apple
             input(f'Hit enter to start with apple {idx}')
             self.get_logger().info(f'Approaching apple {idx}: Coord {coord}')
             if self.use_optimal_trajectory:
@@ -525,13 +550,13 @@ class StartHarvest(Node):
             else:
                 self.trigger_move_arm_to_pose(coord)
 
-            # Stage 4: visual servo
+                # Stage 4: visual servo
             if self.enable_visual_servo:
                 input('hit enter to start visual servoing')
                 self.run_stage(self.visual_servo_topics, 
-                               base_dir + self.visual_servo_file_name_prefix,
-                               use_servo=True, 
-                               action_fn=self.start_visual_servo
+                                base_dir + self.visual_servo_file_name_prefix,
+                                use_servo=True, 
+                                action_fn=self.start_visual_servo
                 )
 
             # Stage 5 & 6: pressure servo + pick controller
@@ -551,6 +576,23 @@ class StartHarvest(Node):
                     use_servo=True,
                     action_fn=pick_action
                 )
+            
+            # Temp Stage: pull back after pick
+            original_pick_controller = self.PICK_PATTERN
+            def pick_action():
+                if self.enable_picking:
+                    self.PICK_PATTERN = 'linear-pull'
+                    self.pick_controller()
+                self.configure_servo('base_link')
+
+            self.run_stage(
+                [],
+                base_dir + 'post_pick_pull',
+                servo_frame='base_link',
+                use_servo=True,
+                action_fn=pick_action
+            )
+            self.PICK_PATTERN = original_pick_controller
 
             # Stage 7: home & release & save
             input('Done with pick, hit enter to return home')

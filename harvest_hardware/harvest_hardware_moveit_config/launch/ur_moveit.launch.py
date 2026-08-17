@@ -30,6 +30,8 @@ def generate_launch_description():
         DeclareLaunchArgument("launch_servo", default_value="true"),
         DeclareLaunchArgument("use_sim_time", default_value="false"),
         DeclareLaunchArgument("use_3d_sensors", default_value="false"),
+        DeclareLaunchArgument("gripper_type", default_value="finray"),
+        DeclareLaunchArgument("camera_mount", default_value="wrist"),
     ]
     return LaunchDescription(args + [OpaqueFunction(function=_launch_setup)])
 
@@ -57,6 +59,7 @@ def _launch_setup(context):
                 "prefix:=", LaunchConfiguration("prefix"), " ",
                 "robot_ip:=", LaunchConfiguration("robot_ip"), " ",
                 "use_fake_hardware:=", LaunchConfiguration("use_fake_hardware"), " ",
+                "gripper_type:=", LaunchConfiguration("gripper_type"), " ",
             ]),
             value_type=str,
         )
@@ -74,7 +77,8 @@ def _launch_setup(context):
                 ]),
                 " ",
                 "name:=ur5e ",
-                "prefix:=", LaunchConfiguration("prefix"),
+                "prefix:=", LaunchConfiguration("prefix"), " ",
+                "camera_mount:=", LaunchConfiguration("camera_mount", default="wrist"), " ",
             ]),
             value_type=str,
         )
@@ -104,7 +108,8 @@ def _launch_setup(context):
             "default_planner_request_adapters/FixStartStateBounds "
             "default_planner_request_adapters/FixStartStateCollision "
             "default_planner_request_adapters/FixStartStatePathConstraints "
-            "default_planner_request_adapters/AddRuckigTrajectorySmoothing"
+            # "default_planner_request_adapters/AddRuckigTrajectorySmoothing"
+            "default_planner_request_adapters/AddTimeOptimalParameterization"
         )
 
     ompl_yaml = {"ompl": load_yaml("harvest_hardware_moveit_config", "config/ompl_planning.yaml")}

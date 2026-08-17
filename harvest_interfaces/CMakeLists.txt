@@ -17,6 +17,8 @@ find_package(geometry_msgs REQUIRED)
 rosidl_generate_interfaces(${PROJECT_NAME}
   "action/EventDetection.action"
   "action/SendTrajectory.action"
+  "action/VisualServo.action"
+  "action/PickControl.action"
 
   "srv/ApplePrediction.srv"
   "srv/SendTrajectory.srv"

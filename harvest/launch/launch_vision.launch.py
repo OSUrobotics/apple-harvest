@@ -54,17 +54,16 @@ def generate_launch_description():
     declared_arguments.append(DeclareLaunchArgument("presaved_images.depth_image_path", default_value="/home/marcus/apple_harvest_ws/src/apple-harvest/harvest_vision/data/tree_000/depth.png",
                                     description="Path to the depth image for presaved images mode."))
     ### visual_servo node parameters
-    declared_arguments.append(DeclareLaunchArgument("vservo_model", default_value="v9e.pt", 
+    declared_arguments.append(DeclareLaunchArgument("vservo_model", default_value="best_segmentation.pt", 
                                   description="Yolo model used, can specify any model in the harvest_vision/yolo_models directory."))
-    declared_arguments.append(DeclareLaunchArgument("vservo_yolo_conf", default_value="0.85", 
+    declared_arguments.append(DeclareLaunchArgument("vservo_yolo_conf", default_value="0.8", 
                                 description="Confidence threshold for yolo model in visual_servo node."))
     declared_arguments.append(DeclareLaunchArgument("vservo_accuracy_px", default_value="10", 
                                   description="Specifies in pixels how close the center of the camera must be to the apple center to stop visual servoing."))
-    declared_arguments.append(DeclareLaunchArgument("vservo_smoothing_factor", default_value="6.0", 
+    declared_arguments.append(DeclareLaunchArgument("vservo_smoothing_factor", default_value="8.0", 
                                   description="Smoothing factor on velocity based on how far away the target apple center is from the camera center. Higher smoothing factor, faster movement when apple is far away."))
-    declared_arguments.append(DeclareLaunchArgument("vservo_max_vel", default_value="0.6", 
+    declared_arguments.append(DeclareLaunchArgument("vservo_max_vel", default_value="0.5", 
                                   description="Maximum velocity that arm end effector can move during visual servo."))
-    
     ### palm camera publisher node parameters
     declared_arguments.append(DeclareLaunchArgument("palm_camera_device_num", default_value="2", 
                                   description="Device number for palm RGB camer in gripper."))
@@ -76,6 +75,8 @@ def generate_launch_description():
     ## launch realsense topics conditionally 
     declared_arguments.append(DeclareLaunchArgument("launch_realsense", default_value="true", 
                                 description="Whether to launch realsense topics."))
+    declared_arguments.append(DeclareLaunchArgument("mast_serial", default_value="040322070611",
+                                description="Serial number of the mast RealSense camera."))
 
     # Reasense launch file path
     realsense_launch_path = os.path.join(
@@ -85,6 +86,9 @@ def generate_launch_description():
     
     realsense_topics_node = IncludeLaunchDescription(
             PythonLaunchDescriptionSource(realsense_launch_path),
+            launch_arguments={
+                "mast_serial": LaunchConfiguration("mast_serial"),
+            }.items(),
             condition=IfCondition(LaunchConfiguration('launch_realsense')),
         )
 
@@ -126,7 +130,7 @@ def generate_launch_description():
                      "vservo_yolo_conf": LaunchConfiguration("vservo_yolo_conf"),
                      "vservo_accuracy_px": LaunchConfiguration("vservo_accuracy_px"),
                      "vservo_smoothing_factor": LaunchConfiguration("vservo_smoothing_factor"),
-                     "vservo_max_vel": LaunchConfiguration("vservo_max_vel")
+                     "vservo_max_vel": LaunchConfiguration("vservo_max_vel"),
                       }
                 ])
 

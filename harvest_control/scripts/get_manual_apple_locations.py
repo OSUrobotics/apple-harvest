@@ -71,7 +71,7 @@ class ManualAppleLocations(Node):
         # Create directory and save to CSV
         logging_directory = self.create_directory()
         csv_file = self.save_to_csv(logging_directory)
-        access_directory = "/home/grimmlins/ros2_ws/data/apple_locations"
+        access_directory = self.output_directory
         _ = self.save_to_csv(access_directory)
         self.get_logger().info(f'Saved apple locations to {csv_file}')
 

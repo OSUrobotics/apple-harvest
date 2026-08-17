@@ -40,7 +40,7 @@ If you edit `.devcontainer/Dockerfile` or `devcontainer.json`, run **Dev Contain
 
     **Simulated**
     ```bash
-    ros2 launch harvest_control arm_control.launch.py ur_type:=ur5e robot_ip:=yyy.yyy.yyy.yyy use_fake_hardware:=true launch_rviz:=true
+    ros2 launch harvest_control arm_control.launch.py ur_type:=ur5e robot_ip:=yyy.yyy.yyy.yyy use_fake_hardware:=true launch_moveit_rviz:=true
     ```
     **Real Hardware**
     ```bash

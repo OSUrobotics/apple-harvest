@@ -6,10 +6,12 @@ from rclpy.node import Node
 from message_filters import ApproximateTimeSynchronizer, Subscriber
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.callback_groups import ReentrantCallbackGroup
+from rclpy.action import ActionServer, ActionClient, CancelResponse
 # Interfaces
 from sensor_msgs.msg import Image
 from std_srvs.srv import Trigger
 from geometry_msgs.msg import PoseStamped, TwistStamped
+from harvest_interfaces.action import VisualServo
 
 # Image processing
 from cv_bridge import CvBridge
@@ -46,6 +48,7 @@ class LocalPlanner(Node):
         ### Services
         # Service to start the local planner sequence
         self.start_service = self.create_service(Trigger, "start_visual_servo", self.start_sequence_srv_callback, callback_group=r_callback_group)
+        self.servo_action_server = ActionServer(self, VisualServo, 'visual_servo', self.execute_servo_callback, callback_group=r_callback_group, cancel_callback=self.cancel_servo_callback)
         
         ### Servo controller params
         self.declare_parameter("vservo_model_path", "NA")
@@ -125,6 +128,47 @@ class LocalPlanner(Node):
         self.get_logger().info("Successfully servoed in front of the apple!")
         response.success=True
         return response
+    
+    def execute_servo_callback(self, goal_handle):
+        self.get_logger().info("Activating servo node...")
+        self.start_flag = True
+        self.stall_count = 0
+        self.first_servo = True
+        self.get_logger().info("Starting visual arm servoing...")
+        # Servos until we are in front of apple
+        self.init_kalman()
+        result = VisualServo.Result()
+
+        try:
+            while rclpy.ok() and self.start_flag:
+                if goal_handle.is_cancel_requested:
+                    self.start_flag = False
+                    self._publish_stop_twist()
+                    goal_handle.canceled()
+                    result.success = False
+                    result.message = "Visual servo canceled"
+                    return result
+
+                self.get_logger().info("Servoing arm in front of apple...")
+                self.rate.sleep()
+        except KeyboardInterrupt:
+            pass
+
+        self.get_logger().info("Successfully servoed in front of the apple!")
+        goal_handle.succeed()
+        result.success = True
+        result.message = "Servo complete"
+        return result
+
+    def _publish_stop_twist(self):
+        vel_vec = TwistStamped()
+        vel_vec.header.stamp = self.get_clock().now().to_msg()
+        vel_vec.header.frame_id = "tool0"
+        self.servo_publisher.publish(vel_vec)
+
+    def cancel_servo_callback(self, goal_handle):
+        self.get_logger().info("Visual servo cancel requested")
+        return CancelResponse.ACCEPT
 
     def normalize(self, val, minimum, maximum):
         # Normalizes val between min and max
@@ -204,6 +248,17 @@ class LocalPlanner(Node):
             results = self.model(image, conf=self.yolo_conf, verbose=False)[0]
             apple_centers = []
             z_dist = []
+
+            self.get_logger().info(f"Detection results: {results.names}")  # Logs detected objects (apple)
+            if len(results) == 0:
+                self.get_logger().info("No detections found in the image.")
+            else:
+                for i in results:
+                    boxes = i.boxes.xyxy.cpu().numpy()  # Get bounding boxes
+                    confidences = i.boxes.conf.cpu().numpy()  # Get confidence scores
+                    self.get_logger().info(f"Detected apple with bounding box: {boxes}, confidence: {confidences}")
+
+
             for i in results:
                 # find center of each bounding box and calculate distance to center of image
                 x,y,w,h = i.boxes.xyxy.cpu().numpy()[0]
@@ -253,6 +308,7 @@ class LocalPlanner(Node):
                         ## THE 10 IS A CONSTANT DISTANCE VALUE BECAUSE WE ARE SERVOING IN PLACE ON A PLANE
                         ## IF NEEDED YOU CAN PASS IN A MEASURED DISTANCE AS A STOPPING CONDITION FOR THE SERVOING
                         vec = self.create_servo_vector(closest_apple, image, 10)
+                        self.get_logger().info(f"publishing velocity: {vec}")
                         self.servo_publisher.publish(vec)
                     except TransformException as e:
                         self.get_logger().info(f'Transform failed: {e}')

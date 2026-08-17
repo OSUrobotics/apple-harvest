@@ -30,7 +30,7 @@ setup(
     maintainer_email='navek@oregonstate.edu',
     description='Vision components for harvest trials',
     license='MIT',
-    tests_require=['pytest'],
+    extras_require={"test": ['pytest']},
     entry_points={
         'console_scripts': [
             'apple_prediction = harvest_vision.apple_prediction:main',

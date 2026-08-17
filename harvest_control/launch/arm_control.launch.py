@@ -13,6 +13,8 @@ def generate_launch_description():
         DeclareLaunchArgument('ur_type', default_value='ur5e'),
         DeclareLaunchArgument('robot_ip', default_value='yyy.yyy.yyy.yyy'),
         DeclareLaunchArgument('use_fake_hardware', default_value='false'),
+        DeclareLaunchArgument('headless_mode', default_value='true'),
+        DeclareLaunchArgument('activate_joint_controller', default_value='true'),
         DeclareLaunchArgument('prefix', default_value=''),
         DeclareLaunchArgument('description_package', default_value='harvest_hardware_description'),
         DeclareLaunchArgument('description_file', default_value='amiga_ur_gripper.urdf.xacro'),
@@ -26,6 +28,10 @@ def generate_launch_description():
         DeclareLaunchArgument('max_accel', default_value='0.05'),
         DeclareLaunchArgument('max_vel', default_value='0.05'),
         DeclareLaunchArgument('traj_time_step', default_value='0.05'),
+        DeclareLaunchArgument('source_frame', default_value='cart_body'),
+        DeclareLaunchArgument('gripper_tip_frame', default_value='gripper_scups_link'),
+        DeclareLaunchArgument('gripper_type', default_value='finray'),
+        DeclareLaunchArgument('camera_mount', default_value='wrist'),
     ]
 
     # Pick controller based on fake hardware argument
@@ -64,6 +70,8 @@ def generate_launch_description():
             'robot_ip': LaunchConfiguration('robot_ip'),
             'use_fake_hardware': LaunchConfiguration('use_fake_hardware'),
             'use_mock_hardware': LaunchConfiguration('use_fake_hardware'),
+            'headless_mode': LaunchConfiguration('headless_mode'),
+            'activate_joint_controller': LaunchConfiguration('activate_joint_controller'),
             'description_package': LaunchConfiguration('description_package'),
             'description_file': LaunchConfiguration('description_file'),
             'prefix': LaunchConfiguration('prefix'),
@@ -71,6 +79,7 @@ def generate_launch_description():
             'initial_joint_controller': initial_controller,
             'use_sim_time': LaunchConfiguration('use_sim_time'),
             'controllers_file': ur_controller_config,
+            'gripper_type': LaunchConfiguration('gripper_type'),
         }.items(),
     )
 
@@ -85,6 +94,7 @@ def generate_launch_description():
             'description_file': LaunchConfiguration('description_file'),
             'prefix': LaunchConfiguration('prefix'),
             'use_sim_time': LaunchConfiguration('use_sim_time'),
+            'gripper_type': LaunchConfiguration('gripper_type'),
         }.items(),
     )
 
@@ -97,8 +107,11 @@ def generate_launch_description():
             'robot_ip': LaunchConfiguration('robot_ip'),
             'use_fake_hardware': LaunchConfiguration('use_fake_hardware'),
             'description_file': LaunchConfiguration('description_file'),
+            'rviz_file': LaunchConfiguration('rviz_file'),
             'use_sim_time': LaunchConfiguration('use_sim_time'),
             'use_3d_sensors': LaunchConfiguration('use_3d_sensors'),
+            'gripper_type': LaunchConfiguration('gripper_type'),
+            'camera_mount': LaunchConfiguration('camera_mount'),
         }.items(),
     )
 
@@ -129,6 +142,15 @@ def generate_launch_description():
             'use_sim_time': LaunchConfiguration('use_sim_time'),
             }],
     )
+    pick_controllers = Node(
+        package='harvest_control',
+        executable='pick_controller.py',
+        name = 'pick_controllers',
+        parameters=[{
+            'use_sim_time': LaunchConfiguration('use_sim_time'),
+        }],
+    )
+
     pick_controller = Node(
         package='harvest_control', 
         executable='heuristic_controller.py', 
@@ -136,6 +158,14 @@ def generate_launch_description():
         parameters=[{
             'use_sim_time': LaunchConfiguration('use_sim_time'),
             }],
+    )
+    stiffness_controller = Node(
+        package='harvest_control',
+        executable='stiffness_controller.py',
+        name='stiffness_controller',
+        parameters=[{
+            'use_sim_time': LaunchConfiguration('use_sim_time'),
+        }],
     )
     linear_controller = Node(
         package='harvest_control', 
@@ -151,6 +181,8 @@ def generate_launch_description():
         name='tf_listener', 
         parameters=[{
             'use_sim_time': LaunchConfiguration('use_sim_time'),
+            'source_frame': LaunchConfiguration('source_frame'),
+            'gripper_tip_frame': LaunchConfiguration('gripper_tip_frame'),
             }],
     )
     pressure_avg = Node(
@@ -186,7 +218,9 @@ def generate_launch_description():
             coord_to_traj,
             event_detector,
             force_filter,
+            pick_controllers,
             pick_controller,
+            stiffness_controller,
             linear_controller,
             tf_listener,
             pressure_avg,

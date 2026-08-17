@@ -8,7 +8,7 @@ moveit_simple_controller_manager:
   scaled_joint_trajectory_controller:
     type: FollowJointTrajectory
     action_ns: follow_joint_trajectory
-    default: false
+    default: true
     joints:
       - shoulder_pan_joint
       - shoulder_lift_joint

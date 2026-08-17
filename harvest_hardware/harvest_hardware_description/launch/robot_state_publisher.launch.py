@@ -18,6 +18,7 @@ def generate_launch_description():
         DeclareLaunchArgument('description_file', default_value='amiga_ur_gripper.urdf.xacro'),
         DeclareLaunchArgument('prefix', default_value=''),
         DeclareLaunchArgument('use_sim_time', default_value='false'),
+        DeclareLaunchArgument('gripper_type', default_value='finray'),
     ]
 
     # Build robot_description from your xacro
@@ -42,6 +43,7 @@ def generate_launch_description():
                 'sim_ignition:=false ',
                 'safety_limits:=false ',
                 'tool_device_name:=/tmp/ttyUR ',
+                'gripper_type:=', LaunchConfiguration('gripper_type'), ' ',
             ]),
             value_type=str
         )
