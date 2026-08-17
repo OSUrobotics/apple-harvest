@@ -12,4 +12,13 @@
 
   <xacro:ur_srdf name="$(arg name)" prefix="$(arg prefix)"/>
 
+  <!-- ====================================================================
+       disables collisions between rigid mount points on the full robot 
+       description
+  ==================================================================== -->
+  <disable_collisions link1="amiga__body" link2="$(arg prefix)base_link" reason="Adjacent" />
+  <disable_collisions link1="amiga__body" link2="$(arg prefix)base_link_inertia" reason="Adjacent" />
+  <disable_collisions link1="gripper_link" link2="$(arg prefix)tool0" reason="Adjacent" />
+  <disable_collisions link1="gripper_link" link2="$(arg prefix)wrist_3_link" reason="Adjacent" />
+
 </robot>

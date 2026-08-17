@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from harvest_ui.config import DEFAULT_CONFIG, build_process_specs, load_config, normalize_config, save_config
+from harvest_ui.config import DEFAULT_CONFIG, build_process_specs, load_config, normalize_config, save_config, validate_config
 
 
 class ConfigTests(unittest.TestCase):
@@ -29,6 +29,19 @@ class ConfigTests(unittest.TestCase):
         arm = next(spec for spec in build_process_specs(DEFAULT_CONFIG) if spec.key == "arm")
         self.assertIn("headless_mode:=true", arm.argv)
         self.assertIn("activate_joint_controller:=true", arm.argv)
+        self.assertIn("source_frame:=cart_base", arm.argv)
+
+    def test_pose_listener_source_frame_can_be_changed(self):
+        config = normalize_config({"arm": {"source_frame": "amiga__base"}})
+        arm = next(spec for spec in build_process_specs(config) if spec.key == "arm")
+        self.assertIn("source_frame:=amiga__base", arm.argv)
+
+    def test_sweep_pick_controller_parameters_are_forwarded(self):
+        config = normalize_config({"harvest": {"pick_pattern": "sweep", "sweep_theta_deg": 75.0}})
+        self.assertEqual([], validate_config(config))
+        harvest = next(spec for spec in build_process_specs(config) if spec.key == "harvest")
+        self.assertIn("pick_pattern:=sweep", harvest.argv)
+        self.assertIn("sweep_theta_deg:=75.0", harvest.argv)
 
     def test_camera_serial_is_passed_to_single_vision_launch(self):
         specs = build_process_specs(DEFAULT_CONFIG)

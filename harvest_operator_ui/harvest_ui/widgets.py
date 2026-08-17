@@ -14,6 +14,7 @@ class ImagePanel(QWidget):
         super().__init__(parent)
         self._image = QImage()
         self._last_frame = 0.0
+        self._light_mode = False
         self.label = QLabel("Waiting for image topic…")
         self.label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.label.setMinimumSize(480, 270)
@@ -28,6 +29,18 @@ class ImagePanel(QWidget):
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._refresh_status)
         self._timer.start(500)
+
+    def set_light_mode(self, enabled: bool) -> None:
+        self._light_mode = bool(enabled)
+        if self._light_mode:
+            self.label.setStyleSheet("background:#ffffff; color:#64748b; border:1px solid #cbd5e1;")
+        else:
+            self.label.setStyleSheet("background:#10151c; color:#8d9aaa; border:1px solid #293241;")
+        if self._last_frame:
+            self._refresh_status()
+        else:
+            muted = "#64748b" if self._light_mode else "#8d9aaa"
+            self.status.setStyleSheet(f"color:{muted}")
 
     def set_image(self, image: QImage, timestamp: float) -> None:
         self._image = image
@@ -56,22 +69,30 @@ class ImagePanel(QWidget):
         age = time.monotonic() - self._last_frame
         if age > 2.0:
             self.status.setText(f"STALE — last frame {age:.1f}s ago")
-            self.status.setStyleSheet("color:#ff6b6b; font-weight:600")
+            color = "#cf222e" if self._light_mode else "#ff6b6b"
+            self.status.setStyleSheet(f"color:{color}; font-weight:600")
         else:
             self.status.setText(f"Live — frame age {age * 1000:.0f} ms")
-            self.status.setStyleSheet("color:#56d364")
+            color = "#1a7f37" if self._light_mode else "#56d364"
+            self.status.setStyleSheet(f"color:{color}")
 
 
 class LinePlot(QWidget):
-    COLORS = [QColor("#58a6ff"), QColor("#f2cc60"), QColor("#ff7b72"), QColor("#56d364")]
+    DARK_COLORS = [QColor("#58a6ff"), QColor("#f2cc60"), QColor("#ff7b72"), QColor("#56d364")]
+    LIGHT_COLORS = [QColor("#0969da"), QColor("#bf8700"), QColor("#cf222e"), QColor("#1a7f37")]
 
     def __init__(self, title: str, series_names: list[str], max_points: int = 240, parent: QWidget | None = None):
         super().__init__(parent)
         self.title = title
         self.series_names = series_names
+        self._light_mode = False
         self.values = [deque(maxlen=max_points) for _ in series_names]
         self.setMinimumHeight(190)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+
+    def set_light_mode(self, enabled: bool) -> None:
+        self._light_mode = bool(enabled)
+        self.update()
 
     def append_values(self, values: list[float], _timestamp: float) -> None:
         for index, series in enumerate(self.values):
@@ -82,18 +103,24 @@ class LinePlot(QWidget):
     def paintEvent(self, _event) -> None:  # noqa: N802 (Qt API)
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.fillRect(self.rect(), QColor("#10151c"))
+        background = QColor("#ffffff") if self._light_mode else QColor("#10151c")
+        grid = QColor("#d8dee8") if self._light_mode else QColor("#293241")
+        text = QColor("#1f2937") if self._light_mode else QColor("#d7dde5")
+        muted = QColor("#64748b") if self._light_mode else QColor("#6e7b8c")
+        scale = QColor("#64748b") if self._light_mode else QColor("#8d9aaa")
+        colors = self.LIGHT_COLORS if self._light_mode else self.DARK_COLORS
+        painter.fillRect(self.rect(), background)
         plot = QRectF(48, 30, max(10, self.width() - 62), max(10, self.height() - 58))
-        painter.setPen(QPen(QColor("#293241"), 1))
+        painter.setPen(QPen(grid, 1))
         for i in range(5):
             y = plot.top() + plot.height() * i / 4
             painter.drawLine(QPointF(plot.left(), y), QPointF(plot.right(), y))
-        painter.setPen(QColor("#d7dde5"))
+        painter.setPen(text)
         painter.drawText(10, 20, self.title)
 
         all_values = [value for series in self.values for value in series]
         if not all_values:
-            painter.setPen(QColor("#6e7b8c"))
+            painter.setPen(muted)
             painter.drawText(plot, Qt.AlignmentFlag.AlignCenter, "Waiting for topic…")
             return
         low, high = min(all_values), max(all_values)
@@ -103,14 +130,14 @@ class LinePlot(QWidget):
         else:
             margin = (high - low) * 0.08
             low, high = low - margin, high + margin
-        painter.setPen(QColor("#8d9aaa"))
+        painter.setPen(scale)
         painter.drawText(5, int(plot.top() + 10), f"{high:.1f}")
         painter.drawText(5, int(plot.bottom()), f"{low:.1f}")
 
         for index, series in enumerate(self.values):
             if len(series) < 2:
                 continue
-            color = self.COLORS[index % len(self.COLORS)]
+            color = colors[index % len(colors)]
             painter.setPen(QPen(color, 2))
             points: list[QPointF] = []
             denominator = max(1, len(series) - 1)

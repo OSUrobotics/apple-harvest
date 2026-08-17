@@ -24,6 +24,7 @@ arm:
   description_file: cart_ur_gripper.urdf.xacro
   rviz_file: cart_robot.rviz
   camera_mount: wrist
+  source_frame: cart_base
 gripper:
   gripper_type: finray
   grasp_strategy: pressure
@@ -46,6 +47,7 @@ harvest:
   enable_apple_prediction: true
   optimal_trajectory: true
   pick_pattern: stiffness-seeking
+  sweep_theta_deg: 90.0
   abort_on_decelerate: false
   abort_recovery: freedrive
 topics:
