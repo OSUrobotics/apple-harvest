@@ -6,6 +6,35 @@ The vision code has only been setup for running a Realsense d435i (real hardware
 
 There are currently two main control schemes: apple harvesting (real or simulated) and tree templating (tested only in simulation). The apple harvesting pipeline includes nodes for additional UR controllers and data recording, while the tree templating method runs a minimal set of nodes for control in simulation.
 
+---
+
+## Development Environment (.devcontainer)
+ 
+This repo ships a [Dev Container](https://containers.dev/) config (`.devcontainer/`) that builds a ROS2 Humble (Ubuntu 22.04) environment with MoveIt2, the UR ROS2 driver, RealSense support, and this repo's Python dependencies (`requirements.txt`) preinstalled — no need to install ROS2 or any dependencies on your host.
+ 
+**Prerequisites:** [Docker](https://docs.docker.com/get-docker/), [VS Code](https://code.visualstudio.com/) with the [Dev Containers extension](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers).
+ 
+**Opening the container:**
+1. Open the repo root in VS Code: `code /path/to/apple-harvest`
+2. Click **Reopen in Container** when prompted, or run **Dev Containers: Reopen in Container** from the Command Palette.
+3. First build takes a few minutes; subsequent opens reuse the cached image. The container automatically runs `colcon build --symlink-install` on attach.
+4. Open a terminal (`` Ctrl+j ``) — it drops you in `/ros2_ws/src/apple-harvest` with ROS2 and the workspace overlay already sourced. Run any of the `ros2 launch`/`ros2 run` commands below from here.
+If you edit `.devcontainer/Dockerfile` or `devcontainer.json`, run **Dev Containers: Rebuild Container** to pick up the changes.
+5. To attach a terminal from **outside VS Code** (e.g. a regular terminal window), find the running container with `docker ps`, then:
+    ```bash
+    docker exec -it -u ros <container_id_or_name> bash
+    ```
+   Or, if you have the [Dev Containers CLI](https://github.com/devcontainers/cli) installed, point it at the repo folder directly instead of hunting for a container ID:
+    ```bash
+    devcontainer exec --workspace-folder /path/to/apple-harvest bash
+    ```
+ 
+**GUI apps (rviz):** the container is set up to forward GUI windows (e.g. rviz from `launch_rviz:=true`) to your host display. This requires a Linux host with X11/XWayland — on first run, `devcontainer.json` automatically grants local X11 access via `xhost`, so this should work out of the box.
+ 
+**Real hardware (UR5e, RealSense):** the container runs with `--network=host` and `--privileged` (plus a `/dev/bus/usb` mount), so the UR5e's `robot_ip` and any connected RealSense/USB camera are reachable exactly as they would be running natively — no extra devcontainer setup needed to switch between simulated and real-hardware runs. Since the container shares the host's network namespace, avoid running two devcontainers against the same physical robot at once (e.g. two worktrees open simultaneously).
+ 
+---
+
 ### Apple Harvesting:
 1. In the first terminal:
 
