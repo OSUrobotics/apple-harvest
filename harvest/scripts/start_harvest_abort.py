@@ -6,23 +6,28 @@ selected at runtime via the 'freedrive' parameter, and adds the ability to
 abort a stage mid-flight when moveit_servo reports it is near a singularity,
 collision, or joint limit (/servo_node/status).
 
-TEMPLATE / TODO:
-Visual servo, grasp/pressure-servo approach, and the pick controllers are the
-three operations that actually move the arm for an extended, variable amount
-of time, so they're the ones worth cancelling instead of just waiting out.
-They're called here through ActionClients using placeholder action types
-(VisualServo, GraspApple, PickController) so the abort logic has a goal it
-can cancel. None of that server-side work is part of this change:
-  - harvest_interfaces/action/VisualServo.action   (new)
-  - harvest_interfaces/action/GraspApple.action    (new)
-  - harvest_interfaces/action/PickController.action (new, replaces the
-    start_controller/stop_controller/pull_twist/linear_pull/stiffness
-    service pairs -- goal.pattern selects which behavior to run)
-  - the visual servo node, grasp/pressure-servo controller, and pick
-    controller nodes need to be converted from Trigger/Empty services into
-    action servers implementing those.
-Until those exist, the imports below fall back to None and the
-corresponding stage logs an error and is skipped.
+Visual servo, grasp/pressure-servo approach, and the legacy pick patterns
+(force-heuristic, pull-twist, linear-pull, stiffness-seeking) are the
+operations that actually move the arm for an extended, variable amount of
+time, so they're the ones worth cancelling instead of just waiting out.
+They're called through ActionClients (VisualServo, GraspControl, PickControl)
+so the abort logic has a goal it can cancel:
+  - VisualServo is served by visual_servo.py's 'visual_servo' action server.
+  - GraspControl is served by grasp_controller.py's 'grasp_apple' action
+    server (package gripper_msgs, from the apple_gripper repo) -- if that
+    package isn't built into this workspace the import falls back to None
+    and the grasp stage logs an error and is skipped.
+  - PickControl is served by pick_controller.py's 'pick_controller' action
+    server, which wraps the start_controller/stop_controller/pull_twist/
+    linear_pull/stiffness service pairs -- goal.pattern selects which one.
+
+'sweep' is NOT one of PickControl's patterns -- pick_controller.py has no
+branch for it, so routing it through the pick_controller action would just
+silently no-op. sweep_controller.py only exposes plain services/topics
+(sweep/start_controller, sweep/stop_controller, sweep/set_theta_deg,
+/sweep/status, /sweep/tracking_error), so pick_controller_action() talks to
+those directly (see _run_sweep_pick) instead, polling abort_event itself and
+calling sweep/stop_controller the moment an abort is requested.
 """
 
 # ROS
@@ -34,8 +39,8 @@ from rclpy.action import ActionClient
 # Interfaces
 from rcl_interfaces.msg import Parameter, ParameterValue, ParameterType
 from rcl_interfaces.srv import SetParameters
-from std_srvs.srv import SetBool, Trigger
-from std_msgs.msg import Int8, Bool, Float32
+from std_srvs.srv import SetBool, Trigger, Empty
+from std_msgs.msg import Int8, Bool, Float32, Float64
 from geometry_msgs.msg import Point, Pose, PoseArray
 from harvest_interfaces.srv import ApplePrediction, CoordinateToTrajectory, SendTrajectory, RecordTopics, GetGripperPose, SetValue, MoveToPose
 from controller_manager_msgs.srv import SwitchController
@@ -141,6 +146,7 @@ class StartHarvestAbort(Node):
         self.declare_parameter('enable_pressure_servo', True)
         self.declare_parameter('enable_picking', True)
         self.declare_parameter('optimal_trajectory', True)
+        self.declare_parameter('sweep_theta_deg', 90.0)
         # Start harvest mode (Freedrive or full auton)
         self.declare_parameter('freedrive', False)
         # Abort tuning
@@ -158,6 +164,7 @@ class StartHarvestAbort(Node):
         self.enable_pressure_servo = self.get_parameter('enable_pressure_servo').get_parameter_value().bool_value
         self.enable_picking = self.get_parameter('enable_picking').get_parameter_value().bool_value
         self.use_optimal_trajectory = self.get_parameter('optimal_trajectory').get_parameter_value().bool_value
+        self.SWEEP_THETA_DEG = self.get_parameter('sweep_theta_deg').get_parameter_value().double_value
         self.freedrive_mode = self.get_parameter('freedrive').get_parameter_value().bool_value
         self.abort_on_decelerate = self.get_parameter('abort_on_decelerate').get_parameter_value().bool_value
         self.abort_recovery_mode = self.get_parameter('abort_recovery').get_parameter_value().string_value
@@ -194,10 +201,19 @@ class StartHarvestAbort(Node):
             self.release_controller_client = self.make_client(Trigger, 'release_apple')
         if self.enable_picking:
             self.set_goal_cli = self.make_client(SetValue, 'set_goal')
-            # TEMPLATE action client -- replaces start_controller/stop_controller/
-            # pull_twist/linear_pull/stiffness service pairs. goal.pattern picks
-            # the behavior (mirrors self.PICK_PATTERN today).
+            # Action client for the legacy patterns -- goal.pattern picks the
+            # behavior. Not used for 'sweep', see module docstring.
             self._pick_controller_client = ActionClient(self, PickControl, 'pick_controller') if PickControl else None
+            if self.PICK_PATTERN == 'sweep':
+                self.sweep_start_cli = self.make_client(Trigger, 'sweep/start_controller')
+                self.sweep_stop_cli = self.make_client(Empty, 'sweep/stop_controller')
+                self.sweep_set_theta_cli = self.make_client(SetValue, 'sweep/set_theta_deg')
+                self.sweep_running = False
+                self.sweep_tracking_error = None
+                self.sweep_subscription = self.create_subscription(
+                    Bool, '/sweep/status', self.sweep_status_callback, 10)
+                self.sweep_error_subscription = self.create_subscription(
+                    Float64, '/sweep/tracking_error', self.sweep_error_callback, 10)
             self._event_client = ActionClient(self, EventDetection, 'event_detection')
 
         # Abort machinery
@@ -555,6 +571,19 @@ class StartHarvestAbort(Node):
         future = self.set_goal_cli.call_async(set_goal_req)
         self._wait_for_future(future)
 
+    def sweep_status_callback(self, msg):
+        self.sweep_running = msg.data
+
+    def sweep_error_callback(self, msg):
+        self.sweep_tracking_error = msg.data
+
+    def set_sweep_theta(self, theta_deg):
+        request = SetValue.Request()
+        request.val = theta_deg
+        future = self.sweep_set_theta_cli.call_async(request)
+        self._wait_for_future(future)
+        return future.result()
+
     def release_controller(self):
         future = self.release_controller_client.call_async(Trigger.Request())
         self._wait_for_future(future)
@@ -612,6 +641,12 @@ class StartHarvestAbort(Node):
         return self._run_cancelable_action(self._grasp_client, goal, 'grasp_controller')
 
     def pick_controller_action(self):
+        if self.PICK_PATTERN == 'sweep':
+            # pick_controller.py has no 'sweep' branch -- talk to
+            # sweep_controller.py's own services directly instead of
+            # routing through the pick_controller action/node.
+            return self._run_sweep_pick()
+
         if PickControl is None:
             self.get_logger().error("PickController action client unavailable (interface not implemented yet) -- skipping stage")
             return None
@@ -620,6 +655,39 @@ class StartHarvestAbort(Node):
         goal.pattern = self.PICK_PATTERN
         goal.stop_time = Float32(data=5.0 if self.PICK_PATTERN == 'stiffness-seeking' else 10.0)
         return self._run_cancelable_action(self._pick_controller_client, goal, 'pick_controller')
+
+    def _run_sweep_pick(self):
+        # Not cancelable through a goal handle like _run_cancelable_action --
+        # there's no action server here, so this polls abort_event itself and
+        # calls sweep/stop_controller directly the moment an abort fires.
+        theta_result = self.set_sweep_theta(self.SWEEP_THETA_DEG)
+        if not (theta_result and theta_result.success):
+            self.get_logger().error(
+                f"failed to set sweep theta to {self.SWEEP_THETA_DEG} deg -- "
+                f"continuing with sweep_controller's current value")
+
+        self.sweep_tracking_error = None
+        start_future = self.sweep_start_cli.call_async(Trigger.Request())
+        self._wait_for_future(start_future)
+
+        if not start_future.result().success:
+            self.get_logger().error(f"sweep failed to start: {start_future.result().message}")
+        else:
+            while not self.sweep_running and not self.abort_event.is_set():
+                time.sleep(0.02)
+            while self.sweep_running:
+                if self.abort_event.is_set():
+                    self.get_logger().warn("Abort requested -- stopping sweep")
+                    break
+                if self.sweep_tracking_error is not None:
+                    self.get_logger().info(
+                        f'sweep tracking error: {self.sweep_tracking_error:.4f}',
+                        throttle_duration_sec=0.5)
+                time.sleep(0.02)
+
+        stop_future = self.sweep_stop_cli.call_async(Empty.Request())  # idempotent safety call
+        self._wait_for_future(stop_future)
+        return None
 
     # ------------------------------------------------------------------
     # EventDetection action (unchanged from start_harvest*.py)

@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QSignalBlocker, Qt, QTimer, Signal
+from PySide6.QtCore import QSettings, QSignalBlocker, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QCloseEvent, QFont
 from PySide6.QtWidgets import (
     QApplication,
@@ -197,6 +197,7 @@ class ConfigurationPage(QWidget):
         form.addRow("Description xacro", self._line("arm.description_file"))
         form.addRow("RViz config", self._line("arm.rviz_file"))
         form.addRow("Camera mount", self._combo("arm.camera_mount", ["wrist", "mast"]))
+        form.addRow("Pose-listener source frame", self._line("arm.source_frame"))
         return group
 
     def _build_gripper_group(self) -> QGroupBox:
@@ -241,9 +242,10 @@ class ConfigurationPage(QWidget):
             "Pick pattern",
             self._combo(
                 "harvest.pick_pattern",
-                ["stiffness-seeking", "force-heuristic", "pull-twist", "linear-pull"],
+                ["stiffness-seeking", "force-heuristic", "pull-twist", "linear-pull", "sweep"],
             ),
         )
+        form.addRow("Sweep angle (deg)", self._double("harvest.sweep_theta_deg", -360.0, 360.0, 1))
         form.addRow("Abort on deceleration", self._check("harvest.abort_on_decelerate"))
         form.addRow("Abort recovery", self._combo("harvest.abort_recovery", ["freedrive", "home"]))
         return group
@@ -417,6 +419,7 @@ class MainWindow(QMainWindow):
         self._closing = False
         self._shutdown_started = 0.0
         self._process_rows: dict[str, list[QTreeWidgetItem]] = {}
+        self._field_control_state: dict[str, tuple[str, str | None, str | None]] = {}
 
         initial_path = LAST_PROFILE if LAST_PROFILE.exists() else DEFAULT_PROFILE
         try:
@@ -435,8 +438,16 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.configuration_page, "Configuration")
         self.tabs.addTab(self._build_status_page(), "Status")
         self.tabs.addTab(self._build_controls_page(), "Controls")
+        self.ui_settings = QSettings("apple-harvest", "harvest-operator-ui")
+        self.light_mode_toggle = QPushButton("Light mode")
+        self.light_mode_toggle.setObjectName("themeToggle")
+        self.light_mode_toggle.setCheckable(True)
+        light_mode = self.ui_settings.value("light_mode", False, type=bool)
+        self.light_mode_toggle.setChecked(light_mode)
+        self.light_mode_toggle.toggled.connect(self._set_light_mode)
+        self.tabs.setCornerWidget(self.light_mode_toggle, Qt.Corner.TopRightCorner)
         self.setCentralWidget(self.tabs)
-        self._apply_styles()
+        self._set_light_mode(light_mode, persist=False)
         self._connect_ros()
         self._apply_config(self.config, announce=False)
         self.ros.start()
@@ -546,12 +557,11 @@ class MainWindow(QMainWindow):
         control_layout = QVBoxLayout(control_container)
         control_layout.setContentsMargins(4, 0, 0, 0)
 
-        safety = QLabel(
+        self.safety_note = QLabel(
             "Freedrive requests are handled by the harvest orchestrator and are rejected while an arm motion or harvest stage is active."
         )
-        safety.setWordWrap(True)
-        safety.setStyleSheet("color:#f2cc60; font-weight:600")
-        control_layout.addWidget(safety)
+        self.safety_note.setWordWrap(True)
+        control_layout.addWidget(self.safety_note)
 
         system_group, system_layout = self._button_group("Pipeline")
         self._add_control_button(system_layout, "Start support stack", self._start_support)
@@ -615,9 +625,11 @@ class MainWindow(QMainWindow):
         name: str,
         text: str,
         *,
-        style: str | None = None,
+        tone: str | None = None,
         tooltip: str | None = None,
     ) -> None:
+        self._field_control_state[name] = (text, tone, tooltip)
+        style = f"color:{self._semantic_color(tone)}; font-weight:600" if tone else None
         for prefix in ("", "control_"):
             label = getattr(self, f"{prefix}{name}")
             label.setText(text)
@@ -654,9 +666,61 @@ class MainWindow(QMainWindow):
         index = layout.count()
         layout.addWidget(button, index // 3, index % 3)
 
+    def _set_light_mode(self, enabled: bool, *, persist: bool = True) -> None:
+        self._light_mode = bool(enabled)
+        if persist:
+            self.ui_settings.setValue("light_mode", self._light_mode)
+        self.light_mode_toggle.setText("Light mode: on" if self._light_mode else "Light mode: off")
+        self._apply_styles()
+        self.safety_note.setStyleSheet(
+            f"color:{self._semantic_color('warning')}; font-weight:600"
+        )
+        for panel in self.findChildren(ImagePanel):
+            panel.set_light_mode(self._light_mode)
+        for plot in self.findChildren(LinePlot):
+            plot.set_light_mode(self._light_mode)
+        for name, (text, tone, tooltip) in list(self._field_control_state.items()):
+            self._set_field_control_label(name, text, tone=tone, tooltip=tooltip)
+
+    def _semantic_color(self, tone: str) -> str:
+        palette = {
+            "light": {
+                "normal": "#1f2937",
+                "success": "#1a7f37",
+                "warning": "#9a6700",
+                "danger": "#cf222e",
+                "muted": "#64748b",
+            },
+            "dark": {
+                "normal": "#d7dde5",
+                "success": "#56d364",
+                "warning": "#f2cc60",
+                "danger": "#ff6b6b",
+                "muted": "#8d9aaa",
+            },
+        }
+        return palette["light" if self._light_mode else "dark"][tone]
+
     def _apply_styles(self) -> None:
-        self.setStyleSheet(
+        if self._light_mode:
+            stylesheet = """
+            QMainWindow, QWidget { background:#f4f7fb; color:#1f2937; }
+            QGroupBox { border:1px solid #cbd5e1; border-radius:5px; margin-top:11px; padding-top:9px; font-weight:600; }
+            QGroupBox::title { subcontrol-origin:margin; left:10px; padding:0 5px; }
+            QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox, QPlainTextEdit, QTreeWidget {
+                background:#ffffff; border:1px solid #b8c2d1; border-radius:3px; padding:4px; color:#1f2937;
+            }
+            QPushButton { background:#e5eaf1; border:1px solid #aeb9c8; border-radius:4px; padding:7px 10px; color:#1f2937; }
+            QPushButton:hover { background:#d8e0ea; }
+            QPushButton#themeToggle:checked { background:#ffffff; border-color:#0969da; }
+            QPushButton[primary="true"] { background:#0969da; border-color:#0550ae; color:white; }
+            QPushButton[danger="true"] { background:#cf222e; border-color:#a40e26; color:white; font-weight:700; }
+            QTabBar::tab { background:#e5eaf1; padding:8px 18px; margin-right:2px; }
+            QTabBar::tab:selected { background:#0969da; color:white; }
+            QHeaderView::section { background:#dce3ec; color:#1f2937; padding:5px; border:0; }
             """
+        else:
+            stylesheet = """
             QMainWindow, QWidget { background:#171d25; color:#d7dde5; }
             QGroupBox { border:1px solid #303b4a; border-radius:5px; margin-top:11px; padding-top:9px; font-weight:600; }
             QGroupBox::title { subcontrol-origin:margin; left:10px; padding:0 5px; }
@@ -665,13 +729,14 @@ class MainWindow(QMainWindow):
             }
             QPushButton { background:#263142; border:1px solid #3b4b61; border-radius:4px; padding:7px 10px; }
             QPushButton:hover { background:#33425a; }
-            QPushButton[primary="true"] { background:#1f6feb; border-color:#388bfd; }
-            QPushButton[danger="true"] { background:#b4232d; border-color:#ff5d67; font-weight:700; }
+            QPushButton#themeToggle:checked { background:#e5eaf1; color:#1f2937; border-color:#58a6ff; }
+            QPushButton[primary="true"] { background:#1f6feb; border-color:#388bfd; color:white; }
+            QPushButton[danger="true"] { background:#b4232d; border-color:#ff5d67; color:white; font-weight:700; }
             QTabBar::tab { background:#202936; padding:8px 18px; margin-right:2px; }
             QTabBar::tab:selected { background:#1f6feb; }
             QHeaderView::section { background:#202936; color:#d7dde5; padding:5px; border:0; }
             """
-        )
+        self.setStyleSheet(stylesheet)
 
     def _connect_ros(self) -> None:
         self.ros.image_received.connect(self._image_update)
@@ -764,20 +829,20 @@ class MainWindow(QMainWindow):
             self._set_field_control_label(
                 "stage_status",
                 f"Stage: {stage_match.group(1)}",
-                style="color:#d7dde5; font-weight:600",
+                tone="normal",
             )
         elif key == "harvest" and ("hit enter" in lower or "continue" in lower):
             prompt = clean.strip().splitlines()[-1][-90:]
             self._set_field_control_label(
                 "stage_status",
                 f"Waiting: {prompt}",
-                style="color:#f2cc60; font-weight:600",
+                tone="warning",
             )
         elif "batch complete" in lower:
             self._set_field_control_label(
                 "stage_status",
                 "Stage: batch complete",
-                style="color:#56d364; font-weight:600",
+                tone="success",
             )
 
     def _append_log(self, source: str, text: str) -> None:
@@ -799,7 +864,7 @@ class MainWindow(QMainWindow):
         self._set_field_control_label(
             "ros_status",
             message,
-            style=f"color:{'#56d364' if available else '#ff6b6b'}; font-weight:600",
+            tone="success" if available else "danger",
         )
         self._append_log("ROS", message)
 
@@ -814,11 +879,11 @@ class MainWindow(QMainWindow):
         text = self.SERVO_CODES.get(code, f"Unknown ({code})")
         dangerous = code in {2, 4, 5}
         warning = code in {1, 3, 6}
-        color = "#ff6b6b" if dangerous else "#f2cc60" if warning else "#56d364"
+        tone = "danger" if dangerous else "warning" if warning else "success"
         self._set_field_control_label(
             "servo_status",
             f"Servo: {text}",
-            style=f"color:{color}; font-weight:600",
+            tone=tone,
         )
 
     def _image_update(self, key: str, image, timestamp: float) -> None:
@@ -831,15 +896,14 @@ class MainWindow(QMainWindow):
         for key in ("active_error", "disarm_reason"):
             value = int(status[key])
             self.can_status_labels[key].setText(f"0x{value:08X}")
-            color = "#ff6b6b" if value else "#56d364"
+            color = self._semantic_color("danger" if value else "success")
             self.can_status_labels[key].setStyleSheet(f"color:{color}; font-weight:600")
 
     def _freedrive_update(self, enabled: bool, _timestamp: float) -> None:
-        color = "#f2cc60" if enabled else "#56d364"
         self._set_field_control_label(
             "freedrive_status",
             f"Freedrive: {'enabled' if enabled else 'disabled'}",
-            style=f"color:{color}; font-weight:600",
+            tone="warning" if enabled else "success",
         )
 
     def _service_result(self, name: str, success: bool, message: str) -> None:

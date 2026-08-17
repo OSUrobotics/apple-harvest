@@ -6,11 +6,14 @@ Offline PySide6 control application for the `apple-harvest` ROS 2 pipeline.
 
 - YAML profiles for autonomous and freedrive operation.
 - Editable arm, gripper, vision, harvest, topic, and environment parameters.
+- Configurable pose-listener source frame (`cart_base` by default; for example, `amiga__base`).
+- Sweep pick-controller selection with a configurable sweep angle, alongside the legacy pick patterns.
 - RViz checkbox (`view_rviz`) enabled by default as a backup 3D visualizer.
 - UR headless control and initial scaled trajectory controller activation enabled by default.
 - Mode-aware launch selection: freedrive omits visual-servo and apple-prediction stages while allowing the vision stack to run independently for data collection.
 - Supervised arm, gripper, camera, vision, and abort-capable harvest processes.
 - Separate Status and Controls pages.
+- Persistent Light mode toggle available from every page.
 - Four live image viewers with stale-frame indication: mast/wrist RGB, mast/wrist depth, palm camera, and annotated apple predictions.
 - Fin Ray pressure/ToF, filtered force, ODrive feedback, and gripper IMU plots without an extra plotting dependency. The IMU view shows linear acceleration and roll/pitch/yaw from `/microROS/imu1`.
 - Full `/microROS/can_status` display including position, velocity, torque, current, setpoint, active error, and disarm reason.

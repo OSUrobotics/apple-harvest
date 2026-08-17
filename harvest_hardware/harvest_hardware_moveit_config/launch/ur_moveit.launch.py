@@ -117,6 +117,7 @@ def _launch_setup(context):
         "planning_plugin": "ompl_interface/OMPLPlanner",
         "request_adapters": adapter_chain,
         "start_state_max_bounds_error": 0.1,
+        "simplify_solutions": False,
     })
 
     controllers_yaml = load_yaml("harvest_hardware_moveit_config", "config/controllers.yaml")
@@ -125,6 +126,12 @@ def _launch_setup(context):
         "moveit_simple_controller_manager/MoveItSimpleControllerManager",
     )
     controllers_yaml.setdefault("moveit_simple_controller_manager", {})
+
+    active_controller = "joint_trajectory_controller" if use_fake else "scaled_joint_trajectory_controller"
+    inactive_controller = "scaled_joint_trajectory_controller" if use_fake else "joint_trajectory_controller"
+    smcm = controllers_yaml["moveit_simple_controller_manager"]
+    smcm.setdefault(active_controller, {})["default"] = True
+    smcm.setdefault(inactive_controller, {})["default"] = False
 
     # Octomap & 3D sensor config
     octomap_params = {

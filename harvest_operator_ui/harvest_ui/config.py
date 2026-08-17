@@ -42,6 +42,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "description_file": "cart_ur_gripper.urdf.xacro",
         "rviz_file": "cart_robot.rviz",
         "camera_mount": "wrist",
+        "source_frame": "cart_base",
     },
     "gripper": {
         "gripper_type": "finray",
@@ -67,6 +68,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "enable_apple_prediction": True,
         "optimal_trajectory": True,
         "pick_pattern": "stiffness-seeking",
+        "sweep_theta_deg": 90.0,
         "abort_on_decelerate": False,
         "abort_recovery": "freedrive",
     },
@@ -168,8 +170,11 @@ def validate_config(config: dict[str, Any]) -> list[str]:
         "force-heuristic",
         "pull-twist",
         "linear-pull",
+        "sweep",
     }:
         errors.append("Unknown pick pattern.")
+    if not str(config["arm"]["source_frame"]).strip():
+        errors.append("Pose-listener source frame cannot be empty.")
     if config["harvest"]["abort_recovery"] not in {"freedrive", "home"}:
         errors.append("Abort recovery must be 'freedrive' or 'home'.")
     for script in config["environment"]["setup_scripts"]:
@@ -234,6 +239,7 @@ def build_process_specs(raw_config: dict[str, Any]) -> list[ProcessSpec]:
                 ("description_file", arm["description_file"]),
                 ("rviz_file", arm["rviz_file"]),
                 ("camera_mount", arm["camera_mount"]),
+                ("source_frame", arm["source_frame"]),
             )
         )
         specs.append(ProcessSpec("arm", "Arm control + RViz", argv))
@@ -278,6 +284,7 @@ def build_process_specs(raw_config: dict[str, Any]) -> list[ProcessSpec]:
                 ("enable_apple_prediction", _ros_bool(harvest["enable_apple_prediction"])),
                 ("optimal_trajectory", _ros_bool(harvest["optimal_trajectory"])),
                 ("pick_pattern", harvest["pick_pattern"]),
+                ("sweep_theta_deg", harvest["sweep_theta_deg"]),
                 ("abort_on_decelerate", _ros_bool(harvest["abort_on_decelerate"])),
                 ("abort_recovery", harvest["abort_recovery"]),
                 ("freedrive", _ros_bool(config["mode"] == "freedrive")),

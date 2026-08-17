@@ -9,7 +9,7 @@ from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 from rcl_interfaces.msg import Parameter, ParameterValue, ParameterType
 from rcl_interfaces.srv import SetParameters
 from std_srvs.srv import Trigger, Empty
-from std_msgs.msg import Bool
+from std_msgs.msg import Bool, Float64
 from geometry_msgs.msg import Point, Pose, PoseArray
 from harvest_interfaces.srv import ApplePrediction, CoordinateToTrajectory, SendTrajectory, RecordTopics, GetGripperPose, SetValue, MoveToPose
 from controller_manager_msgs.srv import SwitchController
@@ -93,8 +93,9 @@ class StartHarvest(Node):
         self.declare_parameter('enable_visual_servo', True)
         self.declare_parameter('enable_apple_prediction', True)
         self.declare_parameter('enable_pressure_servo', True)    
-        self.declare_parameter('enable_picking', True)           
+        self.declare_parameter('enable_picking', True)
         self.declare_parameter('optimal_trajectory', True)
+        self.declare_parameter('sweep_theta_deg', 90.0)
 
         # Retrieve parameter values
         self.PICK_PATTERN = self.get_parameter('pick_pattern').get_parameter_value().string_value
@@ -106,7 +107,8 @@ class StartHarvest(Node):
         self.enable_apple_prediction = self.get_parameter('enable_apple_prediction').get_parameter_value().bool_value
         self.enable_pressure_servo = self.get_parameter('enable_pressure_servo').get_parameter_value().bool_value 
         self.enable_picking = self.get_parameter('enable_picking').get_parameter_value().bool_value 
-        self.use_optimal_trajectory = self.get_parameter('optimal_trajectory').get_parameter_value().bool_value 
+        self.use_optimal_trajectory = self.get_parameter('optimal_trajectory').get_parameter_value().bool_value
+        self.SWEEP_THETA_DEG = self.get_parameter('sweep_theta_deg').get_parameter_value().double_value
 
         # Helper clients
         self.switch_controller_client = self.make_client(SwitchController, '/controller_manager/switch_controller')
@@ -141,6 +143,15 @@ class StartHarvest(Node):
             self.linear_pull_start_cli = self.make_client(Empty, 'linear/start_controller')
             self.linear_pull_stop_cli = self.make_client(Empty, 'linear/stop_controller')
             self.set_goal_cli = self.make_client(SetValue, 'set_goal')
+            self.sweep_start_cli = self.make_client(Trigger, 'sweep/start_controller')
+            self.sweep_stop_cli = self.make_client(Empty, 'sweep/stop_controller')
+            self.sweep_set_theta_cli = self.make_client(SetValue, 'sweep/set_theta_deg')
+            self.sweep_running = False
+            self.sweep_tracking_error = None
+            self.sweep_subscription = self.create_subscription(
+                Bool, '/sweep/status', self.sweep_status_callback, 10)
+            self.sweep_error_subscription = self.create_subscription(
+                Float64, '/sweep/tracking_error', self.sweep_error_callback, 10)
             self._event_client = ActionClient(self, EventDetection, 'event_detection')
             self.status = GoalStatus.STATUS_EXECUTING
 
@@ -267,6 +278,19 @@ class StartHarvest(Node):
         future = self.get_gripper_pose_client.call_async(request)
         rclpy.spin_until_future_complete(self, future) 
         return future.result().point
+
+    def sweep_status_callback(self, msg):
+        self.sweep_running = msg.data
+
+    def sweep_error_callback(self, msg):
+        self.sweep_tracking_error = msg.data
+
+    def set_sweep_theta(self, theta_deg):
+        request = SetValue.Request()
+        request.val = theta_deg
+        self.future = self.sweep_set_theta_cli.call_async(request)
+        rclpy.spin_until_future_complete(self, self.future)
+        return self.future.result()
 
     def wait_for_srv(self, srv):
         #service waiter because Miranda is lazy :3
@@ -529,7 +553,36 @@ class StartHarvest(Node):
             
             self.future = self.stop_stiffness_controller_cli.call_async(req)
             rclpy.spin_until_future_complete(self, self.future)
-        
+
+        elif self.PICK_PATTERN == 'sweep':
+            theta_result = self.set_sweep_theta(self.SWEEP_THETA_DEG)
+            if not (theta_result and theta_result.success):
+                self.get_logger().error(
+                    f"failed to set sweep theta to {self.SWEEP_THETA_DEG} deg -- "
+                    f"continuing with sweep_controller's current value")
+
+            self.sweep_tracking_error = None
+            self.future = self.sweep_start_cli.call_async(Trigger.Request())
+            rclpy.spin_until_future_complete(self, self.future)
+
+            if not self.future.result().success:
+                self.get_logger().error(
+                    f"sweep failed to start: {self.future.result().message}")
+            else:
+                # wait for sweep_controller to report it has started...
+                while not self.sweep_running:
+                    rclpy.spin_once(self, timeout_sec=0.1)
+                # ...then wait for it to report it has finished
+                while self.sweep_running:
+                    rclpy.spin_once(self, timeout_sec=0.1)
+                    if self.sweep_tracking_error is not None:
+                        self.get_logger().info(
+                            f'sweep tracking error: {self.sweep_tracking_error:.4f}',
+                            throttle_duration_sec=0.5)
+
+            self.future = self.sweep_stop_cli.call_async(req)  # idempotent safety call
+            rclpy.spin_until_future_complete(self, self.future)
+
         else:
             self.get_logger().info(f'No valid control scheme set')
     
