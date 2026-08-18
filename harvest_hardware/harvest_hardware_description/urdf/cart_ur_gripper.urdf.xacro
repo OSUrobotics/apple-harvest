@@ -135,7 +135,16 @@
       <child  link="gripper_link"/>
       <origin xyz="0.00 0.00 0.0" rpy="0 0 0"/>
     </joint>
-     <xacro:finray_gripper_macro/>
+    <xacro:finray_gripper_macro/>
+    <!-- Define link for manual apple location -->
+    <joint name="finray_tip" type="fixed">
+        <parent link="tool0" />
+        <child link="temp" />
+        <origin xyz="0.000 -0.00 0.290" rpy="0 0 -2.618" />
+    </joint>
+
+    <link name="temp">
+    </link>
   </xacro:if>
 
   <!-- mount gripper -->
@@ -149,14 +158,6 @@
     <xacro:gripper_macro/>
   </xacro:if>
 
-  <!-- Define link for manual apple location -->
-   <joint name="finray_tip" type="fixed">
-      <parent link="tool0" />
-      <child link="temp" />
-      <origin xyz="0.000 -0.00 0.290" rpy="0 0 -2.618" />
-  </joint>
-
-  <link name="temp">
-  </link>
+  
 </robot>
 

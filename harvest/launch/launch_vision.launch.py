@@ -30,7 +30,7 @@ def generate_launch_description():
                                   description="Distance threshold in meters for detecting apples. Filters out backgound apples."))
     declared_arguments.append(DeclareLaunchArgument("vision_experiment", default_value="a", 
                                   description="Microsoft Azure Kinect camera frame (color image, depth image, and point cloud) used in apple detection and voxelize scan."))
-    declared_arguments.append(DeclareLaunchArgument("source_frame", default_value="mast_camera_color_optical_frame",
+    declared_arguments.append(DeclareLaunchArgument("source_frame", default_value="gripper_camera_color_optical_frame",
                                     description="Source frame for apple prediction. Should be the color camera frame"))
     declared_arguments.append(DeclareLaunchArgument("target_frame", default_value="amiga__base",
                                     description="Target frame for apple prediction. Should be the robot base frame"))

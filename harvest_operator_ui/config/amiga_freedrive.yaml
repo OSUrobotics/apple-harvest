@@ -1,0 +1,71 @@
+schema_version: 1
+profile_name: Field harvest
+mode: freedrive
+components:
+  arm: true
+  gripper: true
+  vision: true
+  harvest: true
+environment:
+  setup_scripts:
+  - /opt/ros/humble/setup.bash
+  - /home/imml/apple_harvest_ws/install/local_setup.bash
+  - /home/imml/uros_ws/install/local_setup.bash
+  venv: ''
+  pythonpath: ''
+arm:
+  ur_type: ur5e
+  robot_ip: 169.254.177.220
+  use_fake_hardware: false
+  headless_mode: true
+  activate_joint_controller: true
+  view_rviz: true
+  description_file: amiga_ur_gripper.urdf.xacro
+  rviz_file: view_robot.rviz
+  camera_mount: wrist
+  source_frame: amiga__base
+gripper:
+  gripper_type: finray
+  grasp_strategy: time
+vision:
+  launch_camera: true
+  palm_camera_device_num: 0
+  camera_ns: camera/gripper_camera
+  prediction_model: best_segmentation.pt
+  vservo_model: best_segmentation.pt
+  target_frame: amiga__base
+  mast_serial: '''040322070611'''
+harvest:
+  event_sensitivity: 0.43
+  recording_startup_delay: 0.53
+  base_data_dir: /home/imml/apple_harvest_data/pre_pear_data
+  enable_recording: true
+  enable_visual_servo: false
+  enable_pressure_servo: true
+  enable_picking: true
+  enable_apple_prediction: false
+  optimal_trajectory: false
+  pick_pattern: sweep
+  sweep_theta_deg: 60.0
+  abort_on_decelerate: false
+  abort_recovery: freedrive
+topics:
+  mast_rgb: /camera/gripper_camera/color/image_raw
+  mast_depth: /camera/gripper_camera/aligned_depth_to_color/image_raw
+  palm_image: /gripper/rgb_palm_camera/image_raw
+  apple_prediction_image: /apple_annotated
+  pressure: /microROS/sensor_data
+  gripper_imu: /microROS/imu1
+  can_status: /microROS/can_status
+  wrench: /filtered_wrench
+  servo_status: /servo_node/status
+  freedrive_status: /freedrive_mode_controller/enable_freedrive_mode
+services:
+  gripper_actuate: /microROS/actuate_odrive
+  valve: /microROS/toggle_valve
+  clear_odrive_errors: /microROS/clear_odrive_errors
+  home_gripper: /microROS/home_odrive
+  harvest_freedrive: /set_harvest_freedrive
+  abort_harvest: /abort_harvest
+  move_arm_home: /move_arm_to_home
+  release_apple: /release_apple

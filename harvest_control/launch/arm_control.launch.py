@@ -28,7 +28,7 @@ def generate_launch_description():
         DeclareLaunchArgument('max_accel', default_value='0.05'),
         DeclareLaunchArgument('max_vel', default_value='0.05'),
         DeclareLaunchArgument('traj_time_step', default_value='0.05'),
-        DeclareLaunchArgument('source_frame', default_value='cart_body'),
+        DeclareLaunchArgument('source_frame', default_value='amiga__base'),
         DeclareLaunchArgument('gripper_tip_frame', default_value='gripper_scups_link'),
         DeclareLaunchArgument('gripper_type', default_value='finray'),
         DeclareLaunchArgument('camera_mount', default_value='wrist'),

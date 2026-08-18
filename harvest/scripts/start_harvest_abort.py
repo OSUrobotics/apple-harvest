@@ -256,8 +256,10 @@ class StartHarvestAbort(Node):
             '/microROS/imu1',
             '/camera/gripper_camera/color/image_raw',
             '/camera/gripper_camera/aligned_depth_to_color/image_raw',
+            '/gripper/rgb_palm_camera/image_raw',
             '/joint_states',
             '/force_torque_sensor_broadcaster/wrench', '/servo_node/delta_twist_cmds',
+            '/sweep/status','/sweep/tracking_error'
         ]
         self.pick_controller_topics = [
             '/microROS/sensor_data',
@@ -265,8 +267,10 @@ class StartHarvestAbort(Node):
             '/microROS/imu1',
             '/camera/gripper_camera/color/image_raw',
             '/camera/gripper_camera/aligned_depth_to_color/image_raw',
+            '/gripper/rgb_palm_camera/image_raw',
             '/joint_states',
             '/tool_pose', '/force_torque_sensor_broadcaster/wrench', '/servo_node/delta_twist_cmds',
+            '/sweep/status','/sweep/tracking_error',
         ]
         self.pressure_servo_and_pick_controller_topics = list(set(self.pressure_servo_topics + self.pick_controller_topics))
 
@@ -839,7 +843,7 @@ class StartHarvestAbort(Node):
         self.get_logger().info(f'Found {len(apple_poses.poses)} apples!')
 
         self.get_logger().info('Resetting arm to home position')
-        self.go_to_home()
+        # self.go_to_home()
 
         for idx, coord in enumerate(apple_poses.poses):
             base_dir = self.batch_dir + f'apple_{idx}/'

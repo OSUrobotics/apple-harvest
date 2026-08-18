@@ -37,7 +37,7 @@ def generate_launch_description():
     #Deploy Wifi | Note ifname is device specific (wlo1) run nmcli device status
     ld.add_action(ExecuteProcess(
         cmd=['nmcli', 'device', 'wifi', 'hotspot',
-            'ifname', 'wlo1',
+            'ifname', 'wlp2s0',
             'ssid', 'northjar',
             'password', 'finray_gripper'],
         output='screen',

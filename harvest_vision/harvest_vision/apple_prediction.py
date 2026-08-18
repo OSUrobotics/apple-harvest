@@ -67,7 +67,7 @@ class ApplePredictionNode(Node):
         self.declare_parameter("prediction_radius_min", 0.03)
         self.declare_parameter("prediction_radius_max", 0.06)
         self.declare_parameter("prediction_distance_max", 1.0)
-        self.declare_parameter("source_frame", "mast_camera_color_optical_frame")
+        self.declare_parameter("source_frame", "gripper_camera_color_optical_frame")
         self.declare_parameter("target_frame", "world")
         self.declare_parameter("camera_type", "realsense")
         self.declare_parameter("ransac_iters", 1000)

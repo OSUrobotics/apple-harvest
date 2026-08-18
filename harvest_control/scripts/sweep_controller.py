@@ -113,13 +113,13 @@ class SweepController(Node):
         # Pivot location, built from a translation along the tool's own z-axis
         # plus a translation straight up in world Z -- see pivot_offset_vector().
         self.declare_parameter('pivot_tool_z', 0.04)   # m, along the tool's local z-axis
-        self.declare_parameter('pivot_world_z', 0.08)  # m, straight up in world Z
+        self.declare_parameter('pivot_world_z', 0.06)  # m, straight up in world Z
         self.declare_parameter('forward_axis_body', [0.0, 0.0, 1.0])  # gripper's pointing axis
         self.declare_parameter('theta_deg', 45.0)
         self.declare_parameter('duration', 8.0)
         self.declare_parameter('rate_hz', 100.0)
-        self.declare_parameter('kp_lin', 4.0)
-        self.declare_parameter('kp_ang', 8.0)
+        self.declare_parameter('kp_lin', 100.0)
+        self.declare_parameter('kp_ang', 100.0)
         # If tracking falls this far behind (rad), pause advancing the reference
         # until the arm catches up, instead of letting the target keep moving on
         # a fixed schedule while Servo is decelerating/halting for its own
@@ -129,7 +129,7 @@ class SweepController(Node):
         # catches back up, stop and say why instead of hanging forever.
         self.declare_parameter('max_duration', 15.0)
         self.declare_parameter('base_frame', 'base_link')
-        self.declare_parameter('gripper_tip_frame', 'gripper_link')
+        self.declare_parameter('gripper_tip_frame', 'gripper_scups_link')
 
         self.pivot_tool_z = self.get_parameter('pivot_tool_z').get_parameter_value().double_value
         self.pivot_world_z = self.get_parameter('pivot_world_z').get_parameter_value().double_value
