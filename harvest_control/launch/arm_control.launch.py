@@ -224,7 +224,7 @@ def generate_launch_description():
             rsp,
             moveit,
             coord_to_traj,
-            event_detector,
+            # event_detector,
             force_filter,
             pick_controllers,
             pick_controller,

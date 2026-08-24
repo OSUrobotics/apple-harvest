@@ -963,14 +963,15 @@ class StartHarvestAbort(Node):
                 self.run_stage(
                     [],
                     base_dir + 'post_pick_pull',
-                    servo_frame='base_link',
+                    servo_frame='amiga__base',
                     use_servo=True,
                     action_fn=pull_back_action,
                 )
                 self.PICK_PATTERN = original_pick_pattern
 
                 input('Done with pick, hit enter to return home')
-                self.go_to_home()
+                # self.go_to_home()
+                self.go_to_scan_position()
                 if self.enable_pressure_servo:
                     self.release_controller()
 

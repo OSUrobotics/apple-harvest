@@ -66,7 +66,7 @@ class LinController(Node):
 
         msg = TwistStamped()
         msg.header.stamp = self.get_clock().now().to_msg()
-        msg.header.frame_id = "tool0"
+        msg.header.frame_id = "amiga__base"
 
         if self.running:
 
