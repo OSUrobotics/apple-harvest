@@ -731,7 +731,7 @@ class StartHarvestAbort(Node):
                 raise HarvestAborted(stage_name)
 
             if self.enable_recording:
-                self.start_recording(topics, self.base_data_dir + prefix)
+                self.start_recording(topics, prefix)
                 time.sleep(self.recording_startup_delay)
 
             self.switch_controller(servo=use_servo)
@@ -828,7 +828,27 @@ class StartHarvestAbort(Node):
 
         if self.enable_apple_prediction:
             self.get_logger().info('Predicting apple locations')
-            apple_poses = self.start_apple_prediction()
+            apple_poses = None
+
+            def predict_action():
+                nonlocal apple_poses
+                apple_poses = self.start_apple_prediction()
+
+            try:
+                self.run_stage(
+                    self.prediction_topics,
+                    self.batch_dir + self.prediction_file_name_prefix,
+                    use_servo=False,
+                    action_fn=predict_action,
+                )
+            except HarvestAborted:
+                self.get_logger().error('Aborted during apple prediction')
+                if self.abort_recovery_mode == 'freedrive':
+                    self.get_logger().warn('Recovered into freedrive -- continue picking manually, or stop to end the batch')
+                    self._run_freedrive_loop(start_idx=1)
+                else:
+                    self.get_logger().error('Ending batch early')
+                return
         else:
             self.get_logger().info('Skipping apple prediction, using pre-saved locations')
             apple_poses = PoseArray()
