@@ -26,13 +26,13 @@ arm:
   source_frame: amiga__base
 gripper:
   gripper_type: finray
-  grasp_strategy: time
+  grasp_strategy: pressure
 vision:
   launch_camera: true
   palm_camera_device_num: 0
   camera_ns: camera/gripper_camera
-  prediction_model: best_segmentation.pt
-  vservo_model: best_segmentation.pt
+  prediction_model: v9e.pt
+  vservo_model: v9e.pt
   target_frame: amiga__base
   mast_serial: '''040322070611'''
 harvest:
@@ -45,7 +45,7 @@ harvest:
   enable_picking: true
   enable_apple_prediction: false
   optimal_trajectory: false
-  pick_pattern: sweep
+  pick_pattern: stiffness-seeking
   sweep_theta_deg: 60.0
   abort_on_decelerate: false
   abort_recovery: freedrive

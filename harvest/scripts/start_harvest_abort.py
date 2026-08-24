@@ -247,7 +247,14 @@ class StartHarvestAbort(Node):
         self.apple_coordinates = {}
         self.pick_pattern = {'pick controller': self.PICK_PATTERN}
 
-        self.prediction_topics = ['/apple_markers']
+        self.prediction_topics = [
+            '/apple_markers', 
+            '/joint_states',  
+            '/camera/gripper_camera/color/image_raw',
+            '/camera/gripper_camera/aligned_depth_to_color/image_raw',
+            '/camera/gripper_camera/depth/image_rect_raw',
+            '/apple_annotated'
+        ]
         self.approach_trajectory_topics = ['/apple_markers']
         self.visual_servo_topics = ['/gripper/rgb_palm_camera/image_raw', '/joint_states', '/servo_node/delta_twist_cmds']
         self.pressure_servo_topics = [
@@ -841,6 +848,7 @@ class StartHarvestAbort(Node):
                     use_servo=False,
                     action_fn=predict_action,
                 )
+                self.switch_controller(servo=False)
             except HarvestAborted:
                 self.get_logger().error('Aborted during apple prediction')
                 if self.abort_recovery_mode == 'freedrive':

@@ -31,8 +31,8 @@ vision:
   launch_camera: true
   palm_camera_device_num: 0
   camera_ns: camera/gripper_camera
-  prediction_model: best_segmentation.pt
-  vservo_model: best_segmentation.pt
+  prediction_model: pear_yolo11_250812.pt
+  vservo_model: pear_yolo11_250812.pt
   target_frame: amiga__base
   mast_serial: '''040322070611'''
 harvest:
