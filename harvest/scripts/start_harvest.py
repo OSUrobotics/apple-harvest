@@ -18,6 +18,7 @@ from controller_manager_msgs.srv import SwitchController
 from rclpy.action import ActionClient
 from action_msgs.msg import GoalStatus
 from harvest_interfaces.action import EventDetection
+from visualization_msgs.msg import Marker
 from tf2_geometry_msgs import TransformStamped
 from tf2_ros import TransformException
 
@@ -80,8 +81,6 @@ class StartHarvest(Node):
         if self.enable_recording:
             self.start_record_client = self.make_client(RecordTopics, 'record_topics')
             self.stop_record_client = self.make_client(Trigger, 'stop_recording')
-            # Initialize metadata and topics
-            self.init_metadata_and_topics()
         if self.enable_visual_servo:
             self.start_vservo_client = self.make_client(Trigger, '/start_visual_servo')
         if self.enable_apple_prediction:
@@ -104,6 +103,8 @@ class StartHarvest(Node):
 
         # Which apple are we processing?
         self.current_apple_index_pub = self.create_publisher(Int32, 'start_harvest/current_apple_index', 5)
+        # Draw it in the scene
+        self.current_target_apple_pub = self.create_publisher(Marker, 'start_harvest/current_apple_pose', 5)
 
        # Where is the base of the arm (for determining sort order)?
         self.tf_buffer = Buffer()
@@ -112,6 +113,9 @@ class StartHarvest(Node):
         # One-time timer to get the arm base location
         self.arm_base = (0, 0, 0)
         self.pose_timer = self.create_timer(0.1, self.pose_timer_callback)
+
+        # topics to listen to and service combos
+        self.init_metadata_and_topics()
 
     @staticmethod
     def _get_data_storage_dir():
@@ -155,7 +159,7 @@ class StartHarvest(Node):
         while not client.wait_for_service(timeout_sec=1.0):
             self.get_logger().info(f"Waiting for service '{name}', retrying...")
         return client
-
+    
     def init_metadata_and_topics(self):
         self.apple_coordinates = {}
         self.pick_pattern = {'pick controller': self.PICK_PATTERN}
@@ -320,7 +324,7 @@ class StartHarvest(Node):
         feedback = feedback_msg.feedback
         self.get_logger().info('Received feedback: {0}'.format(feedback.listening))
 
-    def start_visual_servo(self, pose):
+    def start_visual_servo(self):
         # Starts local planning sequence
         self.request = Trigger.Request()
         self.future = self.start_vservo_client.call_async(self.request)
@@ -400,6 +404,9 @@ class StartHarvest(Node):
 
         self.future = self.coord_to_traj_client.call_async(self.request)
         rclpy.spin_until_future_complete(self, self.future) 
+        if not self.future.result().success:
+            self.get_logger().warn(f"Failed to get waypoints")
+            return None
         return self.future.result().waypoints
 
     def trigger_arm_mover(self, trajectory):
@@ -538,32 +545,56 @@ class StartHarvest(Node):
         d_ang = []
         min_z = 1e30
         max_z = 0
-        for pose in poses:
-            d_z.append(np.abs(pose.y - self.arm_base[1]))
-            if d_z[-1] < max_z:
-                max_z = d_z[-1]
-            if d_z[-1] > min_z:
+        for pose in poses.poses:
+            pos = pose.position
+            d_z.append(np.abs(pos.y - self.arm_base[1]))
+            if d_z[-1] < min_z:
                 min_z = d_z[-1]
+            if d_z[-1] > max_z:
+                max_z = d_z[-1]
 
-            d_ang_height = np.abs(np.arctan2(pose.z - self.arm_base[2], pose.y - self.arm_base[1]))
-            d_ang_width = np.abs(np.arctan2(pose.x - self.arm_base[0], pose.y - self.arm_base[1]))
+            d_ang_height = np.abs(np.arctan2(pos.z - self.arm_base[2], pos.y - self.arm_base[1]))
+            d_ang_width = np.abs(np.arctan2(pos.x - self.arm_base[0], pos.y - self.arm_base[1]))
             d_ang.append(0.5 * (d_ang_height + d_ang_width))
-        
-        self.get_logger().info(f"Apple locations by z, ang {d_z}, {d_ang}")
+
+        self.get_logger().info(f"Sorting apples {min_z} {max_z} {np.min(np.array(d_ang))} {np.max(np.array(d_ang))}")
         indices = []
         n_bins = 6
         z_range = np.linspace(min_z, max_z, n_bins)
         ang_range = np.linspace(0.0, np.pi, n_bins)
         n_ang_range = 2
-        for l_z, r_z in zip(z_range(0, n_bins - 1), z_range(1, n_bins)):
-            for l_a, r_a in zip(ang_range[0, n_ang_range - 1], ang_range[1, n_ang_range]):
+        for l_z, r_z in zip(z_range[0:n_bins - 1], z_range[1:n_bins]):
+            for l_a, r_a in zip(ang_range[0:n_ang_range - 1], ang_range[1:n_ang_range]):
                 for indx in range(0, len(poses.poses)):
                     if l_z <= d_z[indx] <= r_z:
-                        if l_a <= d_ang <= r_a:
+                        if l_a <= d_ang[indx] <= r_a:
                             indices.append(indx)
+                            self.get_logger().info(f"Adding indx {indx} {d_z[indx]:0.2f} {d_ang[indx]:0.2f}")
         # Remove duplicates
+        self.get_logger().info(f"Sorted {indices}")
         return list(dict.fromkeys(indices))    
-        
+
+    def _publish_current_target_marker(self, apple_locs: PoseArray, indx: int):
+        marker = Marker()
+        marker.header = apple_locs.header
+        marker.ns = 'apple'
+        marker.id = indx
+
+        # Create and set the Point object
+        pt = apple_locs.poses[indx]
+        marker.pose.position = pt.position
+
+        marker.type = Marker.CUBE
+        marker.pose.orientation.w = 1.0
+        marker.scale.x = 0.2  # Radius of the sphere
+        marker.scale.y = 0.2
+        marker.scale.z = 0.2
+        marker.color.r = 0.5  # Red color 
+        marker.color.g = 1.0
+        marker.color.b = 0.5
+        marker.color.a = 1.0  # Fully opaque
+        self.current_target_apple_pub.publish(marker)
+
     def start(self): 
         # Stage 1: Reset arm to home position
         self.get_logger().info(f'Resetting arm to home position')
@@ -586,7 +617,7 @@ class StartHarvest(Node):
         self.get_logger().info(f'Found {len(apple_poses.poses)} apples!')
 
         # Sort order - closest first, then by location in center of graspable region
-        sort_order = self.sort_poses(apple_poses)
+        sort_order = self._sort_poses(apple_poses)
 
         # Loop over apple locations
         for idx in sort_order:
@@ -601,11 +632,17 @@ class StartHarvest(Node):
             # Stage 3: Approach apple
             coord = apple_poses.poses[idx]
 
+            self._publish_current_target_marker(apple_locs=apple_poses, indx=idx)
+
             input(f'Hit enter to start with apple {idx}')
-            self.get_logger().info(f'Approaching apple {idx}: Coord {coord}')
+            self.get_logger().info(f'Approaching apple {idx}: Coord {coord.position}')
             if self.use_optimal_trajectory:
                 waypoints = self.call_coord_to_traj(coord)
+                if waypoints is None:
+                    continue
                 self.trigger_arm_mover(waypoints)
+
+            input(f'Hit enter to move to point {idx}')
             # Finish aligning the arm with the actual point (or move it there in the first place)
             self.trigger_move_arm_to_pose(coord)
 

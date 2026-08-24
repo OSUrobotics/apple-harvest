@@ -4,7 +4,7 @@
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Image, PointCloud2, CameraInfo, Range
-from std_msgs.msg import Int16MultiArray, Float32
+from std_msgs.msg import Int16MultiArray
 from tf2_ros import TransformException
 from tf2_ros.buffer import Buffer
 from tf2_ros.transform_listener import TransformListener
@@ -114,6 +114,9 @@ class GripperPalmCamera(Node):
         # Publish TOF info (real or fake) as a float
         self.tof_pub = self.create_publisher(Range, '/gripper/tof', 10)
 
+        # Save the last projected image if using fake image
+        self.fake_img = None
+
         # camera setup
         if self.get_parameter('use_fake_hardware').value:
             # This is for producing the 3d point cloud projected image and (if fake hardware) also generating the fake camera image
@@ -203,7 +206,7 @@ class GripperPalmCamera(Node):
 
     def apple_poses_callback(self, msg: PoseArray):
         """ Get the markers from the 3D apple prediction and save them into the image"""
-        self.apple_locs_3d = np.ones((len(msg.poses), 4))
+        self.apple_locs_3d = np.ones((4, len(msg.poses)))
         # Copy pose data in
         for indx, pose in enumerate(msg.poses):
             self.apple_locs_3d[0, indx] = pose.position.x
@@ -322,52 +325,75 @@ class GripperPalmCamera(Node):
             return
 
         b_changed, new_pose = self._get_current_pose(pose_header)
-        if b_changed == False:
+
+        # Couldn't get pose transform
+        if new_pose is None:
             return
         
-        self.get_logger().info(f"Rendering point cloud {self.resolution}, N points {self.point_cloud['points'].shape}, {self.point_cloud['colors'].shape}")
+        if b_changed:        
+            self.get_logger().info(f"Rendering point cloud {self.resolution}, N points {self.point_cloud['points'].shape}, {self.point_cloud['colors'].shape}")
 
-        # image - width and height
-        img = np.zeros((self.resolution[1], self.resolution[0], 3), dtype=np.uint8)
+            # image - width and height
+            self.fake_img = np.zeros((self.resolution[1], self.resolution[0], 3), dtype=np.uint8)
 
-        # Iterate through points
-        # Move the points
-        homogeneous_matrix = self._get_matrix_transform(new_pose)
-        points_transformed = (homogeneous_matrix @ self.point_cloud["points"]).transpose()
+            # Iterate through points
+            # Move the points
+            homogeneous_matrix = self._get_matrix_transform(new_pose)
+            points_transformed = (homogeneous_matrix @ self.point_cloud["points"]).transpose()
 
-        # Merge the points with the colors for the following operations (nx7 matrix)
-        points_and_colors = np.hstack((points_transformed[:, 0:3], self.point_cloud["colors"]))
+            # Merge the points with the colors for the following operations (nx7 matrix)
+            points_and_colors = np.hstack((points_transformed[:, 0:3], self.point_cloud["colors"]))
+            
+            # Filter on depth
+            valid_mask = points_and_colors[:, 2] > 0.01
+            points_and_colors_keep = points_and_colors[valid_mask, :]
+            
+            # Sort by depth
+            points_sorted = points_and_colors_keep[(-points_and_colors_keep[:, 2]).argsort()]
+
+            # Transform to image coordinates
+            x, y, z = points_sorted[:, 0], points_sorted[:, 1], points_sorted[:, 2]
+
+            u = (x * self.fx / z) + self.cx
+            v = (y * self.fy / z) + self.cy
+
+            # For finding the middle of the image (for fake time of flight)
+            x_lim = int(self.fx * np.tan(self.tof_angle / 2.0) + self.cx)
+            y_lim = int(self.fy * np.tan(self.tof_angle / 2.0) + self.cy)
+            mid_x = self.resolution[0] // 2
+            mid_y = self.resolution[1] // 2
+            x_lim = min(x_lim, mid_x - 1)
+            y_lim = min(y_lim, mid_y - 1)
+            self.get_logger().info(f"{np.min(x)}, {np.max(x)}")
+            self.get_logger().info(f"Getting middle of image {x_lim} {y_lim} mid {mid_x} {mid_y} {z.shape}")
+            center_of_image_x = np.logical_and(u > mid_x - x_lim, u < mid_x + x_lim)
+            center_of_image_y = np.logical_and(v > mid_y - y_lim, v < mid_y + y_lim)
+            center_of_image = np.logical_and(center_of_image_x, center_of_image_y)
+            self.get_logger().info(f"Kept {np.count_nonzero(center_of_image)} {x_lim * y_lim * 4}")
+            self.depth_point_cloud = z[center_of_image]
+
+            # Trim again, this time for u,v out of bounds
+            valid_pixels = (u >= 0) & (u < self.resolution[0]) & (v >= 0) & (v < self.resolution[1])
+
+            # Convert to ints for indexing
+            u_idx = u[valid_pixels].astype(int)
+            v_idx = v[valid_pixels].astype(int)
+
+            colors = points_sorted[valid_pixels, 3:]
+            for indx in range(len(u_idx)):
+                # Colors for each pixel
+                rgb_pix = colors[indx, :]
+                # b g r
+                self.fake_img[v_idx[indx], u_idx[indx]] = [rgb_pix[2], rgb_pix[1], rgb_pix[0]]
+
+            # 6. Publish the image and info messages        
+            cv2.imwrite('check.png', self.fake_img)
+
+        if self.fake_img is None:
+            # Shouldn't happen, but...
+            return
         
-        # Filter on depth
-        valid_mask = points_and_colors[:, 2] > 0.01
-        points_and_colors_keep = points_and_colors[valid_mask, :]
-        
-        # Sort by depth
-        points_sorted = points_and_colors_keep[(-points_and_colors_keep[:, 2]).argsort()]
-
-        # Transform to image coordinates
-        x, y, self.depth_point_cloud = points_sorted[:, 0], points_sorted[:, 1], points_sorted[:, 2]
-
-        u = (x * self.fx / self.depth_point_cloud) + self.cx
-        v = (y * self.fy / self.depth_point_cloud) + self.cy
-
-        # Trim again, this time for u,v out of bounds
-        valid_pixels = (u >= 0) & (u < self.resolution[0]) & (v >= 0) & (v < self.resolution[1])
-
-        # Convert to ints for indexing
-        u_idx = u[valid_pixels].astype(int)
-        v_idx = v[valid_pixels].astype(int)
-
-        colors = points_sorted[valid_pixels, 3:]
-        for indx in range(len(u_idx)):
-            # Colors for each pixel
-            rgb_pix = colors[indx, :]
-            # b g r
-            img[v_idx[indx], u_idx[indx]] = [rgb_pix[2], rgb_pix[1], rgb_pix[0]]
-
-        # 6. Publish the image and info messages        
-        cv2.imwrite('check.png', img)
-        img_msg = self.bridge.cv2_to_imgmsg(img, encoding="bgr8")
+        img_msg = self.bridge.cv2_to_imgmsg(self.fake_img, encoding="bgr8")
 
         img_msg.header = header
         img_msg.header.frame_id = "gripper_palm_camera_optical_link"
@@ -387,18 +413,18 @@ class GripperPalmCamera(Node):
             self.camera_pub.publish(img_msg)
             self.published_camera_info = True
 
-        self.get_logger().info("Done")
-
     def _publish_projected_pts(self, header: Header, pose_header: Header):
         """ Get the markers from the 3D apple prediction and project them into the image"""
-        if not self.apple_locs_3d:
+        if self.apple_locs_3d is None:
             return
 
         b_changed, new_pose = self._get_current_pose(pose_header)
-        if b_changed == False:
+        if b_changed:
+            self.get_logger().info(f"Projecting points into image")
+
+        if new_pose is None:
+            # Something went wrong - no transform
             return
-        
-        self.get_logger().info(f"Projecting points into image")
 
         homogeneous_matrix = self._get_matrix_transform(new_pose)
 
@@ -424,7 +450,8 @@ class GripperPalmCamera(Node):
 
             pa.poses.append(proj_pt)
 
-        self.get_logger().info(f"Publishing {len(pa.poses)} projected apple locations")
+        if b_changed:
+            self.get_logger().info(f"Publishing {len(pa.poses)} projected apple locations")
         self.apple_loc_pub.publish(pa)
 
     def _publish_fake_tof(self, header: Header):
@@ -435,12 +462,8 @@ class GripperPalmCamera(Node):
         # what part of the depth image to use
         # theta = arctan((u - cx) / fx)
         #  u = fx * tan(theta) + cx
-        x_lim = int(self.fx * np.tan(self.tof_angle / 2.0) + self.cx)
-        y_lim = int(self.fy * np.tan(self.tof_angle / 2.0) + self.cy)
-        self.get_logger().info(f"Getting middle of image {x_lim} {y_lim} {self.depth_point_cloud.shape}")
-        x_lim = np.min(x_lim, self.depth_point_cloud.shape[1] // 2)
-        y_lim = np.min(y_lim, self.depth_point_cloud.shape[0] // 2)
-        z = np.mean(self.depth_point_cloud[self.cy - y_lim:self.cy + y_lim, self.cx - x_lim:self.cx + x_lim])
+        # Already calculated in fake image
+        z = np.mean(self.depth_point_cloud)
 
         msg_tof = Range()
         msg_tof.header = header

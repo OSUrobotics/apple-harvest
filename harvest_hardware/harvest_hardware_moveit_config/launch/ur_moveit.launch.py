@@ -10,6 +10,7 @@ from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 from launch_ros.parameter_descriptions import ParameterValue
 from launch.conditions import IfCondition
+from launch.actions import TimerAction
 
 
 def load_yaml(pkg, relpath):
@@ -156,7 +157,7 @@ def _launch_setup(context):
     move_group = Node(
         package="moveit_ros_move_group",
         executable="move_group",
-        name="move_group",
+        name="ur_move_group",
         output="screen",
         parameters=move_group_params,
     )
@@ -201,7 +202,7 @@ def _launch_setup(context):
     )
 
     # RViz
-    rviz = Node(
+    rviz_node = Node(
         package="rviz2",
         executable="rviz2",
         name="rviz2_moveit",
@@ -223,11 +224,15 @@ def _launch_setup(context):
         ],
         condition=IfCondition(LaunchConfiguration("view_rviz")),
     )
+    delay_rviz_before_start = TimerAction(
+        period=2.0,  # Delays RViz by 5 seconds
+        actions=[rviz_node]
+    )
 
     return [
         move_group, 
         servo_node,
         move_arm,
         # rsp,
-        rviz, 
+        delay_rviz_before_start, 
         ]

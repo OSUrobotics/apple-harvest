@@ -7,7 +7,7 @@ from message_filters import ApproximateTimeSynchronizer, Subscriber
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.callback_groups import ReentrantCallbackGroup
 # Interfaces
-from sensor_msgs.msg import Image, CameraInfo
+from sensor_msgs.msg import Image, CameraInfo, Range
 from std_srvs.srv import Trigger
 from geometry_msgs.msg import PoseStamped, TwistStamped, Pose, PoseArray, Twist
 from std_msgs.msg import Int32, Float32
@@ -42,6 +42,8 @@ from collections import deque
 from math import sqrt
 from scipy.optimize import linear_sum_assignment
 
+from ament_index_python.packages import get_package_share_directory
+from pathlib import Path
 
 class LocalPlanner(Node):
     ### Control of state
@@ -77,6 +79,19 @@ class LocalPlanner(Node):
     def __init__(self):
         super().__init__('local_planner_node')
 
+        ### Servo controller params
+        try:
+            vservo_path = Path(get_package_share_directory("harvest_vision")) / "yolo_networks" / "v9e.pt"
+            vservo_path = str(vservo_path)
+        except FileNotFoundError:
+            vservo_path = "NA"
+
+        self.declare_parameter("vservo_model_path", vservo_path)
+        self.declare_parameter("vservo_yolo_conf", 0.85)
+        self.declare_parameter("vservo_accuracy_px", 10)
+        self.declare_parameter("vservo_smoothing_factor", 6.0)
+        self.declare_parameter("vservo_max_vel", 0.6)
+
         ### Subscribers/ Publishers
 
         ## The 30 fps sampling for image, 2d points, eef
@@ -88,7 +103,7 @@ class LocalPlanner(Node):
         # The projected locations
         self.apple_loc_subscription = message_filters.Subscriber(self, PoseArray, "gripper/apple_locs", qos_profile)
         # Depth at time of image capture
-        self.depth_subscription = message_filters.Subscriber(self Float32, "gripper/tof/depth_raw", qos_profile)
+        self.depth_subscription = message_filters.Subscriber(self, Range, "gripper/tof", qos_profile)
 
         ## Subscriptions that only need to happen once at the start of the service
         # Current selected apple - should be set before this service is called
@@ -96,9 +111,6 @@ class LocalPlanner(Node):
 
         # Camera info (to get the k matrix)
         self.cam_info_pub = self.create_subscription(CameraInfo, '/gripper/rgb_palm_camera/camera_info', self.camera_info_callback, 1)
-
-        # This tracks a running filter on the TOF depth data, which samples much faster than the camera
-        self.depth_sub = self.create_subscription(Float32, "gripper/tof/depth_raw", self.depth_callback, 10)
 
         # Synchronize
         self.ats = message_filters.ApproximateTimeSynchronizer([self.camera_subscription, self.apple_loc_subscription, self.depth_subscription], 
@@ -122,14 +134,8 @@ class LocalPlanner(Node):
 
         ### Services
         # Service to start the local planner sequence
-        self.start_service = self.create_service(Trigger, "start_visual_servo", self.start_sequence_srv_callback, callback_group=r_callback_group)
+        self.start_service = self.create_service(Trigger, "/start_visual_servo", self.start_sequence_srv_callback, callback_group=r_callback_group)
         
-        ### Servo controller params
-        self.declare_parameter("vservo_model_path", "NA")
-        self.declare_parameter("vservo_yolo_conf", 0.85)
-        self.declare_parameter("vservo_accuracy_px", 10)
-        self.declare_parameter("vservo_smoothing_factor", 6.0)
-        self.declare_parameter("vservo_max_vel", 0.6)
         self.yolo_conf = self.get_parameter("vservo_yolo_conf").get_parameter_value().double_value
         self.target_pixel_accuracy = self.get_parameter("vservo_accuracy_px").get_parameter_value().integer_value
         self.smoothing_factor = self.get_parameter("vservo_smoothing_factor").get_parameter_value().double_value
@@ -183,8 +189,12 @@ class LocalPlanner(Node):
 
         ### Image Processing
         self.br = CvBridge()
-        self.model = YOLO(self.model_path)  # pretrained YOLOv8n model
-        self.model.model = torch.compile(self.model.model)
+        try:
+            self.model = YOLO(self.model_path)  # pretrained YOLOv8n model
+            self.model.model = torch.compile(self.model.model)
+        except Exception:
+            self.model = None
+            self.get_logger().warning(f"Launching visual servoing without yolo model")
 
         ### Kalman
         self.prev_vel = [0,0]
@@ -295,7 +305,6 @@ class LocalPlanner(Node):
     def apple_index_callback(self, indx_msg: Int32):
         self.current_apple_index = int(indx_msg.data)
         self.get_logger().info(f"Processing 3D apple {self.current_apple_index}")
-        self.debug_image()
 
     def depth_callback(self, msg: Float32):
         """ Store a running average """
@@ -313,7 +322,7 @@ class LocalPlanner(Node):
         """ Store the focal length for calculating actual x,y distances from image distaces"""
         self.k = np.array(msg.k)
         self.k.reshape((3, 3))
-        self.get_logger().info(f"Gripper palm camera fx fy {self.fx} {self.fy}")
+        self.get_logger().info(f"Gripper palm camera fx fy {self.k}")
 
     def create_debug_image(self, img):
         """ Show the projected apple centers, the yolo bounding boxes
@@ -551,12 +560,19 @@ class LocalPlanner(Node):
         # Convert to opencv format from msg
         image = self.br.imgmsg_to_cv2(rgb, "bgr8")
 
-        self.height = image.height
-        self.width = image.width
+        self.height = image.shape[1]
+        self.width = image.shape[0]
+        self.get_logger().info(f"YOLO processing image {self.height}, {self.width}")
 
         # Get apple bounding boxes from yolo model
         # results = self.model(image, conf=self.yolo_conf, device='cuda', verbose=False)[0]
-        results = self.model(image, conf=self.yolo_conf, verbose=False)[0]
+        if self.model:
+            results = self.model(image, conf=self.yolo_conf, verbose=False)[0]
+        else:
+            self.yolo_apple_centers = None
+            self.yolo_apple_radii = None
+            return image
+        
         self.yolo_apple_centers = np.zeros((len(results), 2))
         self.yolo_apple_radii = []
         for indx, box in enumerate(results):
@@ -565,6 +581,7 @@ class LocalPlanner(Node):
             self.apple_centers[indx, 0] = (x + w) / 2
             self.apple_centers[indx, 1] = (y + h) / 2
             self.apple_radii.append(0.5 * (w + h))
+        return image
 
     # ================================================================== Helper methods
     def normalize(self, val, minimum, maximum):
@@ -700,7 +717,7 @@ class LocalPlanner(Node):
         self.proj_apple_locs(proj_pts_msg=proj_pts_msg)
 
         # Run YOLO to get all bounding boxes    
-        self._run_yolo(rgb_msg)
+        img = self._run_yolo(rgb_msg)
 
         # Now try to do a yolo to yolo match
         self._estimate_image_movement_from_yolo()
@@ -712,7 +729,7 @@ class LocalPlanner(Node):
         self._kalman_filter_update()
 
         # Image showing projected points and yolo bounding boxes
-        self.create_debug_image()
+        self.create_debug_image(img=img)
 
         vel_vec = TwistStamped()
         vel_vec.header.stamp = self.get_clock().now().to_msg()
@@ -768,10 +785,17 @@ class LocalPlanner(Node):
 
 def main(args=None):
     rclpy.init(args=args)
+
     local_planner = LocalPlanner()
-    executor = MultiThreadedExecutor()
-    rclpy.spin(local_planner, executor=executor)
-    rclpy.shutdown()
+
+    try:
+        # Keep the node running to listen and respond to incoming requests
+            executor = MultiThreadedExecutor()
+            rclpy.spin(local_planner, executor=executor)
+    finally:
+        # Clean up and shutdown cleanly
+        local_planner.destroy_node()
+        rclpy.shutdown()
 
 
 if __name__ == '__main__':

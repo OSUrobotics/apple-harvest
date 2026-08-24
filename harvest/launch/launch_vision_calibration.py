@@ -100,7 +100,7 @@ def generate_launch_description():
     declared_arguments.append(DeclareLaunchArgument('vservo_model_path', default_value=[PathJoinSubstitution([FindPackageShare("harvest_vision"), "yolo_networks", LaunchConfiguration("vservo_model")])]))
     
     ### Offsets for where to place the point cloud. y is up/down
-    declared_arguments.append(DeclareLaunchArgument("pointcloud_offset", default_value="(-0.3, 0.0, 1.0)", 
+    declared_arguments.append(DeclareLaunchArgument("pointcloud_offset", default_value="(-0.1, -0.1, 0.55)", 
                                   description="Tuple for x,y,z offset of apple point cloud from mast camera base"))
 
     ### Nodes

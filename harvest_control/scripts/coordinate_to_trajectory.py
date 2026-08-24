@@ -40,8 +40,8 @@ class CoordinateToTrajectoryService(Node):
         self.apple_marker_publisher = self.create_publisher(MarkerArray, 'apple_markers_OLD', 10)
 
         # Set the timer to publish markers periodically
-        # self.voxel_timer = self.create_timer(1.0, self.publish_voxel_markers)
-        self.apple_timer = self.create_timer(1.0, self.publish_apple_markers)
+        self.voxel_timer = self.create_timer(1.0, self.publish_voxel_markers)
+        # self.apple_timer = self.create_timer(1.0, self.publish_apple_markers)
 
         # Get the package share directory
         package_share_directory = get_package_share_directory('harvest_control')
@@ -122,37 +122,42 @@ class CoordinateToTrajectoryService(Node):
 
         self.apple_marker_publisher.publish(marker_array)
 
-    # def publish_voxel_markers(self):
-    #     marker_array = MarkerArray()
+    def publish_voxel_markers(self):
+        marker_array = MarkerArray()
 
-    #     for i, center in enumerate(self.voxel_centers):
-    #         marker = Marker()
-    #         marker.header.frame_id = 'world'
-    #         marker.header.stamp = self.get_clock().now().to_msg()
-    #         marker.ns = 'voxel'
-    #         marker.id = i
-    #         marker.action = Marker.ADD
+        self.get_logger().info(f"N centers {self.voxel_centers.shape}")
             
-    #         # Create and set the Point object
-    #         point = Point()
-    #         point.x = center[0]
-    #         point.y = center[1]
-    #         point.z = center[2]
-    #         marker.pose.position = point
+        for indx in range(0, self.voxel_centers.shape[0]):
+            center = self.voxel_centers[indx, :]
+            center = center.astype(float)
+            marker = Marker()
+            marker.header.frame_id = 'world'
+            marker.header.stamp = self.get_clock().now().to_msg()
+            marker.ns = 'voxel'
+            marker.id = indx
+            marker.action = Marker.ADD
 
-    #         marker.type = Marker.CUBE
-    #         marker.pose.orientation.w = 1.0
-    #         marker.scale.x = 0.09  # Size of the cube
-    #         marker.scale.y = 0.09
-    #         marker.scale.z = 0.09
-    #         marker.color.r = 0.0 
-    #         marker.color.g = 0.0
-    #         marker.color.b = 1.0  # Blue color
-    #         marker.color.a = 0.6  # Fully opaque
+            # Create and set the Point object
+            point = Point()
+            point.x = center[0]
+            point.y = center[1]
+            point.z = center[2]
+            marker.pose.position = point
 
-    #         marker_array.markers.append(marker)
+            marker.type = Marker.CUBE
+            marker.pose.orientation.w = 1.0
+            marker.scale.x = 0.09  # Size of the cube
+            marker.scale.y = 0.09
+            marker.scale.z = 0.09
+            marker.color.r = 0.0 
+            marker.color.g = 0.0
+            marker.color.b = 1.0  # Blue color
+            marker.color.a = 0.6  # Fully opaque
 
-    #     self.voxel_marker_publisher.publish(marker_array)
+            marker_array.markers.append(marker)
+
+        self.voxel_marker_publisher.publish(marker_array)
+        self.voxel_timer.cancel()
 
     def coord_to_traj_callback(self, request, response):
         # Extract the requested coordinate
