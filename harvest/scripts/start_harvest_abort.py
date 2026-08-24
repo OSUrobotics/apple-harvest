@@ -65,6 +65,8 @@ import threading
 import time
 import numpy as np
 import os
+import signal
+import subprocess
 import yaml
 import re
 from contextlib import contextmanager
@@ -139,6 +141,7 @@ class StartHarvestAbort(Node):
         self.declare_parameter('pick_pattern', 'force-heuristic')
         self.declare_parameter('event_sensitivity', 0.43)
         self.declare_parameter('recording_startup_delay', 0.5)
+        self.declare_parameter('prediction_throttle_hz', 0.1)
         self.declare_parameter('base_data_dir', self.storage_directory)
         self.declare_parameter('enable_recording', True)
         self.declare_parameter('enable_visual_servo', True)
@@ -157,6 +160,7 @@ class StartHarvestAbort(Node):
         self.PICK_PATTERN = self.get_parameter('pick_pattern').get_parameter_value().string_value
         self.EVENT_SENSITIVITY = self.get_parameter('event_sensitivity').get_parameter_value().double_value
         self.recording_startup_delay = self.get_parameter('recording_startup_delay').get_parameter_value().double_value
+        self.prediction_throttle_hz = self.get_parameter('prediction_throttle_hz').get_parameter_value().double_value
         self.base_data_dir = self.get_parameter('base_data_dir').get_parameter_value().string_value
         self.enable_recording = self.get_parameter('enable_recording').get_parameter_value().bool_value
         self.enable_visual_servo = self.get_parameter('enable_visual_servo').get_parameter_value().bool_value
@@ -247,13 +251,22 @@ class StartHarvestAbort(Node):
         self.apple_coordinates = {}
         self.pick_pattern = {'pick controller': self.PICK_PATTERN}
 
-        self.prediction_topics = [
-            '/apple_markers', 
-            '/joint_states',  
+        # /apple_markers and /apple_annotated are published once, when apple
+        # prediction finishes -- record them as-is. /joint_states and the
+        # camera feeds publish continuously for the whole ~20s prediction
+        # stage; recording them at full rate is mostly wasted space since
+        # prediction only needs a couple of frames, so those are recorded
+        # through low-rate topic_tools throttle relays instead (see
+        # start_prediction_throttles/stop_prediction_throttles).
+        self.prediction_one_shot_topics = ['/apple_markers', '/apple_annotated']
+        self.prediction_throttled_topics = [
+            '/joint_states',
             '/camera/gripper_camera/color/image_raw',
             '/camera/gripper_camera/aligned_depth_to_color/image_raw',
             '/camera/gripper_camera/depth/image_rect_raw',
-            '/apple_annotated'
+        ]
+        self.prediction_topics = self.prediction_one_shot_topics + [
+            self.throttled_topic_name(topic) for topic in self.prediction_throttled_topics
         ]
         self.approach_trajectory_topics = ['/apple_markers']
         self.visual_servo_topics = ['/gripper/rgb_palm_camera/image_raw', '/joint_states', '/servo_node/delta_twist_cmds']
@@ -409,6 +422,29 @@ class StartHarvestAbort(Node):
             self.go_to_home()
 
         self.abort_event.clear()
+
+    # ------------------------------------------------------------------
+    # Topic throttling (prediction stage only -- see prediction_topics)
+    # ------------------------------------------------------------------
+    def throttled_topic_name(self, topic):
+        return f'{topic}/throttled'
+
+    def start_prediction_throttles(self):
+        self.prediction_throttle_processes = []
+        for topic in self.prediction_throttled_topics:
+            cmd = [
+                'ros2', 'run', 'topic_tools', 'throttle', 'messages',
+                topic, str(self.prediction_throttle_hz), self.throttled_topic_name(topic),
+            ]
+            self.prediction_throttle_processes.append(
+                subprocess.Popen(cmd, preexec_fn=os.setsid)
+            )
+
+    def stop_prediction_throttles(self):
+        for proc in getattr(self, 'prediction_throttle_processes', []):
+            if proc.poll() is None:
+                os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+        self.prediction_throttle_processes = []
 
     # ------------------------------------------------------------------
     # Recording
@@ -841,6 +877,8 @@ class StartHarvestAbort(Node):
                 nonlocal apple_poses
                 apple_poses = self.start_apple_prediction()
 
+            if self.enable_recording:
+                self.start_prediction_throttles()
             try:
                 self.run_stage(
                     self.prediction_topics,
@@ -857,6 +895,9 @@ class StartHarvestAbort(Node):
                 else:
                     self.get_logger().error('Ending batch early')
                 return
+            finally:
+                if self.enable_recording:
+                    self.stop_prediction_throttles()
         else:
             self.get_logger().info('Skipping apple prediction, using pre-saved locations')
             apple_poses = PoseArray()
