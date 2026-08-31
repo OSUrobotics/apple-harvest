@@ -225,10 +225,11 @@ def _launch_setup(context):
         condition=IfCondition(LaunchConfiguration("view_rviz")),
     )
     delay_rviz_before_start = TimerAction(
-        period=2.0,  # Delays RViz by 5 seconds
+        period=3.0,  # Delays RViz by 5 seconds
         actions=[rviz_node]
     )
 
+    print("UR Move")
     return [
         move_group, 
         servo_node,

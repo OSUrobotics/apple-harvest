@@ -422,7 +422,7 @@ class StartHarvest(Node):
     def trigger_move_arm_to_pose(self, apple_pose):
         """ This one just goes to the pose location"""
         request = MoveToPose.Request()
-        request.orientation = apple_pose.orientation
+        #request.orientation = apple_pose.orientation
         request.position = apple_pose.position
         request.position.y = request.position.y - 0.3
 

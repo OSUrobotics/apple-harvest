@@ -94,14 +94,14 @@ class GripperPalmCamera(Node):
         
         # Listen for 3D marker locations. These will be projected into the image and published as another set of points
         #  at the same time as the new image comes in
-        self.create_subscription(PoseArray, "apple_poses", self.apple_poses_callback, 10)
+        self.create_subscription(PoseArray, "apple_poses", self.apple_poses_callback, qos_profile=qos_profile)
 
         # Keep the 3D centers and publish them whenever there's a new image
         self.apple_locs_3d: np.array = None
         self.apple_loc_pub = self.create_publisher(PoseArray, "gripper/apple_locs", qos_profile=qos_profile)
 
         # If there is a point cloud published, grab it
-        self.create_subscription(PointCloud2, '/rgbd_pointcloud', self.pointcloud_callback, 10)
+        self.create_subscription(PointCloud2, '/rgbd_pointcloud', self.pointcloud_callback, qos_profile=qos_profile)
 
         # Keep the last pose so we don't reproject if the arm hasn't moved/pointcloud hasn't changed
         #   - set this back to None if the point cloud or 3D points changes
@@ -350,44 +350,46 @@ class GripperPalmCamera(Node):
             
             # Sort by depth
             points_sorted = points_and_colors_keep[(-points_and_colors_keep[:, 2]).argsort()]
-
+            
             # Transform to image coordinates
             x, y, z = points_sorted[:, 0], points_sorted[:, 1], points_sorted[:, 2]
 
-            u = (x * self.fx / z) + self.cx
-            v = (y * self.fy / z) + self.cy
+            if x.size == 0:
+                self.get_logger().warn(f"No points projected to image, using last")
+            else:
+                u = (x * self.fx / z) + self.cx
+                v = (y * self.fy / z) + self.cy
 
-            # For finding the middle of the image (for fake time of flight)
-            x_lim = int(self.fx * np.tan(self.tof_angle / 2.0) + self.cx)
-            y_lim = int(self.fy * np.tan(self.tof_angle / 2.0) + self.cy)
-            mid_x = self.resolution[0] // 2
-            mid_y = self.resolution[1] // 2
-            x_lim = min(x_lim, mid_x - 1)
-            y_lim = min(y_lim, mid_y - 1)
-            self.get_logger().info(f"{np.min(x)}, {np.max(x)}")
-            self.get_logger().info(f"Getting middle of image {x_lim} {y_lim} mid {mid_x} {mid_y} {z.shape}")
-            center_of_image_x = np.logical_and(u > mid_x - x_lim, u < mid_x + x_lim)
-            center_of_image_y = np.logical_and(v > mid_y - y_lim, v < mid_y + y_lim)
-            center_of_image = np.logical_and(center_of_image_x, center_of_image_y)
-            self.get_logger().info(f"Kept {np.count_nonzero(center_of_image)} {x_lim * y_lim * 4}")
-            self.depth_point_cloud = z[center_of_image]
+                # For finding the middle of the image (for fake time of flight)
+                x_lim = int(self.fx * np.tan(self.tof_angle / 2.0) + self.cx)
+                y_lim = int(self.fy * np.tan(self.tof_angle / 2.0) + self.cy)
+                mid_x = self.resolution[0] // 2
+                mid_y = self.resolution[1] // 2
+                x_lim = min(x_lim, mid_x - 1)
+                y_lim = min(y_lim, mid_y - 1)
+                self.get_logger().info(f"Getting middle of image {x_lim} {y_lim} mid {mid_x} {mid_y} {z.shape}")
+                center_of_image_x = np.logical_and(u > mid_x - x_lim, u < mid_x + x_lim)
+                center_of_image_y = np.logical_and(v > mid_y - y_lim, v < mid_y + y_lim)
+                center_of_image = np.logical_and(center_of_image_x, center_of_image_y)
+                self.get_logger().info(f"Kept {np.count_nonzero(center_of_image)} {x_lim * y_lim * 4}")
+                self.depth_point_cloud = z[center_of_image]
 
-            # Trim again, this time for u,v out of bounds
-            valid_pixels = (u >= 0) & (u < self.resolution[0]) & (v >= 0) & (v < self.resolution[1])
+                # Trim again, this time for u,v out of bounds
+                valid_pixels = (u >= 0) & (u < self.resolution[0]) & (v >= 0) & (v < self.resolution[1])
 
-            # Convert to ints for indexing
-            u_idx = u[valid_pixels].astype(int)
-            v_idx = v[valid_pixels].astype(int)
+                # Convert to ints for indexing
+                u_idx = u[valid_pixels].astype(int)
+                v_idx = v[valid_pixels].astype(int)
 
-            colors = points_sorted[valid_pixels, 3:]
-            for indx in range(len(u_idx)):
-                # Colors for each pixel
-                rgb_pix = colors[indx, :]
-                # b g r
-                self.fake_img[v_idx[indx], u_idx[indx]] = [rgb_pix[2], rgb_pix[1], rgb_pix[0]]
+                colors = points_sorted[valid_pixels, 3:]
+                for indx in range(len(u_idx)):
+                    # Colors for each pixel
+                    rgb_pix = colors[indx, :]
+                    # b g r
+                    self.fake_img[v_idx[indx], u_idx[indx]] = [rgb_pix[2], rgb_pix[1], rgb_pix[0]]
 
-            # 6. Publish the image and info messages        
-            cv2.imwrite('check.png', self.fake_img)
+                # 6. Publish the image and info messages        
+                cv2.imwrite('check.png', self.fake_img)
 
         if self.fake_img is None:
             # Shouldn't happen, but...

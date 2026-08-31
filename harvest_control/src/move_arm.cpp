@@ -194,7 +194,7 @@ void MoveArmNode::move_to_pose(const std::shared_ptr<harvest_interfaces::srv::Mo
     tf2::Quaternion orientation;
     orientation.setRPY(3.14 / 2, 3.14, 3.14);  // Set desired orientation
     geometry_msgs::msg::PoseStamped msg;
-    msg.header.frame_id = "world";
+    msg.header.frame_id = "amiga__base";
     msg.pose.orientation = tf2::toMsg(orientation);
     msg.pose.position.x = request->position.x;
     msg.pose.position.y = request->position.y;
@@ -202,8 +202,8 @@ void MoveArmNode::move_to_pose(const std::shared_ptr<harvest_interfaces::srv::Mo
 
     // Set pose and joint tolerances
     this->move_group_->setPoseTarget(msg, "gripper_link");
-    // this->move_group_->setGoalOrientationTolerance(0.35);
-    this->move_group_->setGoalOrientationTolerance(1.05);
+    this->move_group_->setGoalOrientationTolerance(0.05);
+    this->move_group_->setGoalPositionTolerance(0.02);
     // this->move_group_->setGoalJointTolerance(0.001); // Minimize joint changes
 
     // Use an optimization-aware planner

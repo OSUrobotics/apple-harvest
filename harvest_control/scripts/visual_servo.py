@@ -21,6 +21,7 @@ import message_filters
 # Image processing
 from cv_bridge import CvBridge
 import cv2
+import torch
 import math
 import numpy as np
 import copy
@@ -35,7 +36,6 @@ from filterpy.kalman import KalmanFilter
 
 # YOLO model
 from ultralytics import YOLO
-import torch
 
 from enum import Enum
 from collections import deque
@@ -140,7 +140,6 @@ class LocalPlanner(Node):
         self.target_pixel_accuracy = self.get_parameter("vservo_accuracy_px").get_parameter_value().integer_value
         self.smoothing_factor = self.get_parameter("vservo_smoothing_factor").get_parameter_value().double_value
         self.max_vel = self.get_parameter("vservo_max_vel").get_parameter_value().double_value
-        self.model_path = self.get_parameter("vservo_model_path").get_parameter_value().string_value
 
         # For controlling transition between states
         self.state = LocalPlanner.VisualServoState.IDLE
@@ -189,12 +188,11 @@ class LocalPlanner(Node):
 
         ### Image Processing
         self.br = CvBridge()
+        self.model = YOLO(self.get_parameter("vservo_model_path").value)
         try:
-            self.model = YOLO(self.model_path)  # pretrained YOLOv8n model
-            self.model.model = torch.compile(self.model.model)
+            self.model.model.eval()
         except Exception:
-            self.model = None
-            self.get_logger().warning(f"Launching visual servoing without yolo model")
+            pass
 
         ### Kalman
         self.prev_vel = [0,0]
@@ -552,6 +550,13 @@ class LocalPlanner(Node):
     # ================================================================== YOLO
     def _estimate_image_movement_from_yolo(self):
         """Find the best match between the last yolo boxes and this one, and calculate an estimated shift"""
+        if not self.yolo_apple_centers:
+            self.get_logger().info("Estimate motion: No apple centers")
+            return
+        if not self.yolo_last_apple_centers:
+            self.get_logger().info("Estimate motion: No last apple centers")
+            return
+        
         self.yolo_apple_index, self.vec_yolo_image_motion = self._match_points(self.yolo_last_apple_centers, 
                                                                                self.yolo_apple_centers, 
                                                                                self.last_yolo_apple_index)
@@ -567,7 +572,8 @@ class LocalPlanner(Node):
         # Get apple bounding boxes from yolo model
         # results = self.model(image, conf=self.yolo_conf, device='cuda', verbose=False)[0]
         if self.model:
-            results = self.model(image, conf=self.yolo_conf, verbose=False)[0]
+            with torch.inference_mode():
+                results = self.model(image, conf=self.yolo_conf, verbose=False)[0]
         else:
             self.yolo_apple_centers = None
             self.yolo_apple_radii = None
@@ -578,8 +584,8 @@ class LocalPlanner(Node):
         for indx, box in enumerate(results):
             # find center of each bounding box and calculate distance to center of image
             x,y,w,h = box.boxes.xyxy.cpu().numpy()[0]
-            self.apple_centers[indx, 0] = (x + w) / 2
-            self.apple_centers[indx, 1] = (y + h) / 2
+            self.yolo_apple_centers[indx, 0] = (x + w) / 2
+            self.yolo_apple_centers[indx, 1] = (y + h) / 2
             self.apple_radii.append(0.5 * (w + h))
         return image
 
