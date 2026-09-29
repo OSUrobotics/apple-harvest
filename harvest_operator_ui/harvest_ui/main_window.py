@@ -211,7 +211,7 @@ class ConfigurationPage(QWidget):
         self.vision_controls: list[QWidget] = []
         controls = [
             ("Launch RealSense", self._check("vision.launch_camera")),
-            ("Palm camera device", self._integer("vision.palm_camera_device_num", 0, 20)),
+            ("Palm camera device", self._line("vision.palm_camera_device_num")),
             ("Camera namespace", self._line("vision.camera_ns")),
             ("Prediction model", self._line("vision.prediction_model")),
             ("Visual-servo model", self._line("vision.vservo_model")),

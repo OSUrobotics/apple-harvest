@@ -7,6 +7,7 @@ Offline PySide6 control application for the `apple-harvest` ROS 2 pipeline.
 - YAML profiles for autonomous and freedrive operation.
 - Editable arm, gripper, vision, harvest, topic, and environment parameters.
 - Configurable pose-listener source frame (`cart_base` by default; for example, `amiga__base`).
+- Palm camera device is a free-form string, supporting both numeric indices and stable udev paths such as `/dev/harvest/palm_camera`.
 - Sweep pick-controller selection with a configurable sweep angle, alongside the legacy pick patterns.
 - RViz checkbox (`view_rviz`) enabled by default as a backup 3D visualizer.
 - UR headless control and initial scaled trajectory controller activation enabled by default.

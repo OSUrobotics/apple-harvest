@@ -1,0 +1,1 @@
+SUBSYSTEM=="video4linux", ATTRS{idVendor}=="32e4", ATTRS{idProduct}=="4689", ATTRS{serial}=="2020042001", ATTR{index}=="0", SYMLINK+="harvest/palm_camera"

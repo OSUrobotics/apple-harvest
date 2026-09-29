@@ -30,7 +30,7 @@ gripper:
   grasp_strategy: pressure
 vision:
   launch_camera: true
-  palm_camera_device_num: 2
+  palm_camera_device_num: /dev/harvest/palm_camera
   camera_ns: camera/gripper_camera
   prediction_model: best_segmentation.pt
   vservo_model: best_segmentation.pt
