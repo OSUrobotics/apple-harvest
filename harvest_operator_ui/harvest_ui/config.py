@@ -50,7 +50,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     "vision": {
         "launch_camera": True,
-        "palm_camera_device_num": 2,
+        "palm_camera_device_num": "/dev/harvest/palm_camera",
         "camera_ns": "camera/gripper_camera",
         "prediction_model": "best_segmentation.pt",
         "vservo_model": "best_segmentation.pt",
@@ -122,6 +122,11 @@ def _deep_merge(base: dict[str, Any], update: dict[str, Any]) -> dict[str, Any]:
 
 def normalize_config(raw: dict[str, Any] | None) -> dict[str, Any]:
     config = _deep_merge(DEFAULT_CONFIG, raw or {})
+    # Older profiles stored the palm camera as an integer device index. The
+    # camera node now accepts string identifiers so udev paths work as well.
+    config["vision"]["palm_camera_device_num"] = str(
+        config["vision"]["palm_camera_device_num"]
+    )
     config["mode"] = str(config.get("mode", "autonomous")).lower()
     if config["mode"] not in {"autonomous", "freedrive"}:
         config["mode"] = "autonomous"

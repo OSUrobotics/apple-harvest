@@ -29,7 +29,7 @@ gripper:
   grasp_strategy: pressure
 vision:
   launch_camera: true
-  palm_camera_device_num: 0
+  palm_camera_device_num: /dev/harvest/palm_camera
   camera_ns: camera/gripper_camera
   prediction_model: pear_yolo11_250812.pt
   vservo_model: pear_yolo11_250812.pt

@@ -21,8 +21,8 @@ class GripperPalmCamera(Node):
         self.bridge = CvBridge()
 
         # camera vars 
-        self.declare_parameter("palm_camera_device_num", 2)
-        self.device = self.get_parameter("palm_camera_device_num").get_parameter_value().integer_value
+        self.declare_parameter("palm_camera_device_num", "/dev/harvest/palm_camera")
+        self.device = self.get_parameter("palm_camera_device_num").get_parameter_value().string_value
         self.resolution = resolution
         self.target_fr = target_fr
         self.camera = None

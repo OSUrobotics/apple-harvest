@@ -65,7 +65,7 @@ def generate_launch_description():
     declared_arguments.append(DeclareLaunchArgument("vservo_max_vel", default_value="0.5", 
                                   description="Maximum velocity that arm end effector can move during visual servo."))
     ### palm camera publisher node parameters
-    declared_arguments.append(DeclareLaunchArgument("palm_camera_device_num", default_value="2", 
+    declared_arguments.append(DeclareLaunchArgument("palm_camera_device_num", default_value="/dev/harvest/palm_camera", 
                                   description="Device number for palm RGB camer in gripper."))
 
     ### getting paths to yolo_networks

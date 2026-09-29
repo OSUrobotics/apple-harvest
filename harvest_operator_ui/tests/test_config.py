@@ -50,6 +50,16 @@ class ConfigTests(unittest.TestCase):
         self.assertIn("launch_realsense:=true", vision.argv)
         self.assertNotIn("vision_camera", [spec.key for spec in specs])
 
+    def test_palm_camera_accepts_udev_string(self):
+        config = normalize_config({"vision": {"palm_camera_device_num": "/dev/harvest/palm_camera"}})
+        vision = next(spec for spec in build_process_specs(config) if spec.key == "vision")
+        self.assertEqual(config["vision"]["palm_camera_device_num"], "/dev/harvest/palm_camera")
+        self.assertIn("palm_camera_device_num:=/dev/harvest/palm_camera", vision.argv)
+
+    def test_legacy_numeric_palm_camera_is_normalized_to_string(self):
+        config = normalize_config({"vision": {"palm_camera_device_num": 2}})
+        self.assertEqual(config["vision"]["palm_camera_device_num"], "2")
+
     def test_profile_round_trip(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "profile.yaml"
