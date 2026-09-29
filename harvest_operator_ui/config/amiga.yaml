@@ -26,7 +26,7 @@ arm:
   source_frame: amiga__base
 gripper:
   gripper_type: finray
-  grasp_strategy: time
+  grasp_strategy: pressure
 vision:
   launch_camera: true
   palm_camera_device_num: 0
@@ -34,7 +34,7 @@ vision:
   prediction_model: pear_yolo11_250812.pt
   vservo_model: pear_yolo11_250812.pt
   target_frame: amiga__base
-  mast_serial: '''040322070611'''
+  mast_serial: '''238722072340'''
 harvest:
   event_sensitivity: 0.43
   recording_startup_delay: 0.53

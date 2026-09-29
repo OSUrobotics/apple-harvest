@@ -70,7 +70,7 @@ class ApplePredictionNode(Node):
         self.declare_parameter("source_frame", "gripper_camera_color_optical_frame")
         self.declare_parameter("target_frame", "world")
         self.declare_parameter("camera_type", "realsense")
-        self.declare_parameter("ransac_iters", 1000)
+        self.declare_parameter("ransac_iters", 100)
         self.declare_parameter("ransac_thresh", 0.005)
         self.declare_parameter("depth_scale", 1000.0)
 

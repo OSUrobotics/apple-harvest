@@ -20,7 +20,7 @@ def generate_launch_description():
                                   description="Whether to use presaved images for apple prediction. If False, will subscribe to camera topics for apple prediction. If True, will use presaved images"))
     declared_arguments.append(DeclareLaunchArgument("prediction_model", default_value="v9e.pt", 
                                   description="Yolo model used, can specify any model in the harvest_vision/yolo_models directory."))
-    declared_arguments.append(DeclareLaunchArgument("prediction_yolo_conf", default_value="0.65", 
+    declared_arguments.append(DeclareLaunchArgument("prediction_yolo_conf", default_value="0.3", 
                                   description="Confidence threshold for yolo model in apple_prediction node."))
     declared_arguments.append(DeclareLaunchArgument("prediction_radius_min", default_value="0.03", 
                                   description="Minimum radius bound (meters) for ransac sphere fit in apple_prediction node."))

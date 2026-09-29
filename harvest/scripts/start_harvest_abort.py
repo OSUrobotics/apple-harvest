@@ -700,7 +700,7 @@ class StartHarvestAbort(Node):
         self.configure_controller()
         goal = PickControl.Goal()
         goal.pattern = self.PICK_PATTERN
-        goal.stop_time = Float32(data=5.0 if self.PICK_PATTERN == 'stiffness-seeking' else 10.0)
+        goal.stop_time = Float32(data=2.0 if self.PICK_PATTERN == 'stiffness-seeking' else 5.0)
         return self._run_cancelable_action(self._pick_controller_client, goal, 'pick_controller')
 
     def _run_sweep_pick(self):
@@ -818,13 +818,14 @@ class StartHarvestAbort(Node):
             input('Done with approach, hit enter to start pressure servoing and pick controller')
 
             def pick_action():
+                self.configure_servo('tool0')
                 if self.enable_pressure_servo:
                     self.grasp_controller_action()
                 if self.enable_picking:
                     self.get_logger().info(f"Picking with: {self.PICK_PATTERN}")
                     self.pick_controller_action()
-                self.configure_servo('tool0')
-
+                
+            self.PICK_PATTERN = 'sweep'
             self.run_stage(
                 self.pressure_servo_and_pick_controller_topics,
                 base_dir + self.final_approach_and_pick_file_name_prefix,
@@ -832,6 +833,23 @@ class StartHarvestAbort(Node):
                 use_servo=True,
                 action_fn=pick_action,
             )
+
+            original_pick_pattern = self.PICK_PATTERN
+            self.configure_servo('base_link')
+            def pull_back_action():
+                self.configure_servo('base_link')
+                if self.enable_picking:
+                    self.PICK_PATTERN = 'linear-pull'
+                    self.pick_controller_action()
+                
+            self.run_stage(
+                [],
+                base_dir + 'post_pick_pull',
+                servo_frame='amiga__base',
+                use_servo=True,
+                action_fn=pull_back_action,
+            )
+            self.PICK_PATTERN = original_pick_pattern
 
         input('Done with pick, hit enter to release and continue')
         if self.enable_pressure_servo:

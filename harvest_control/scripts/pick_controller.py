@@ -41,7 +41,7 @@ class PickController(Node):
         self.start_pick = False
         self.started = False
         self.PICK_PATTERN = "linear-pull"
-        self.stop_time = 10
+        self.stop_time = 5
         self.rate = self.create_rate(1)
         self.start_time = self.get_clock().now()
 

@@ -76,7 +76,7 @@ class LinController(Node):
                 self.get_logger().info("finished")
 
             else:
-                msg.twist.linear.z = self.dir*self.max_velocity
+                msg.twist.linear.y = self.dir*self.max_velocity
                 self.iter = self.iter + 1
             
             self.publisher.publish(msg)
