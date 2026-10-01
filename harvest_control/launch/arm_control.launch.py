@@ -25,7 +25,7 @@ def generate_launch_description():
         DeclareLaunchArgument('voxel_distance_tol', default_value='0.5'),
         DeclareLaunchArgument('max_accel', default_value='0.05'),
         DeclareLaunchArgument('max_vel', default_value='0.05'),
-        DeclareLaunchArgument('traj_time_step', default_value='0.05'),
+        DeclareLaunchArgument('traj_time_step', default_value='0.15'),
     ]
 
     # Pick controller based on fake hardware argument

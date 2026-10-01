@@ -131,6 +131,9 @@ scaled_joint_trajectory_controller:
       $(var tf_prefix)wrist_3_joint: { trajectory: 0.2, goal: 0.1 }
     speed_scaling_interface_name: $(var tf_prefix)speed_scaling/speed_scaling_factor
     allow_nonzero_velocity_at_trajectory_end: false
+    # Must match the controller_manager rate (500 Hz on e-Series). Without it the controller falls
+    # back to sampling "current_time + last period" and can declare goals reached mid-motion.
+    update_rate: 500
 
 passthrough_trajectory_controller:
   ros__parameters:
@@ -187,8 +190,15 @@ freedrive_mode_controller:
   ros__parameters:
     tf_prefix: "$(var tf_prefix)"
 
+# Broadcasters default to the 500 Hz controller_manager rate. That floods /joint_states and /tf
+# (and every Python subscriber downstream), so publish them at 100 Hz instead.
+joint_state_broadcaster:
+  ros__parameters:
+    update_rate: 100
+
 tcp_pose_broadcaster:
   ros__parameters:
+    update_rate: 100
     frame_id: $(var tf_prefix)base
     pose_name: $(var tf_prefix)tcp_pose
     tf:

@@ -30,7 +30,8 @@ class TfListener(Node):
         self.declare_parameter('tool_frame', 'tool0')
         self.declare_parameter('gripper_tip_frame', 'gripper_link')
         self.declare_parameter('tf_prefix', '')  # e.g., 'ur_'
-        self.declare_parameter('lookup_timeout_sec', 0.5)
+        # Keep at 0: lookups run inside executor callbacks, and blocking there starves the TF subscription
+        self.declare_parameter('lookup_timeout_sec', 0.0)
         self.declare_parameter('use_time_zero', True)  # better for fixed joints
 
         self.source = self.get_parameter('source_frame').get_parameter_value().string_value
@@ -46,7 +47,9 @@ class TfListener(Node):
 
         # TF buffer/listener
         self._tf_buffer = Buffer(cache_time=Duration(seconds=10.0))
-        self._tf_listener = TransformListener(self._tf_buffer, self, spin_thread=True)
+        # TF subscriptions are serviced by rclpy.spin(node) in main(); a dedicated spin thread
+        # would put this same node on a second executor and fight with it
+        self._tf_listener = TransformListener(self._tf_buffer, self, spin_thread=False)
 
         # Pubs
         self.tool_pub = self.create_publisher(TransformStamped, '/tool_pose', 10)
@@ -100,15 +103,15 @@ class TfListener(Node):
         if trans:
             self.tool_pub.publish(trans)
         else:
-            self.get_logger().throttle_warn(self.get_clock(), 2000,  # warn at most every 2s
-                                            f'No TF {self.source} <- {self.tool_frame} yet')
+            self.get_logger().warn(f'No TF {self.source} <- {self.tool_frame} yet',
+                                   throttle_duration_sec=2.0)
             
         trans_g = self._safe_lookup(self.source, self.gripper_tip_frame)
         if trans_g:
             self.gripper_pub.publish(trans_g)
         else:
-            self.get_logger().throttle_warn(self.get_clock(), 2000,
-                                            f'No TF {self.source} <- {self.gripper_tip_frame} yet')
+            self.get_logger().warn(f'No TF {self.source} <- {self.gripper_tip_frame} yet',
+                                   throttle_duration_sec=2.0)
 
     def handle_get_gripper_pose(self, request, response):
         try:

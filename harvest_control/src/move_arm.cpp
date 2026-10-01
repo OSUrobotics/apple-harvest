@@ -157,10 +157,10 @@ void MoveArmNode::move_to_config(const std::shared_ptr<std_srvs::srv::Trigger::R
     (void)request; // Suppress unused parameter warning
 
     std::vector<double> target_config = {
-        1.5,
-        -2.775,
+        0.78539816339,
+        -2.76,
         1.72,
-        4.55,
+        4.71,
         -1.58,
         0};
 

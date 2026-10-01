@@ -32,17 +32,25 @@ def generate_launch_description():
         "publish_tf", default_value="false",
         description="Let realsense2_camera publish TF frames (false if your URDF handles the mount)"
     )
+    # Named to match realsense2_camera's "align_depth.enable" parameter directly.
     align_depth_arg = DeclareLaunchArgument(
-        "align_depth", default_value="true",
+        "align_depth.enable", default_value="true",
         description="Publish /aligned_depth_to_color/image_raw"
     )
+    # Named to match realsense2_camera's "pointcloud.enable" parameter directly.
     pointcloud_enable_arg = DeclareLaunchArgument(
-        "pointcloud_enable", default_value="true",
+        "pointcloud.enable", default_value="false",
         description="Enable on-node point cloud generation"
     )
-    enable_imu_arg = DeclareLaunchArgument(
-        "enable_imu", default_value="false",
-        description="Enable IMU (set true if your device is D435i)"
+
+    # Per-node hardware sync toggle (realsense2_camera's "enable_sync" parameter)
+    base_enable_sync_arg = DeclareLaunchArgument(
+        "base_enable_sync", default_value="true",
+        description="Enable frame sync on the base RealSense camera"
+    )
+    mast_enable_sync_arg = DeclareLaunchArgument(
+        "mast_enable_sync", default_value="true",
+        description="Enable frame sync on the mast RealSense camera"
     )
 
     # Paths
@@ -58,12 +66,10 @@ def generate_launch_description():
             "camera_name": "base_camera",
             "enable_color": "true",
             "enable_depth": "true",
-            "align_depth.enable": LaunchConfiguration("align_depth"),
+            "align_depth.enable": LaunchConfiguration("align_depth.enable"),
             "publish_tf": LaunchConfiguration("publish_tf"),
-            "pointcloud.enable": LaunchConfiguration("pointcloud_enable"),
-            # "enable_gyro": LaunchConfiguration("enable_imu"),
-            # "enable_accel": LaunchConfiguration("enable_imu"),
-            # "unite_imu_method": "linear_interpolation",
+            "pointcloud.enable": LaunchConfiguration("pointcloud.enable"),
+            "enable_sync": LaunchConfiguration("base_enable_sync"),
         }.items(),
             condition=IfCondition(LaunchConfiguration('launch_realsense')),
     )
@@ -76,12 +82,10 @@ def generate_launch_description():
             "camera_name": "mast_camera",
             "enable_color": "true",
             "enable_depth": "true",
-            "align_depth.enable": LaunchConfiguration("align_depth"),
+            "align_depth.enable": LaunchConfiguration("align_depth.enable"),
             "publish_tf": LaunchConfiguration("publish_tf"),
-            "pointcloud.enable": LaunchConfiguration("pointcloud_enable"),
-            # "enable_gyro": LaunchConfiguration("enable_imu"),
-            # "enable_accel": LaunchConfiguration("enable_imu"),
-            # "unite_imu_method": "linear_interpolation",
+            "pointcloud.enable": LaunchConfiguration("pointcloud.enable"),
+            "enable_sync": LaunchConfiguration("mast_enable_sync"),
         }.items(),
             condition=IfCondition(LaunchConfiguration('launch_realsense')),
     )
@@ -93,7 +97,8 @@ def generate_launch_description():
         publish_tf_arg,
         align_depth_arg,
         pointcloud_enable_arg,
-        enable_imu_arg,
+        base_enable_sync_arg,
+        mast_enable_sync_arg,
         base_camera,
         mast_camera,
     ])

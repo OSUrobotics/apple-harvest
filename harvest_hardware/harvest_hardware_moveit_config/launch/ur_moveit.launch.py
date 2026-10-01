@@ -30,6 +30,9 @@ def generate_launch_description():
         DeclareLaunchArgument("launch_servo", default_value="true"),
         DeclareLaunchArgument("use_sim_time", default_value="false"),
         DeclareLaunchArgument("use_3d_sensors", default_value="false"),
+        DeclareLaunchArgument("max_accel", default_value="0.05"),
+        DeclareLaunchArgument("max_vel", default_value="0.05"),
+        DeclareLaunchArgument("traj_time_step", default_value="0.05"),
     ]
     return LaunchDescription(args + [OpaqueFunction(function=_launch_setup)])
 
@@ -104,7 +107,7 @@ def _launch_setup(context):
             "default_planner_request_adapters/FixStartStateBounds "
             "default_planner_request_adapters/FixStartStateCollision "
             "default_planner_request_adapters/FixStartStatePathConstraints "
-            "default_planner_request_adapters/AddRuckigTrajectorySmoothing"
+            "default_planner_request_adapters/AddTimeOptimalParameterization"
         )
 
     ompl_yaml = {"ompl": load_yaml("harvest_hardware_moveit_config", "config/ompl_planning.yaml")}
@@ -189,7 +192,11 @@ def _launch_setup(context):
             kinematics_yaml,
             joint_limits_yaml,
             {"use_sim_time": use_sim_time},
-            {"max_accel": 0.05, "max_vel": 0.05, "traj_time_step": 0.05},  # or LaunchConfigurations
+            {
+                "max_accel": float(LaunchConfiguration("max_accel").perform(context)),
+                "max_vel": float(LaunchConfiguration("max_vel").perform(context)),
+                "traj_time_step": float(LaunchConfiguration("traj_time_step").perform(context)),
+            },
         ],
     )
 
