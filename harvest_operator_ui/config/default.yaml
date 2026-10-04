@@ -45,6 +45,7 @@ harvest:
   enable_pressure_servo: true
   enable_picking: true
   enable_apple_prediction: true
+  manual_apple_selection: true
   optimal_trajectory: true
   pick_pattern: stiffness-seeking
   sweep_theta_deg: 90.0
@@ -55,6 +56,7 @@ topics:
   mast_depth: /camera/gripper_camera/aligned_depth_to_color/image_raw
   palm_image: /gripper/rgb_palm_camera/image_raw
   apple_prediction_image: /apple_annotated
+  available_apple_ids: /harvest/available_apple_ids
   pressure: /microROS/sensor_data
   gripper_imu: /microROS/imu1
   can_status: /microROS/can_status
@@ -68,5 +70,7 @@ services:
   home_gripper: /microROS/home_odrive
   harvest_freedrive: /set_harvest_freedrive
   abort_harvest: /abort_harvest
+  set_apple_target: /set_apple_target
+  finish_apple_selection: /finish_apple_selection
   move_arm_home: /move_arm_to_home
   release_apple: /release_apple

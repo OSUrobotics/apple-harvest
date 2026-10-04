@@ -14,10 +14,11 @@ try:
     import rclpy
     from geometry_msgs.msg import WrenchStamped
     from gripper_interfaces.msg import CanStatusMsg
+    from harvest_interfaces.srv import SetAppleTarget
     from rclpy.executors import SingleThreadedExecutor
-    from rclpy.qos import qos_profile_sensor_data
+    from rclpy.qos import DurabilityPolicy, QoSProfile, qos_profile_sensor_data
     from sensor_msgs.msg import Image
-    from std_msgs.msg import Bool, Float32MultiArray, Int16MultiArray, Int8
+    from std_msgs.msg import Bool, Float32MultiArray, Int16MultiArray, Int32MultiArray, Int8
     from std_srvs.srv import SetBool, Trigger
 
     ROS_AVAILABLE = True
@@ -38,6 +39,7 @@ class RosBridge(QObject):
     freedrive_status_received = Signal(bool, float)
     graph_received = Signal(object)
     service_result = Signal(str, bool, str)
+    available_apple_ids_received = Signal(list)
     availability_changed = Signal(bool, str)
 
     def __init__(self, topics: dict[str, str], parent: QObject | None = None):
@@ -81,6 +83,11 @@ class RosBridge(QObject):
         if self._executor:
             self._executor.wake()
 
+    def call_set_apple_target(self, service_name: str, apple_id: int) -> None:
+        self._commands.put(("set_apple_target", (service_name, int(apple_id))))
+        if self._executor:
+            self._executor.wake()
+
     def _run(self) -> None:
         try:
             rclpy.init(args=None)
@@ -120,6 +127,8 @@ class RosBridge(QObject):
                 self._call_trigger_in_ros_thread(payload)
             elif command == "set_bool":
                 self._call_set_bool_in_ros_thread(*payload)
+            elif command == "set_apple_target":
+                self._call_set_apple_target_in_ros_thread(*payload)
 
     def _create_subscriptions(self, topics: dict[str, str]) -> None:
         for subscription in self._subscriptions:
@@ -139,6 +148,14 @@ class RosBridge(QObject):
                 self._node.create_subscription(Int8, topics["servo_status"], self._servo_callback, 10),
                 self._node.create_subscription(Bool, topics["freedrive_status"], self._freedrive_callback, 10),
             ]
+        )
+        apple_ids_qos = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
+        self._subscriptions.append(
+            self._node.create_subscription(
+                Int32MultiArray, topics["available_apple_ids"],
+                lambda msg: self.available_apple_ids_received.emit(list(msg.data)),
+                apple_ids_qos,
+            )
         )
 
     def _call_trigger_in_ros_thread(self, service_name: str) -> None:
@@ -171,6 +188,24 @@ class RosBridge(QObject):
             try:
                 result = completed.result()
                 self.service_result.emit(service_name, bool(result.success), result.message or "Request completed")
+            except Exception as exc:
+                self.service_result.emit(service_name, False, str(exc))
+            self._node.destroy_client(client)
+
+        future.add_done_callback(done)
+
+    def _call_set_apple_target_in_ros_thread(self, service_name: str, apple_id: int) -> None:
+        client = self._node.create_client(SetAppleTarget, service_name)
+        if not client.wait_for_service(timeout_sec=0.2):
+            self.service_result.emit(service_name, False, "Apple target service is not available")
+            self._node.destroy_client(client)
+            return
+        future = client.call_async(SetAppleTarget.Request(apple_id=apple_id))
+
+        def done(completed):
+            try:
+                result = completed.result()
+                self.service_result.emit(service_name, bool(result.success), result.message)
             except Exception as exc:
                 self.service_result.emit(service_name, False, str(exc))
             self._node.destroy_client(client)

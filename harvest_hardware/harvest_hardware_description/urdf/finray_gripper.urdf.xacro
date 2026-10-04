@@ -111,7 +111,9 @@
              <!-- move out for collision problem in intial collision body stl -->
             <!-- <origin xyz="-0.09 -0.06 -0.00875" rpy="0.5236 -1.5708 0"/> -->
             <!-- Aligned with model -->
-            <origin xyz="0.070774 -0.122583 0.040471" rpy="2.094395 -1.5708 0"/>
+            <!-- <origin xyz="0.070774 -0.122583 0.040471" rpy="2.094395 -1.5708 0"/> -->
+            <!-- Hand-eye calibrated with easy_handeye2 (ur5_gripper_realsense), 2026-10-01 -->
+            <origin xyz="0.072181 -0.105070 0.005579" rpy="-2.771120 -1.547284 -1.397651"/>
         </xacro:sensor_d435i>
 
         <!-- <xacro:arg name="use_nominal_extrinsics" default="false" />

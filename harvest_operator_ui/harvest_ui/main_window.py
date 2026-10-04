@@ -4,6 +4,7 @@ import copy
 import re
 import subprocess
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -45,6 +46,7 @@ from .config import (
     validate_config,
 )
 from .processes import ProcessSupervisor
+from .pick_ledger import append_pick_record, extract_bag_context, extract_harvest_context
 from .ros_bridge import RosBridge
 from .widgets import ImagePanel, LinePlot
 
@@ -237,6 +239,8 @@ class ConfigurationPage(QWidget):
         form.addRow("Pressure servo", self._check("harvest.enable_pressure_servo"))
         form.addRow("Picking", self._check("harvest.enable_picking"))
         form.addRow("Apple prediction", self.apple_prediction)
+        self.manual_apple_selection = self._check("harvest.manual_apple_selection")
+        form.addRow("Select each apple in Controls", self.manual_apple_selection)
         form.addRow("Optimal trajectory", self._check("harvest.optimal_trajectory"))
         form.addRow(
             "Pick pattern",
@@ -256,6 +260,7 @@ class ConfigurationPage(QWidget):
         form.addRow("Mast/wrist depth", self._line("topics.mast_depth"))
         form.addRow("Palm camera", self._line("topics.palm_image"))
         form.addRow("Apple detections", self._line("topics.apple_prediction_image"))
+        form.addRow("Available apple IDs", self._line("topics.available_apple_ids"))
         form.addRow("Fin Ray sensor data", self._line("topics.pressure"))
         form.addRow("Gripper IMU", self._line("topics.gripper_imu"))
         form.addRow("ODrive CAN status", self._line("topics.can_status"))
@@ -335,22 +340,23 @@ class ConfigurationPage(QWidget):
     def _mode_changed(self, mode: str) -> None:
         freedrive = mode == "freedrive"
         if freedrive:
-            self.visual_servo.setChecked(False)
             self.apple_prediction.setChecked(False)
+            self.manual_apple_selection.setChecked(False)
         self.vision_component.setEnabled(True)
-        self.visual_servo.setEnabled(not freedrive)
         self.apple_prediction.setEnabled(not freedrive)
+        self.manual_apple_selection.setEnabled(not freedrive)
         for widget in self.vision_controls:
             widget.setEnabled(True)
         self.mode_note.setText(
-            "Freedrive: visual-servo and apple-prediction stages are omitted; the vision stack remains optional for data collection."
+            "Freedrive: visual servo can run after manual arm positioning; apple prediction and ID selection are omitted."
             if freedrive
             else "Autonomous: vision launches when enabled; RViz is controlled independently in Arm control."
         )
+        self._vision_requirement_changed()
         self.mode_note.setStyleSheet("color:#f2cc60" if freedrive else "color:#58a6ff")
 
     def _vision_requirement_changed(self) -> None:
-        if self.mode.currentText() == "autonomous" and (self.visual_servo.isChecked() or self.apple_prediction.isChecked()):
+        if self.visual_servo.isChecked() or self.apple_prediction.isChecked():
             self.vision_component.setChecked(True)
 
     def _load_profile(self) -> None:
@@ -420,6 +426,13 @@ class MainWindow(QMainWindow):
         self._shutdown_started = 0.0
         self._process_rows: dict[str, list[QTreeWidgetItem]] = {}
         self._field_control_state: dict[str, tuple[str, str | None, str | None]] = {}
+        self._current_batch: int | None = None
+        self._current_apple: int | None = None
+        self._current_batch_dir: Path | None = None
+        self._current_bag_timestamp: str | None = None
+        self._current_bag_path: str | None = None
+        self._pick_record_message = "No pick recorded yet"
+        self._pick_record_tone = "muted"
 
         initial_path = LAST_PROFILE if LAST_PROFILE.exists() else DEFAULT_PROFILE
         try:
@@ -457,6 +470,7 @@ class MainWindow(QMainWindow):
         outer = QVBoxLayout(page)
 
         outer.addLayout(self._create_field_control_header(control_page=False))
+        outer.addLayout(self._create_harvest_context_header(control_page=False))
 
         self.process_tree = self._create_process_tree(185)
         outer.addWidget(self.process_tree)
@@ -527,6 +541,7 @@ class MainWindow(QMainWindow):
         outer = QVBoxLayout(page)
 
         outer.addLayout(self._create_field_control_header(control_page=True))
+        outer.addLayout(self._create_harvest_context_header(control_page=True))
 
         self.control_process_tree = self._create_process_tree(155)
         outer.addWidget(self.control_process_tree)
@@ -549,6 +564,7 @@ class MainWindow(QMainWindow):
         apples_panel = ImagePanel()
         apples_panel.label.setMinimumSize(320, 180)
         apples_layout.addWidget(apples_panel)
+        apples_layout.addWidget(QLabel("Image labels are zero-based IDs from the current prediction."))
         self.image_panels.setdefault("apple_prediction_image", []).append(apples_panel)
         visual_layout.addWidget(apples_group, 1)
         center.addWidget(visual_container)
@@ -580,6 +596,27 @@ class MainWindow(QMainWindow):
         self._add_control_button(harvest_layout, "Release apple", lambda: self._call_trigger_service("release_apple"))
         control_layout.addWidget(harvest_group)
 
+        self.apple_target_group = QGroupBox("Choose next apple")
+        target_layout = QGridLayout(self.apple_target_group)
+        self.available_apple_ids_label = QLabel("Available IDs: waiting for prediction")
+        self.available_apple_ids_label.setWordWrap(True)
+        target_layout.addWidget(self.available_apple_ids_label, 0, 0, 1, 3)
+        target_layout.addWidget(QLabel("Apple ID from detection image"), 1, 0)
+        self.apple_target_input = QSpinBox()
+        self.apple_target_input.setRange(0, 2147483647)
+        target_layout.addWidget(self.apple_target_input, 1, 1)
+        select_button = QPushButton("Pick this apple next")
+        select_button.setProperty("primary", True)
+        select_button.clicked.connect(self._request_apple_target)
+        target_layout.addWidget(select_button, 1, 2)
+        finish_button = QPushButton("Finish selected apples")
+        finish_button.clicked.connect(lambda: self._call_trigger_service("finish_apple_selection"))
+        target_layout.addWidget(finish_button, 2, 2)
+        self.apple_target_status = QLabel("Select an ID after prediction finishes.")
+        self.apple_target_status.setWordWrap(True)
+        target_layout.addWidget(self.apple_target_status, 2, 0, 1, 2)
+        control_layout.addWidget(self.apple_target_group)
+
         gripper_group, gripper_layout = self._button_group("Gripper")
         self._add_control_button(gripper_layout, "Open gripper", lambda: self._call_bool_service("gripper_actuate", False))
         self._add_control_button(gripper_layout, "Close gripper", lambda: self._call_bool_service("gripper_actuate", True), primary=True)
@@ -589,13 +626,40 @@ class MainWindow(QMainWindow):
         self._add_control_button(gripper_layout, "Home gripper", lambda: self._call_bool_service("home_gripper", True))
         control_layout.addWidget(gripper_group)
 
+        ledger_group = QGroupBox("Pick / bag ledger")
+        ledger_layout = QGridLayout(ledger_group)
+        ledger_layout.addWidget(QLabel("Pick / bag number"), 0, 0)
+        self.pick_number_input = QLineEdit()
+        self.pick_number_input.setPlaceholderText("Optional — leave blank when discarded")
+        self.pick_number_input.setToolTip(
+            "Enter the physical bag/pick identifier, or leave blank to record a discarded attempt."
+        )
+        self.pick_number_input.returnPressed.connect(self._record_pick_entry)
+        ledger_layout.addWidget(self.pick_number_input, 0, 1)
+        record_button = QPushButton("Record pick / discard")
+        record_button.setProperty("primary", True)
+        record_button.clicked.connect(self._record_pick_entry)
+        ledger_layout.addWidget(record_button, 0, 2)
+        self.pick_record_status = QLabel(self._pick_record_message)
+        self.pick_record_status.setWordWrap(True)
+        ledger_layout.addWidget(self.pick_record_status, 1, 0, 1, 3)
+        self.pick_log_path_label = QLabel()
+        self.pick_log_path_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.pick_log_path_label.setWordWrap(True)
+        ledger_layout.addWidget(self.pick_log_path_label, 2, 0, 1, 3)
+        control_layout.addWidget(ledger_group)
+        self._update_pick_log_path_label()
+
         control_layout.addWidget(QLabel("Control request log"))
         self.control_log = QPlainTextEdit()
         self.control_log.setReadOnly(True)
         self.control_log.setMaximumBlockCount(1000)
-        self.control_log.setMaximumHeight(135)
+        self.control_log.setMaximumHeight(90)
         control_layout.addWidget(self.control_log)
-        center.addWidget(control_container)
+        control_scroll = QScrollArea()
+        control_scroll.setWidgetResizable(True)
+        control_scroll.setWidget(control_container)
+        center.addWidget(control_scroll)
         center.setSizes([850, 600])
         outer.addWidget(center, 1)
         return page
@@ -618,6 +682,24 @@ class MainWindow(QMainWindow):
             label = QLabel(initial_text)
             setattr(self, f"{prefix}{name}", label)
             header.addWidget(label, stretch)
+        return header
+
+    def _create_harvest_context_header(self, control_page: bool) -> QHBoxLayout:
+        prefix = "control_" if control_page else ""
+        header = QHBoxLayout()
+        title = QLabel("DATA CONTEXT")
+        title.setFont(QFont("Sans Serif", 11, QFont.Weight.Bold))
+        batch = QLabel("Batch: —")
+        apple = QLabel("Apple: —")
+        clock = QLabel("Bag timestamp: —")
+        setattr(self, f"{prefix}batch_context", batch)
+        setattr(self, f"{prefix}apple_context", apple)
+        setattr(self, f"{prefix}timestamp_context", clock)
+        header.addWidget(title)
+        header.addSpacing(20)
+        header.addWidget(batch)
+        header.addWidget(apple)
+        header.addWidget(clock, 1)
         return header
 
     def _set_field_control_label(
@@ -681,6 +763,7 @@ class MainWindow(QMainWindow):
             plot.set_light_mode(self._light_mode)
         for name, (text, tone, tooltip) in list(self._field_control_state.items()):
             self._set_field_control_label(name, text, tone=tone, tooltip=tooltip)
+        self._set_pick_record_status(self._pick_record_message, self._pick_record_tone)
 
     def _semantic_color(self, tone: str) -> str:
         palette = {
@@ -700,6 +783,106 @@ class MainWindow(QMainWindow):
             },
         }
         return palette["light" if self._light_mode else "dark"][tone]
+
+    def _update_harvest_context(self, context: dict[str, Any]) -> None:
+        if "batch_number" in context:
+            batch_number = int(context["batch_number"])
+            if batch_number != self._current_batch:
+                self._current_apple = None
+                self._current_bag_timestamp = None
+                self._current_bag_path = None
+            self._current_batch = batch_number
+        if "apple_number" in context:
+            self._current_apple = int(context["apple_number"])
+        if context.get("batch_directory"):
+            self._current_batch_dir = Path(str(context["batch_directory"])).expanduser()
+
+        batch_text = f"Batch: {self._current_batch}" if self._current_batch is not None else "Batch: —"
+        apple_text = f"Apple: {self._current_apple}" if self._current_apple is not None else "Apple: —"
+        tooltip = str(self._current_batch_dir) if self._current_batch_dir else "No active batch directory"
+        for prefix in ("", "control_"):
+            batch_label = getattr(self, f"{prefix}batch_context")
+            batch_label.setText(batch_text)
+            batch_label.setToolTip(tooltip)
+            getattr(self, f"{prefix}apple_context").setText(apple_text)
+        self._update_bag_context({})
+        self._update_pick_log_path_label()
+
+    def _update_bag_context(self, context: dict[str, str]) -> None:
+        if context.get("timestamp"):
+            self._current_bag_timestamp = context["timestamp"]
+        if context.get("bag_path"):
+            self._current_bag_path = context["bag_path"]
+        timestamp_text = self._current_bag_timestamp or "—"
+        tooltip = self._current_bag_path or "No bag recording has started for this batch"
+        for prefix in ("", "control_"):
+            label = getattr(self, f"{prefix}timestamp_context")
+            label.setText(f"Bag timestamp: {timestamp_text}")
+            label.setToolTip(tooltip)
+
+    def _pick_log_path(self) -> Path:
+        if self._current_batch_dir is not None:
+            base_directory = self._current_batch_dir.parent
+        else:
+            base_directory = Path(self.config["harvest"]["base_data_dir"]).expanduser()
+        return base_directory / "pick_log.csv"
+
+    def _update_pick_log_path_label(self) -> None:
+        if hasattr(self, "pick_log_path_label"):
+            self.pick_log_path_label.setText(f"Spreadsheet: {self._pick_log_path()}")
+
+    def _set_pick_record_status(self, message: str, tone: str) -> None:
+        self._pick_record_message = message
+        self._pick_record_tone = tone
+        if hasattr(self, "pick_record_status"):
+            self.pick_record_status.setText(message)
+            self.pick_record_status.setStyleSheet(
+                f"color:{self._semantic_color(tone)}; font-weight:600"
+            )
+
+    def _record_pick_entry(self) -> None:
+        if self._current_batch is None or self._current_apple is None:
+            QMessageBox.warning(
+                self,
+                "No active pick context",
+                "Start the harvest pipeline and wait for both a batch and apple number before recording a pick.",
+            )
+            return
+
+        pick_number = self.pick_number_input.text().strip()
+        status = "bagged" if pick_number else "discarded"
+        recorded_at = datetime.now().astimezone().isoformat(timespec="seconds")
+        bag_timestamp = self._current_bag_timestamp or ""
+        record = {
+            "timestamp": bag_timestamp,
+            "batch_number": self._current_batch,
+            "apple_number": self._current_apple,
+            "pick_number": pick_number,
+            "status": status,
+            "bag_path": self._current_bag_path or "",
+            "batch_directory": str(self._current_batch_dir or ""),
+            "recorded_at": recorded_at,
+            "profile": self.config["profile_name"],
+            "mode": self.config["mode"],
+        }
+        try:
+            path = append_pick_record(self._pick_log_path(), record)
+        except OSError as exc:
+            self._set_pick_record_status(f"Could not write pick spreadsheet: {exc}", "danger")
+            QMessageBox.critical(self, "Pick log write failed", str(exc))
+            return
+
+        identifier = pick_number if pick_number else "no bag number"
+        message = (
+            f"Recorded {status}: batch {self._current_batch}, apple {self._current_apple}, "
+            f"{identifier}, bag timestamp {bag_timestamp or 'unavailable'}"
+        )
+        tone = "success" if pick_number and bag_timestamp else "warning"
+        self._set_pick_record_status(message, tone)
+        self._append_control_log(message)
+        self._append_log("PICK LOG", f"{message} → {path}")
+        self.pick_number_input.clear()
+        self.pick_number_input.setFocus()
 
     def _apply_styles(self) -> None:
         if self._light_mode:
@@ -750,6 +933,7 @@ class MainWindow(QMainWindow):
         self.ros.freedrive_status_received.connect(self._freedrive_update)
         self.ros.graph_received.connect(self._graph_update)
         self.ros.service_result.connect(self._service_result)
+        self.ros.available_apple_ids_received.connect(self._available_apple_ids_update)
         self.ros.availability_changed.connect(self._ros_availability)
 
     def _apply_config(self, config: dict[str, Any], announce: bool = True) -> None:
@@ -771,10 +955,16 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "ROS environment failed", detail)
             return
         self.config = normalize_config(config)
+        self.apple_target_group.setEnabled(
+            self.config["mode"] == "autonomous"
+            and self.config["harvest"]["manual_apple_selection"]
+            and self.config["components"]["harvest"]
+        )
         specs = build_process_specs(self.config)
         self.supervisor.configure(specs, environment)
         self._populate_processes(specs)
         self.ros.update_topics(self.config["topics"])
+        self._update_pick_log_path_label()
         if announce:
             self._append_log("UI", f"Applied profile '{self.config['profile_name']}' ({self.config['mode']})")
             self.tabs.setCurrentIndex(1)
@@ -805,7 +995,32 @@ class MainWindow(QMainWindow):
         self._append_control_log(f"Requesting {service_name} data={str(value).lower()}")
         self.ros.call_set_bool(service_name, value)
 
+    def _request_apple_target(self) -> None:
+        apple_id = self.apple_target_input.value()
+        service_name = self.config["services"]["set_apple_target"]
+        self.apple_target_status.setText(f"Requesting apple ID {apple_id}…")
+        self._append_control_log(f"Requesting {service_name} apple_id={apple_id}")
+        self.ros.call_set_apple_target(service_name, apple_id)
+
+    def _available_apple_ids_update(self, apple_ids: list[int]) -> None:
+        label = ", ".join(str(apple_id) for apple_id in apple_ids) if apple_ids else "none"
+        self.available_apple_ids_label.setText(f"Available IDs: {label}")
+
     def _process_state(self, key: str, state: str, detail: str) -> None:
+        if key == "harvest" and state == "starting":
+            self._current_batch = None
+            self._current_apple = None
+            self._current_batch_dir = None
+            self._current_bag_timestamp = None
+            self._current_bag_path = None
+            self._update_harvest_context({})
+            self.apple_target_group.setEnabled(
+                self.config["mode"] == "autonomous"
+                and self.config["harvest"]["manual_apple_selection"]
+                and self.config["components"]["harvest"]
+            )
+            self.available_apple_ids_label.setText("Available IDs: waiting for prediction")
+            self.apple_target_status.setText("Select an ID after prediction finishes.")
         items = self._process_rows.get(key, [])
         for item in items:
             item.setText(1, state)
@@ -824,6 +1039,24 @@ class MainWindow(QMainWindow):
         clean = ANSI_ESCAPE.sub("", text).replace("\r", "")
         self._append_log(key, clean.rstrip())
         lower = clean.lower()
+        bag_context = extract_bag_context(clean)
+        if bag_context:
+            self._update_bag_context(bag_context)
+        if key == "harvest":
+            if "HARVEST_SELECTION enabled" in clean:
+                self.apple_target_group.setEnabled(True)
+                self.apple_target_status.setText(
+                    "Arm in freedrive. Reposition it, then enter an apple ID; the same ID can be retried."
+                )
+            context = extract_harvest_context(clean)
+            if context:
+                self._update_harvest_context(context)
+            if "done with pick" in lower:
+                self._set_pick_record_status(
+                    "Pick finished: enter the bag/pick number, or leave it blank to record a discard.",
+                    "warning",
+                )
+                self.pick_number_input.setFocus()
         stage_match = re.search(r"--- running stage:\s*(.*?)\s*---", clean, re.IGNORECASE)
         if stage_match:
             self._set_field_control_label(
@@ -907,6 +1140,11 @@ class MainWindow(QMainWindow):
         )
 
     def _service_result(self, name: str, success: bool, message: str) -> None:
+        if name in {
+            self.config["services"]["set_apple_target"],
+            self.config["services"]["finish_apple_selection"],
+        }:
+            self.apple_target_status.setText(message)
         self._append_log("CONTROL", f"{name}: {'OK' if success else 'FAILED'} — {message}")
         self._append_control_log(f"{name}: {'OK' if success else 'FAILED'} — {message}")
         if not success:

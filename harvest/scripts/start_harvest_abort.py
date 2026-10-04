@@ -35,14 +35,15 @@ import rclpy
 from rclpy.node import Node
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
+from rclpy.qos import DurabilityPolicy, QoSProfile
 from rclpy.action import ActionClient
 # Interfaces
 from rcl_interfaces.msg import Parameter, ParameterValue, ParameterType
 from rcl_interfaces.srv import SetParameters
 from std_srvs.srv import SetBool, Trigger, Empty
-from std_msgs.msg import Int8, Bool, Float32, Float64
+from std_msgs.msg import Int8, Bool, Float32, Float64, Int32MultiArray
 from geometry_msgs.msg import Point, Pose, PoseArray
-from harvest_interfaces.srv import ApplePrediction, CoordinateToTrajectory, SendTrajectory, RecordTopics, GetGripperPose, SetValue, MoveToPose
+from harvest_interfaces.srv import ApplePrediction, CoordinateToTrajectory, SendTrajectory, RecordTopics, GetGripperPose, SetValue, MoveToPose, SetAppleTarget
 from controller_manager_msgs.srv import SwitchController
 from harvest_interfaces.action import EventDetection
 
@@ -69,6 +70,7 @@ import signal
 import subprocess
 import yaml
 import re
+from threading import Condition
 from contextlib import contextmanager
 from enum import Enum
 from pathlib import Path
@@ -114,6 +116,70 @@ class HarvestAborted(Exception):
     pass
 
 
+class AppleSelection:
+    """One operator-selected ID at a time from the current predicted poses."""
+
+    def __init__(self):
+        self._condition = Condition()
+        self._available: set[int] | None = None
+        self._pending: int | None = None
+        self._finished = False
+
+    def set_available(self, count: int) -> None:
+        with self._condition:
+            self._available = set(range(count))
+            self._pending = None
+            self._finished = count == 0
+            self._condition.notify_all()
+
+    def selectable_ids(self) -> list[int]:
+        with self._condition:
+            if self._available is None or self._finished:
+                return []
+            return sorted(self._available)
+
+    def request(self, apple_id: int) -> tuple[bool, str]:
+        with self._condition:
+            if self._available is None:
+                return False, "Wait for apple prediction to finish"
+            if self._finished:
+                return False, "Apple selection has finished"
+            if apple_id not in self._available:
+                return False, f"Apple ID {apple_id} is not in the current prediction; valid IDs: {sorted(self._available)}"
+            self._pending = apple_id
+            self._condition.notify_all()
+            return True, f"Apple ID {apple_id} selected for the next attempt"
+
+    def take_next(self, timeout: float = 0.2) -> int | None:
+        with self._condition:
+            if self._pending is None and not self._finished:
+                self._condition.wait(timeout)
+            if self._finished or self._pending is None:
+                return None
+            apple_id = self._pending
+            self._pending = None
+            return apple_id
+
+    def clear_pending(self) -> None:
+        """Require a fresh operator choice after an aborted attempt."""
+        with self._condition:
+            self._pending = None
+
+    def finish(self) -> tuple[bool, str]:
+        with self._condition:
+            if self._available is None:
+                return False, "Wait for apple prediction to finish"
+            self._pending = None
+            self._finished = True
+            self._condition.notify_all()
+            return True, "No further apples will be selected for this batch"
+
+    @property
+    def done(self) -> bool:
+        with self._condition:
+            return self._finished
+
+
 class StartHarvestAbort(Node):
     def __init__(self):
         super().__init__("start_harvest_abort_node")
@@ -128,6 +194,10 @@ class StartHarvestAbort(Node):
         self._motion_lock = threading.RLock()
         self._motion_depth = 0
         self._motion_label = None
+        self.apple_selection = AppleSelection()
+        apple_ids_qos = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
+        self.available_apple_ids_pub = self.create_publisher(
+            Int32MultiArray, '/harvest/available_apple_ids', apple_ids_qos)
 
         # Add publisher for freedrive mode in a timer callback. 
         self.freedrive_pub = self.create_publisher(Bool, FREEDRIVE_ENABLE_TOPIC, 10)
@@ -146,6 +216,7 @@ class StartHarvestAbort(Node):
         self.declare_parameter('enable_recording', True)
         self.declare_parameter('enable_visual_servo', True)
         self.declare_parameter('enable_apple_prediction', True)
+        self.declare_parameter('manual_apple_selection', False)
         self.declare_parameter('enable_pressure_servo', True)
         self.declare_parameter('enable_picking', True)
         self.declare_parameter('optimal_trajectory', True)
@@ -157,7 +228,7 @@ class StartHarvestAbort(Node):
         self.declare_parameter('abort_on_decelerate', False)
         self.declare_parameter('abort_recovery', 'freedrive')  # 'freedrive' or 'home'
 
-        self.PICK_PATTERN = self.get_parameter('pick_pattern').get_parameter_value().string_value
+        self.org_pick_pattern = self.get_parameter('pick_pattern').get_parameter_value().string_value
         self.EVENT_SENSITIVITY = self.get_parameter('event_sensitivity').get_parameter_value().double_value
         self.recording_startup_delay = self.get_parameter('recording_startup_delay').get_parameter_value().double_value
         self.prediction_throttle_hz = self.get_parameter('prediction_throttle_hz').get_parameter_value().double_value
@@ -165,6 +236,7 @@ class StartHarvestAbort(Node):
         self.enable_recording = self.get_parameter('enable_recording').get_parameter_value().bool_value
         self.enable_visual_servo = self.get_parameter('enable_visual_servo').get_parameter_value().bool_value
         self.enable_apple_prediction = self.get_parameter('enable_apple_prediction').get_parameter_value().bool_value
+        self.manual_apple_selection = self.get_parameter('manual_apple_selection').get_parameter_value().bool_value
         self.enable_pressure_servo = self.get_parameter('enable_pressure_servo').get_parameter_value().bool_value
         self.enable_picking = self.get_parameter('enable_picking').get_parameter_value().bool_value
         self.use_optimal_trajectory = self.get_parameter('optimal_trajectory').get_parameter_value().bool_value
@@ -172,6 +244,7 @@ class StartHarvestAbort(Node):
         self.freedrive_mode = self.get_parameter('freedrive').get_parameter_value().bool_value
         self.abort_on_decelerate = self.get_parameter('abort_on_decelerate').get_parameter_value().bool_value
         self.abort_recovery_mode = self.get_parameter('abort_recovery').get_parameter_value().string_value
+        self.PICK_PATTERN = self.org_pick_pattern
 
         if not self.freedrive_mode and not self.enable_apple_prediction:
             apple_loc_path = "/home/jn2/college/data/apple_locations"
@@ -237,6 +310,14 @@ class StartHarvestAbort(Node):
         )
         self.freedrive_control_service = self.create_service(
             SetBool, 'set_harvest_freedrive', self._freedrive_service_cb,
+            callback_group=self.status_cb_group,
+        )
+        self.apple_target_service = self.create_service(
+            SetAppleTarget, 'set_apple_target', self._apple_target_service_cb,
+            callback_group=self.status_cb_group,
+        )
+        self.finish_apple_selection_service = self.create_service(
+            Trigger, 'finish_apple_selection', self._finish_apple_selection_cb,
             callback_group=self.status_cb_group,
         )
 
@@ -312,6 +393,10 @@ class StartHarvestAbort(Node):
             if not os.path.exists(batch_directory):
                 os.makedirs(batch_directory)
                 print(f"Created new directory: {batch_directory}")
+                print(
+                    f"HARVEST_CONTEXT batch={batch_number} batch_dir={batch_directory}",
+                    flush=True,
+                )
                 break
             batch_number += 1
         return batch_directory, batch_number
@@ -368,6 +453,38 @@ class StartHarvestAbort(Node):
         response.message = "Abort requested"
         return response
 
+    def _publish_available_apple_ids(self):
+        message = Int32MultiArray()
+        message.data = self.apple_selection.selectable_ids()
+        self.available_apple_ids_pub.publish(message)
+
+    def _apple_target_service_cb(self, request, response):
+        if self.freedrive_mode or not self.manual_apple_selection:
+            response.success = False
+            response.message = "Operator apple selection is not enabled for this run"
+            return response
+        response.success, response.message = self.apple_selection.request(request.apple_id)
+        return response
+
+    def _finish_apple_selection_cb(self, request, response):
+        if self.freedrive_mode or not self.manual_apple_selection:
+            response.success = False
+            response.message = "Operator apple selection is not enabled for this run"
+            return response
+        response.success, response.message = self.apple_selection.finish()
+        if response.success:
+            self._publish_available_apple_ids()
+        return response
+
+    def _wait_for_selected_apple(self):
+        self.get_logger().info('Waiting for an apple ID from Controls; select an ID or finish the batch')
+        while rclpy.ok() and not self.apple_selection.done:
+            apple_id = self.apple_selection.take_next()
+            if apple_id is not None:
+                self.get_logger().info(f'Operator selected apple {apple_id}')
+                return apple_id
+        return None
+
     def _freedrive_service_cb(self, request, response):
         target = "freedrive" if request.data else "trajectory"
         with self._motion_lock:
@@ -422,6 +539,11 @@ class StartHarvestAbort(Node):
             self.go_to_home()
 
         self.abort_event.clear()
+
+    def _raise_if_aborted(self, stage_name):
+        if self.abort_event.is_set():
+            self.handle_abort()
+            raise HarvestAborted(stage_name)
 
     # ------------------------------------------------------------------
     # Topic throttling (prediction stage only -- see prediction_topics)
@@ -825,7 +947,7 @@ class StartHarvestAbort(Node):
                     self.get_logger().info(f"Picking with: {self.PICK_PATTERN}")
                     self.pick_controller_action()
                 
-            self.PICK_PATTERN = 'sweep'
+            self.PICK_PATTERN = self.org_pick_pattern
             self.run_stage(
                 self.pressure_servo_and_pick_controller_topics,
                 base_dir + self.final_approach_and_pick_file_name_prefix,
@@ -843,7 +965,7 @@ class StartHarvestAbort(Node):
                     self.pick_controller_action()
                 
             self.run_stage(
-                [],
+                self.pressure_servo_and_pick_controller_topics,
                 base_dir + 'post_pick_pull',
                 servo_frame='amiga__base',
                 use_servo=True,
@@ -858,12 +980,15 @@ class StartHarvestAbort(Node):
     def _run_freedrive_loop(self, start_idx=1):
         """Repeats _run_freedrive_apple, incrementing the apple index each
         time since freedrive has no predicted locations to key off of.
-        Keeps going until the user stops it -- this is also where abort
-        recovery drops back into when abort_recovery is 'freedrive', so an
-        abort no longer just ends the program."""
+        Keeps going until the user stops it."""
         idx = start_idx
         while True:
             base_dir = self.batch_dir + f'apple_{idx}/'
+            print(
+                f"HARVEST_CONTEXT batch={self.batch_number} apple={idx} "
+                f"batch_dir={self.batch_dir}",
+                flush=True,
+            )
             try:
                 self.get_logger().info(f'Freedrive apple {idx}')
                 self._run_freedrive_apple(base_dir)
@@ -881,41 +1006,45 @@ class StartHarvestAbort(Node):
         self.get_logger().info('Batch Complete')
 
     def _run_full_batch_flow(self):
-        """Mirrors start_harvest.py: scan position, apple prediction (or
-        pre-saved locations), then loop over every apple with the full
-        approach / visual servo / pick / pull-back / release sequence."""
+        """Predict apples, then run autonomous pick attempts."""
         self.get_logger().info("Moving to scan position")
         self.go_to_scan_position()
 
         if self.enable_apple_prediction:
             self.get_logger().info('Predicting apple locations')
             apple_poses = None
+            while rclpy.ok():
+                apple_poses = None
 
-            def predict_action():
-                nonlocal apple_poses
-                apple_poses = self.start_apple_prediction()
+                def predict_action():
+                    nonlocal apple_poses
+                    apple_poses = self.start_apple_prediction()
 
-            if self.enable_recording:
-                self.start_prediction_throttles()
-            try:
-                self.run_stage(
-                    self.prediction_topics,
-                    self.batch_dir + self.prediction_file_name_prefix,
-                    use_servo=False,
-                    action_fn=predict_action,
-                )
-                self.switch_controller(servo=False)
-            except HarvestAborted:
-                self.get_logger().error('Aborted during apple prediction')
-                if self.abort_recovery_mode == 'freedrive':
-                    self.get_logger().warn('Recovered into freedrive -- continue picking manually, or stop to end the batch')
-                    self._run_freedrive_loop(start_idx=1)
-                else:
-                    self.get_logger().error('Ending batch early')
-                return
-            finally:
                 if self.enable_recording:
-                    self.stop_prediction_throttles()
+                    self.start_prediction_throttles()
+                try:
+                    self.run_stage(
+                        self.prediction_topics,
+                        self.batch_dir + self.prediction_file_name_prefix,
+                        use_servo=False,
+                        action_fn=predict_action,
+                    )
+                    self.switch_controller(servo=False)
+                except HarvestAborted:
+                    self.get_logger().error('Aborted during apple prediction')
+                    if self.abort_recovery_mode != 'freedrive':
+                        self.get_logger().error('Ending batch early')
+                        return
+                    input('Arm is in freedrive. Reposition it, then hit enter to repeat the scan and prediction: ')
+                    self.go_to_scan_position()
+                    continue
+                finally:
+                    if self.enable_recording:
+                        self.stop_prediction_throttles()
+                break
+            if apple_poses is None:
+                self.get_logger().error('No apple prediction available; ending batch')
+                return
         else:
             self.get_logger().info('Skipping apple prediction, using pre-saved locations')
             apple_poses = PoseArray()
@@ -928,20 +1057,36 @@ class StartHarvestAbort(Node):
             for i, p in enumerate(apple_poses.poses)
         }
         self.get_logger().info(f'Found {len(apple_poses.poses)} apples!')
+        if self.manual_apple_selection:
+            self.apple_selection.set_available(len(apple_poses.poses))
+            self._publish_available_apple_ids()
 
         self.get_logger().info('Resetting arm to home position')
         # self.go_to_home()
 
-        for idx, coord in enumerate(apple_poses.poses):
+        automatic_ids = iter(range(len(apple_poses.poses)))
+        while rclpy.ok():
+            idx = self._wait_for_selected_apple() if self.manual_apple_selection else next(automatic_ids, None)
+            if idx is None:
+                break
+            coord = apple_poses.poses[idx]
             base_dir = self.batch_dir + f'apple_{idx}/'
+            print(
+                f"HARVEST_CONTEXT batch={self.batch_number} apple={idx} "
+                f"batch_dir={self.batch_dir}",
+                flush=True,
+            )
             try:
                 input(f'Hit enter to start with apple {idx}')
+                self._raise_if_aborted(f'apple {idx} before approach')
                 self.get_logger().info(f'Approaching apple {idx}: Coord {coord}')
                 if self.use_optimal_trajectory:
                     waypoints = self.call_coord_to_traj(coord)
+                    self._raise_if_aborted(f'apple {idx} trajectory planning')
                     self.trigger_arm_mover(waypoints)
                 else:
                     self.trigger_move_arm_to_pose(coord)
+                self._raise_if_aborted(f'apple {idx} approach')
 
                 if self.enable_visual_servo:
                     input('hit enter to start visual servoing')
@@ -978,16 +1123,19 @@ class StartHarvestAbort(Node):
                         self.pick_controller_action()
                     self.configure_servo('base_link')
 
-                self.run_stage(
-                    [],
-                    base_dir + 'post_pick_pull',
-                    servo_frame='amiga__base',
-                    use_servo=True,
-                    action_fn=pull_back_action,
-                )
-                self.PICK_PATTERN = original_pick_pattern
+                try:
+                    self.run_stage(
+                        [],
+                        base_dir + 'post_pick_pull',
+                        servo_frame='amiga__base',
+                        use_servo=True,
+                        action_fn=pull_back_action,
+                    )
+                finally:
+                    self.PICK_PATTERN = original_pick_pattern
 
                 input('Done with pick, hit enter to return home')
+                self._raise_if_aborted(f'apple {idx} before returning to scan')
                 # self.go_to_home()
                 self.go_to_scan_position()
                 if self.enable_pressure_servo:
@@ -996,8 +1144,17 @@ class StartHarvestAbort(Node):
             except HarvestAborted:
                 self.get_logger().error(f'Aborted while working on apple {idx}')
                 if self.abort_recovery_mode == 'freedrive':
-                    self.get_logger().warn('Recovered into freedrive -- continue picking manually, or stop to end the batch')
-                    self._run_freedrive_loop(start_idx=idx + 1)
+                    if not self.manual_apple_selection:
+                        self.manual_apple_selection = True
+                        self.apple_selection.set_available(len(apple_poses.poses))
+                    self.apple_selection.clear_pending()
+                    self._publish_available_apple_ids()
+                    print('HARVEST_SELECTION enabled', flush=True)
+                    self.get_logger().warn(
+                        f'Arm is in freedrive. Reposition it, then select an apple ID '
+                        f'for another autonomous attempt; apple {idx} may be selected again.'
+                    )
+                    continue
                 else:
                     self.get_logger().error('Ending batch early')
                 break

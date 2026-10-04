@@ -66,6 +66,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "enable_pressure_servo": True,
         "enable_picking": True,
         "enable_apple_prediction": True,
+        "manual_apple_selection": True,
         "optimal_trajectory": True,
         "pick_pattern": "stiffness-seeking",
         "sweep_theta_deg": 90.0,
@@ -77,6 +78,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "mast_depth": "/camera/gripper_camera/aligned_depth_to_color/image_raw",
         "palm_image": "/gripper/rgb_palm_camera/image_raw",
         "apple_prediction_image": "/apple_annotated",
+        "available_apple_ids": "/harvest/available_apple_ids",
         "pressure": "/microROS/sensor_data",
         "gripper_imu": "/microROS/imu1",
         "can_status": "/microROS/can_status",
@@ -91,6 +93,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "home_gripper": "/microROS/home_odrive",
         "harvest_freedrive": "/set_harvest_freedrive",
         "abort_harvest": "/abort_harvest",
+        "set_apple_target": "/set_apple_target",
+        "finish_apple_selection": "/finish_apple_selection",
         "move_arm_home": "/move_arm_to_home",
         "release_apple": "/release_apple",
     },
@@ -132,10 +136,10 @@ def normalize_config(raw: dict[str, Any] | None) -> dict[str, Any]:
         config["mode"] = "autonomous"
 
     if config["mode"] == "freedrive":
-        # The manual harvest flow does not run vision-driven stages, but the
-        # vision stack may still be launched independently for data capture.
-        config["harvest"]["enable_visual_servo"] = False
+        # Freedrive can use visual servo after manual arm positioning.
+        # Apple prediction and ID selection belong to autonomous mode.
         config["harvest"]["enable_apple_prediction"] = False
+        config["harvest"]["manual_apple_selection"] = False
     return config
 
 
@@ -287,6 +291,7 @@ def build_process_specs(raw_config: dict[str, Any]) -> list[ProcessSpec]:
                 ("enable_pressure_servo", _ros_bool(harvest["enable_pressure_servo"])),
                 ("enable_picking", _ros_bool(harvest["enable_picking"])),
                 ("enable_apple_prediction", _ros_bool(harvest["enable_apple_prediction"])),
+                ("manual_apple_selection", _ros_bool(harvest["manual_apple_selection"])),
                 ("optimal_trajectory", _ros_bool(harvest["optimal_trajectory"])),
                 ("pick_pattern", harvest["pick_pattern"]),
                 ("sweep_theta_deg", harvest["sweep_theta_deg"]),

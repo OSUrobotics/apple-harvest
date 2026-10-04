@@ -28,6 +28,9 @@ class RecordTopicsNode(Node):
             return response
 
         self.bag_path = self.create_bag_file_path(file_name_prefix)
+        self.get_logger().info(
+            f'BAG_CONTEXT timestamp={self.bag_timestamp} bag_path={self.bag_path}'
+        )
         command = f"ros2 bag record {' '.join(topics)} --output {self.bag_path}"
 
         # Start the recording process
@@ -56,6 +59,7 @@ class RecordTopicsNode(Node):
     def create_bag_file_path(self, file_name_prefix):
         # Generate a timestamped bag file name
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.bag_timestamp = timestamp
         bag_file_name = file_name_prefix + f"_{timestamp}.db3"
         return bag_file_name
 

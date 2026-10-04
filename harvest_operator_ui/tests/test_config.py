@@ -6,16 +6,36 @@ from harvest_ui.config import DEFAULT_CONFIG, build_process_specs, load_config, 
 
 
 class ConfigTests(unittest.TestCase):
-    def test_freedrive_keeps_optional_vision_but_disables_vision_stages(self):
-        config = normalize_config({"mode": "freedrive", "components": {"vision": True}})
+    def test_freedrive_keeps_optional_vision_without_apple_prediction(self):
+        config = normalize_config({
+            "mode": "freedrive",
+            "components": {"vision": True},
+            "harvest": {"enable_visual_servo": False},
+        })
         self.assertTrue(config["components"]["vision"])
         self.assertFalse(config["harvest"]["enable_visual_servo"])
         self.assertFalse(config["harvest"]["enable_apple_prediction"])
+        self.assertFalse(config["harvest"]["manual_apple_selection"])
         keys = [spec.key for spec in build_process_specs(config)]
         self.assertIn("vision", keys)
 
+    def test_freedrive_can_enable_visual_servo(self):
+        config = normalize_config({
+            "mode": "freedrive",
+            "harvest": {"enable_visual_servo": True},
+        })
+        self.assertTrue(config["harvest"]["enable_visual_servo"])
+        self.assertFalse(config["harvest"]["enable_apple_prediction"])
+        harvest = next(spec for spec in build_process_specs(config) if spec.key == "harvest")
+        self.assertIn("enable_visual_servo:=true", harvest.argv)
+        self.assertIn("freedrive:=true", harvest.argv)
+
     def test_freedrive_can_disable_vision(self):
-        config = normalize_config({"mode": "freedrive", "components": {"vision": False}})
+        config = normalize_config({
+            "mode": "freedrive",
+            "components": {"vision": False},
+            "harvest": {"enable_visual_servo": False},
+        })
         keys = [spec.key for spec in build_process_specs(config)]
         self.assertNotIn("vision", keys)
 
@@ -42,6 +62,11 @@ class ConfigTests(unittest.TestCase):
         harvest = next(spec for spec in build_process_specs(config) if spec.key == "harvest")
         self.assertIn("pick_pattern:=sweep", harvest.argv)
         self.assertIn("sweep_theta_deg:=75.0", harvest.argv)
+
+    def test_operator_selection_is_enabled_in_default_harvest_launch(self):
+        harvest = next(spec for spec in build_process_specs(DEFAULT_CONFIG) if spec.key == "harvest")
+        self.assertIn("manual_apple_selection:=true", harvest.argv)
+        self.assertEqual(DEFAULT_CONFIG["services"]["set_apple_target"], "/set_apple_target")
 
     def test_camera_serial_is_passed_to_single_vision_launch(self):
         specs = build_process_specs(DEFAULT_CONFIG)
