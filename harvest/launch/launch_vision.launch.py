@@ -6,6 +6,7 @@ from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.substitutions import FindPackageShare
+from launch_ros.parameter_descriptions import ParameterValue
 from launch.conditions import IfCondition
 import launch_ros.actions
 from launch.actions import IncludeLaunchDescription
@@ -64,6 +65,8 @@ def generate_launch_description():
                                   description="Smoothing factor on velocity based on how far away the target apple center is from the camera center. Higher smoothing factor, faster movement when apple is far away."))
     declared_arguments.append(DeclareLaunchArgument("vservo_max_vel", default_value="0.5", 
                                   description="Maximum velocity that arm end effector can move during visual servo."))
+    declared_arguments.append(DeclareLaunchArgument("vservo_dry_run", default_value="false",
+                                  description="Debug mode: visual servo processes every frame without a trigger and publishes debug outputs, but never sends commands to the servo node."))
     ### palm camera publisher node parameters
     declared_arguments.append(DeclareLaunchArgument("palm_camera_device_num", default_value="/dev/harvest/palm_camera", 
                                   description="Device number for palm RGB camer in gripper."))
@@ -131,6 +134,7 @@ def generate_launch_description():
                      "vservo_accuracy_px": LaunchConfiguration("vservo_accuracy_px"),
                      "vservo_smoothing_factor": LaunchConfiguration("vservo_smoothing_factor"),
                      "vservo_max_vel": LaunchConfiguration("vservo_max_vel"),
+                     "vservo_dry_run": ParameterValue(LaunchConfiguration("vservo_dry_run"), value_type=bool),
                       }
                 ])
 
