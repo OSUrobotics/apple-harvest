@@ -1,6 +1,6 @@
 schema_version: 1
 profile_name: Field harvest
-mode: autonomous
+mode: freedrive
 components:
   arm: true
   gripper: true
@@ -9,10 +9,11 @@ components:
 environment:
   setup_scripts:
   - /opt/ros/humble/setup.bash
-  - /home/imml/apple_harvest_ws/install/local_setup.bash
-  - /home/imml/uros_ws/install/local_setup.bash
-  venv: ''
-  pythonpath: ''
+  - /home/jn2/college/apple-harvest/install/local_setup.bash
+  - /home/jn2/college/Forked_Repos/apple_gripper/install/local_setup.bash
+  - /home/jn2/college/Fin_Ray_Gripper/install/local_setup.bash
+  venv: /home/jn2/college/Fin_Ray_Gripper/.venv
+  pythonpath: /home/jn2/college/Fin_Ray_Gripper/.venv/lib/python3.10/site-packages
 arm:
   ur_type: ur5e
   robot_ip: 169.254.177.220
@@ -21,31 +22,30 @@ arm:
   activate_joint_controller: true
   view_rviz: true
   description_file: amiga_ur_gripper.urdf.xacro
-  rviz_file: harvest_pipeline.rviz
+  rviz_file: view_robot.rviz
   camera_mount: wrist
   source_frame: amiga__base
 gripper:
   gripper_type: finray
-  grasp_strategy: time
+  grasp_strategy: pressure
 vision:
   launch_camera: true
   palm_camera_device_num: /dev/harvest/palm_camera
   camera_ns: camera/gripper_camera
   prediction_model: v9e.pt
-  vservo_model: best_segmentation.pt
+  vservo_model: v9e.pt
   target_frame: amiga__base
   mast_serial: '''238722072340'''
 harvest:
   event_sensitivity: 0.43
   recording_startup_delay: 0.53
-  base_data_dir: /home/imml/apple_harvest_data/pre_pear_data
+  base_data_dir: /home/jn2/college/data
   enable_recording: true
-  enable_visual_servo: true
+  enable_visual_servo: false
   enable_pressure_servo: true
   enable_picking: true
-  enable_apple_prediction: true
-  manual_apple_selection: true
-  optimal_trajectory: true
+  enable_apple_prediction: false
+  optimal_trajectory: false
   pick_pattern: pull-twist
   sweep_theta_deg: 60.0
   abort_on_decelerate: false
@@ -55,7 +55,6 @@ topics:
   mast_depth: /camera/gripper_camera/aligned_depth_to_color/image_raw
   palm_image: /gripper/rgb_palm_camera/image_raw
   apple_prediction_image: /apple_annotated
-  available_apple_ids: /harvest/available_apple_ids
   pressure: /microROS/sensor_data
   gripper_imu: /microROS/imu1
   can_status: /microROS/can_status
@@ -69,7 +68,5 @@ services:
   home_gripper: /microROS/home_odrive
   harvest_freedrive: /set_harvest_freedrive
   abort_harvest: /abort_harvest
-  set_apple_target: /set_apple_target
-  finish_apple_selection: /finish_apple_selection
   move_arm_home: /move_arm_to_home
   release_apple: /release_apple

@@ -536,7 +536,8 @@ class StartHarvestAbort(Node):
             self.switch_free_drive_controller(controller="freedrive")
         else:
             self.get_logger().warn("Returning arm to home position")
-            self.go_to_home()
+            self.go_to_scan_position()
+            # self.go_to_home()
 
         self.abort_event.clear()
 

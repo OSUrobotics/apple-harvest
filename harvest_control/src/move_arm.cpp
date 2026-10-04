@@ -64,11 +64,11 @@ private:
 
     std::vector<double> scan_joint_positions = {
         M_PI/4,
-        -2.775,
+        -2.76,
         1.72,
         4.71,
         -1.58,
-        -0.5235988};
+        -0.5235988};//-0.5235988};
 
     void execute_trajectory(const std::shared_ptr<harvest_interfaces::srv::SendTrajectory::Request> request,
                             std::shared_ptr<harvest_interfaces::srv::SendTrajectory::Response> response);
