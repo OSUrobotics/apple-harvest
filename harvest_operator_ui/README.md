@@ -11,7 +11,7 @@ Offline PySide6 control application for the `apple-harvest` ROS 2 pipeline.
 - Sweep pick-controller selection with a configurable sweep angle, alongside the legacy pick patterns.
 - RViz checkbox (`view_rviz`) enabled by default as a backup 3D visualizer.
 - UR headless control and initial scaled trajectory controller activation enabled by default.
-- Mode-aware launch selection: freedrive omits visual-servo and apple-prediction stages while allowing the vision stack to run independently for data collection.
+- Mode-aware launch selection: freedrive can optionally run visual servo after manual arm positioning; apple prediction and ID selection remain autonomous-only. The vision stack can also run independently for data collection.
 - Supervised arm, gripper, camera, vision, and abort-capable harvest processes.
 - Separate Status and Controls pages.
 - Persistent Light mode toggle available from every page.
@@ -20,7 +20,8 @@ Offline PySide6 control application for the `apple-harvest` ROS 2 pipeline.
 - Full `/microROS/can_status` display including position, velocity, torque, current, setpoint, active error, and disarm reason.
 - ROS node count, MoveIt Servo status, freedrive heartbeat, combined logs, and process state.
 - Pipeline, harvest, arm, and gripper controls, including open/close, valve on/off, clear errors, home, and guarded freedrive entry/exit.
-- The Controls page mirrors component process states and includes a large mast/wrist RGB operator view plus the annotated detected-apples view for future target selection.
+- The Controls page mirrors component process states and includes a large mast/wrist RGB operator view plus the annotated detected-apples view and an apple-ID target field.
+- Current batch, apple, and the exact timestamp embedded in the latest bag filename are shown on Status and Controls. The Controls page appends bagged picks or blank-number discards to `pick_log.csv` in the active data directory; each row also stores the bag path and a separate operator-entry time.
 
 ## Run
 
@@ -46,8 +47,10 @@ ROS packages (`rclpy`, message types, `cv_bridge`, launch files, and DDS middlew
 2. Save the settings as a named profile and select **Apply configuration**.
 3. On **Controls**, start the support stack. Verify the cameras, telemetry, ROS nodes, and process state on **Status**, and verify the arm in RViz.
 4. Select **Start harvest**. Use **Continue / Enter** for prompts emitted by `start_harvest_abort.py`.
-5. **Enter freedrive** calls `/set_harvest_freedrive`. The harvest node rejects entry while a stage, action, or arm motion is active and returns to the trajectory controller before later motion.
-6. Use **ABORT STAGE** for the cancelable abort path. Use **Stop all** or **Exit cleanly** to send SIGINT to every managed process group.
+5. In autonomous mode with **Select each apple in Controls** enabled, wait for prediction, choose a zero-based ID from the annotated image and available-ID list, then press **Pick this apple next**. The harvest loop validates the ID and waits for **Continue / Enter** before moving. Every predicted ID remains selectable for another attempt, including after an abort. Press **Finish selected apples** when the batch is done.
+6. With **Abort recovery: freedrive**, an aborted autonomous attempt leaves the arm in freedrive and returns to the apple-ID selector. Reposition the arm, enter any ID (including the one just aborted), and continue the autonomous pick. Aborting prediction instead lets you reposition the arm and repeat the scan and prediction.
+7. **Enter freedrive** calls `/set_harvest_freedrive`. The harvest node rejects entry while a stage, action, or arm motion is active and returns to the trajectory controller before later motion.
+8. Use **ABORT STAGE** for the cancelable abort path. Use **Stop all** or **Exit cleanly** to send SIGINT to every managed process group.
 
 ## Camera serial handling
 

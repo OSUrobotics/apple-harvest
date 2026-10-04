@@ -54,9 +54,9 @@ def generate_launch_description():
     declared_arguments.append(DeclareLaunchArgument("presaved_images.depth_image_path", default_value="/home/marcus/apple_harvest_ws/src/apple-harvest/harvest_vision/data/tree_000/depth.png",
                                     description="Path to the depth image for presaved images mode."))
     ### visual_servo node parameters
-    declared_arguments.append(DeclareLaunchArgument("vservo_model", default_value="best_segmentation.pt", 
+    declared_arguments.append(DeclareLaunchArgument("vservo_model", default_value="v9e.pt", 
                                   description="Yolo model used, can specify any model in the harvest_vision/yolo_models directory."))
-    declared_arguments.append(DeclareLaunchArgument("vservo_yolo_conf", default_value="0.8", 
+    declared_arguments.append(DeclareLaunchArgument("vservo_yolo_conf", default_value="0.3", 
                                 description="Confidence threshold for yolo model in visual_servo node."))
     declared_arguments.append(DeclareLaunchArgument("vservo_accuracy_px", default_value="10", 
                                   description="Specifies in pixels how close the center of the camera must be to the apple center to stop visual servoing."))

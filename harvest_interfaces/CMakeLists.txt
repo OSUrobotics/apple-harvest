@@ -27,6 +27,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/MoveToPose.srv"
   "srv/TrajectoryBetweenPoints.srv"
   "srv/SetValue.srv"
+  "srv/SetAppleTarget.srv"
   "srv/RecordTopics.srv"
   "srv/GetGripperPose.srv"
   "srv/VoxelGrid.srv"
