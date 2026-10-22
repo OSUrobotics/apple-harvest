@@ -27,7 +27,7 @@ arm:
   source_frame: amiga__base
 gripper:
   gripper_type: finray
-  grasp_strategy: time
+  grasp_strategy: pressure
 vision:
   launch_camera: true
   palm_camera_device_num: /dev/harvest/palm_camera
@@ -47,10 +47,10 @@ harvest:
   enable_apple_prediction: true
   manual_apple_selection: true
   optimal_trajectory: true
-  pick_pattern: pull-twist
+  pick_pattern: stiffness-seeking
   sweep_theta_deg: 60.0
   abort_on_decelerate: false
-  abort_recovery: home
+  abort_recovery: freedrive
 topics:
   mast_rgb: /camera/gripper_camera/color/image_raw
   mast_depth: /camera/gripper_camera/aligned_depth_to_color/image_raw
