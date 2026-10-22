@@ -823,7 +823,7 @@ class StartHarvestAbort(Node):
         self.configure_controller()
         goal = PickControl.Goal()
         goal.pattern = self.PICK_PATTERN
-        goal.stop_time = Float32(data=2.0 if self.PICK_PATTERN == 'stiffness-seeking' else 5.0)
+        goal.stop_time = Float32(data=3.0 if self.PICK_PATTERN == 'stiffness-seeking' else 5.0)
         return self._run_cancelable_action(self._pick_controller_client, goal, 'pick_controller')
 
     def _run_sweep_pick(self):
