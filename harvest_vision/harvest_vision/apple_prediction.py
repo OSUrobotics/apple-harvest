@@ -34,6 +34,16 @@ from message_filters import ApproximateTimeSynchronizer, Subscriber
 from .sphere_ransac import Sphere
 
 
+# Signed offsets for the base-cam frame buffer produced by fast_slam_rgbd_extraction.
+# On disk the directories are frame_-2 … frame_2; on ROS topics negatives use 'n'.
+_BASE_CAM_OFFSETS = (-2, -1, 0, 1, 2)
+
+
+def _buffer_stem(off: int) -> str:
+    """Convert a signed frame offset to a ROS-safe topic stem."""
+    return f"frame_n{abs(off)}" if off < 0 else f"frame_{off}"
+
+
 def stamp_to_ns(stamp) -> int:
     return int(stamp.sec) * 10**9 + int(stamp.nanosec)
 
@@ -179,6 +189,9 @@ class ApplePredictionNode(Node):
         self.declare_parameter("presaved_images.rgbd_dir_path", "")
         # tree id as integer; -1 means unset
         self.declare_parameter("presaved_images.tree_id", -1)
+        # which base_cam buffer frame is the active/canonical one (signed offset)
+        self.declare_parameter("presaved_images.base_cam_frame_index", 0)
+        self._base_cam_frame_index = 0  # signed offset: -2, -1, 0, 1, 2
 
         # ---- camera intrinsics ----
         if self.camera_type == "azure":
@@ -241,9 +254,20 @@ class ApplePredictionNode(Node):
         self.depth_pub = self.create_publisher(Image, "depth_image", latched_qos)
         self.apple_poses_pub = self.create_publisher(PoseArray, "apple_poses", latched_qos)
 
-        # base_cam — raw image pass-through only
-        self.base_rgb_pub   = self.create_publisher(Image, "base_cam/rgb_image",   latched_qos)
-        self.base_depth_pub = self.create_publisher(Image, "base_cam/depth_image", latched_qos)
+        # base_cam — per-frame latched topics for the 5-frame buffer
+        self.base_buffer_rgb_pubs = [
+            self.create_publisher(Image, f"base_cam/{_buffer_stem(off)}/rgb_image", latched_qos)
+            for off in _BASE_CAM_OFFSETS
+        ]
+        self.base_buffer_depth_pubs = [
+            self.create_publisher(Image, f"base_cam/{_buffer_stem(off)}/depth_image", latched_qos)
+            for off in _BASE_CAM_OFFSETS
+        ]
+        # base_cam — canonical active-frame topic (trunk estimator subscribes here)
+        self.base_cam_active_rgb_pub   = self.create_publisher(
+            Image, "base_cam/rgb_image",   latched_qos)
+        self.base_cam_active_depth_pub = self.create_publisher(
+            Image, "base_cam/depth_image", latched_qos)
 
 
         # If a tree was already selected earlier, publish the loaded images
@@ -321,6 +345,27 @@ class ApplePredictionNode(Node):
                             self.get_logger().error(result.reason)
                             return result
 
+            elif p.name == "presaved_images.base_cam_frame_index":
+                try:
+                    off = int(p.value)
+                except Exception as e:
+                    result.successful = False
+                    result.reason = f"base_cam_frame_index must be an integer: {e}"
+                    self.get_logger().error(result.reason)
+                    return result
+                if off not in _BASE_CAM_OFFSETS:
+                    result.successful = False
+                    result.reason = (f"base_cam_frame_index {off} not in "
+                                     f"{_BASE_CAM_OFFSETS}")
+                    self.get_logger().error(result.reason)
+                    return result
+                self._base_cam_frame_index = off
+                try:
+                    self._publish_active_base_cam_frame(off)
+                except Exception as e:
+                    self.get_logger().warn(
+                        f"Failed to publish active base_cam frame: {e}")
+
         return result
 
     def _set_presaved_tree(self, tree_id: str):
@@ -331,10 +376,11 @@ class ApplePredictionNode(Node):
         """
         # clear images when tree_id < 0
         if tree_id is None or (isinstance(tree_id, int) and tree_id < 0):
-            self.rgb_image = None
-            self.depth_image = None
-            self.base_rgb_image = None
-            self.base_depth_image = None
+            self.rgb_image         = None
+            self.depth_image       = None
+            self.base_buffer_rgb   = [None] * len(_BASE_CAM_OFFSETS)
+            self.base_buffer_depth = [None] * len(_BASE_CAM_OFFSETS)
+            self._base_cam_frame_index = 0
             return
 
         # coerce and format tree directory name as tree_###
@@ -378,27 +424,33 @@ class ApplePredictionNode(Node):
             f"max={self.depth_image.max()} shape={self.depth_image.shape}"
         )
 
-        # try load base cam set but don't fail if missing
-        base_rgb = os.path.join(base_dir, "color.png")
-        base_depth = os.path.join(base_dir, "depth.png")
-        if os.path.exists(base_rgb) and os.path.exists(base_depth):
-            b_rgb = cv2.imread(base_rgb)
-            b_depth = cv2.imread(base_depth, cv2.IMREAD_UNCHANGED)
-            if b_rgb is not None and b_depth is not None:
-                self.base_rgb_image = cv2.resize(cv2.cvtColor(b_rgb, cv2.COLOR_BGR2RGB), self.target_size, interpolation=cv2.INTER_LINEAR)
-                self.base_depth_image = cv2.resize(b_depth, self.target_size, interpolation=cv2.INTER_NEAREST)
-                self.get_logger().info(
-                    f"[base_cam] Loaded RGB: dtype={self.base_rgb_image.dtype} shape={self.base_rgb_image.shape} | "
-                    f"Depth: dtype={self.base_depth_image.dtype} min={self.base_depth_image.min()} max={self.base_depth_image.max()}"
-                )
-        else:
-            self.base_rgb_image = None
-            self.base_depth_image = None
+        # load base_cam 5-frame buffer; individual missing frames are non-fatal
+        self.base_buffer_rgb   = []
+        self.base_buffer_depth = []
+        for off in _BASE_CAM_OFFSETS:
+            frame_dir  = os.path.join(base_dir, f"frame_{off}")
+            rgb_path   = os.path.join(frame_dir, "color.png")
+            depth_path = os.path.join(frame_dir, "depth.png")
+            if os.path.exists(rgb_path) and os.path.exists(depth_path):
+                b_rgb   = cv2.imread(rgb_path)
+                b_depth = cv2.imread(depth_path, cv2.IMREAD_UNCHANGED)
+                if b_rgb is not None and b_depth is not None:
+                    self.base_buffer_rgb.append(b_rgb)
+                    self.base_buffer_depth.append(b_depth)
+                    self.get_logger().info(
+                        f"[base_cam] frame_{off}: rgb {b_rgb.shape} | "
+                        f"depth {b_depth.shape} min={b_depth.min()} max={b_depth.max()}"
+                    )
+                    continue
+            self.get_logger().warn(f"[base_cam] frame_{off}: missing or unreadable")
+            self.base_buffer_rgb.append(None)
+            self.base_buffer_depth.append(None)
 
-        # Reset any cached results
+        # Reset any cached results and active frame selection
         self._presaved_apple_centers = None
         self._presaved_apple_radii = None
         self._presaved_yolo_result = None
+        self._base_cam_frame_index = 0
 
         # Publish loaded images/pointcloud so downstream visualisers see the change
         try:
@@ -645,15 +697,57 @@ class ApplePredictionNode(Node):
         self.rgb_pub.publish(rgb_msg)
         self.depth_pub.publish(depth_msg)
 
-        # base_cam — raw pass-through, no inference
-        if self.base_rgb_image is not None and self.base_depth_image is not None:
-            base_rgb_msg   = self.bridge.cv2_to_imgmsg(self.base_rgb_image,   encoding="rgb8")
-            base_depth_msg = self.bridge.cv2_to_imgmsg(self.base_depth_image, encoding="mono16")
-            base_rgb_msg.header.stamp    = self.get_clock().now().to_msg()
-            base_rgb_msg.header.frame_id = "base_camera_color_optical_frame"
-            base_depth_msg.header        = base_rgb_msg.header
-            self.base_rgb_pub.publish(base_rgb_msg)
-            self.base_depth_pub.publish(base_depth_msg)
+        # base_cam — publish all 5 buffer frames to per-frame topics
+        now_stamp = self.get_clock().now().to_msg()
+        for pub_rgb, pub_depth, rgb_img, depth_img in zip(
+            self.base_buffer_rgb_pubs, self.base_buffer_depth_pubs,
+            self.base_buffer_rgb,      self.base_buffer_depth,
+        ):
+            if rgb_img is None or depth_img is None:
+                continue
+            rgb_msg                 = self.bridge.cv2_to_imgmsg(
+                cv2.cvtColor(rgb_img, cv2.COLOR_BGR2RGB), encoding="rgb8")
+            depth_msg               = self.bridge.cv2_to_imgmsg(depth_img, encoding="mono16")
+            rgb_msg.header.stamp    = now_stamp
+            rgb_msg.header.frame_id = "base_camera_color_optical_frame"
+            depth_msg.header        = rgb_msg.header
+            pub_rgb.publish(rgb_msg)
+            pub_depth.publish(depth_msg)
+
+        # base_cam — publish the currently selected frame to the canonical topic
+        self._publish_active_base_cam_frame(self._base_cam_frame_index)
+
+    def _publish_active_base_cam_frame(self, offset: int):
+        """Publish the buffer frame at *offset* to the canonical base_cam topics.
+
+        base_cam/rgb_image and base_cam/depth_image always carry the currently
+        selected frame so downstream nodes (trunk estimator) need only subscribe
+        to one fixed topic pair.
+        """
+        try:
+            idx = _BASE_CAM_OFFSETS.index(offset)
+        except ValueError:
+            self.get_logger().warn(
+                f"[base_cam/active] offset {offset} not in {_BASE_CAM_OFFSETS}")
+            return
+        rgb_img   = self.base_buffer_rgb[idx]
+        depth_img = self.base_buffer_depth[idx]
+        if rgb_img is None or depth_img is None:
+            self.get_logger().warn(
+                f"[base_cam/active] frame_{offset} not loaded")
+            return
+        now                          = self.get_clock().now().to_msg()
+        rgb_msg                      = self.bridge.cv2_to_imgmsg(
+            cv2.cvtColor(rgb_img, cv2.COLOR_BGR2RGB), encoding="rgb8")
+        depth_msg                    = self.bridge.cv2_to_imgmsg(depth_img, encoding="mono16")
+        rgb_msg.header.stamp         = now
+        rgb_msg.header.frame_id      = "base_camera_color_optical_frame"
+        depth_msg.header             = rgb_msg.header
+        self.base_cam_active_rgb_pub.publish(rgb_msg)
+        self.base_cam_active_depth_pub.publish(depth_msg)
+        self.get_logger().info(
+            f"[base_cam/active] Published frame_{offset} "
+            f"({_buffer_stem(offset)})")
 
     def _publish_pointcloud(self, rgb_bgr, depth, fx, fy, cx, cy, stamp=None):
         """Build and publish an XYZRGB PointCloud2 from a BGR image and depth map.

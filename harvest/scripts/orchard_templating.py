@@ -25,6 +25,7 @@ import numpy as np
 import os
 import yaml
 import copy
+from sklearn.cluster import DBSCAN
 
 
 class OrchardTemplating(Node):
@@ -62,11 +63,9 @@ class OrchardTemplating(Node):
         # used by trigger_trunk_estimation to block until a fresh measurement
         # arrives after the trigger fires.
         self._latest_trunk_pose = None
+        self._trunk_detections: list = []    # all TrunkInfo msgs from current trigger
+        self._trunk_trigger_active: bool = False  # True while a trigger is in flight
         self._trunk_received_event: threading.Event | None = None
-        # ROS time recorded just before the trigger fires; used by
-        # _trunk_measurement_callback to reject pre-trigger (stale/latched)
-        # messages so the event is only set by genuinely fresh data.
-        self._trunk_trigger_ros_time: rclpy.time.Time | None = None
 
         # Publishers
         self.voxel_collision_pub = self.create_publisher(CollisionObject, "/collision_object", 10)
@@ -157,46 +156,32 @@ class OrchardTemplating(Node):
         #     self.tree_number = None
         #     self.get_logger().warning('tree_id parameter was not set or could not be read; defaulting to unset')
 
-        self.tree_number = 10
+        self.tree_number = 0
 
     # =========================================================================
     #  Callbacks
     # =========================================================================
 
     def _trunk_measurement_callback(self, msg: TrunkInfo):
-        """Store the latest trunk measurement and unblock trigger_trunk_estimation
-        if it is currently waiting for a fresh measurement.
+        """Accumulate trunk detections while a trigger is in flight.
 
-        Stale-message guard: when a trigger is in flight we compare the
-        message's ROS stamp against the time the trigger was armed.  Any
-        message whose stamp pre-dates the trigger (e.g. latched / transient-
-        local replays from a previous run) is stored but does NOT set the
-        event, so trigger_trunk_estimation keeps waiting for genuinely fresh
-        data.
+        All TrunkInfo messages that arrive while _trunk_trigger_active is True
+        are collected into _trunk_detections.  The threading event is set on
+        the first message so trigger_trunk_estimation can unblock; the 50 ms
+        sleep that follows collects any remaining detections from the same
+        frame before _select_most_central_detection picks the winner.
+
+        _trunk_trigger_active provides the temporal gate: messages outside a
+        trigger window are dropped immediately, so no additional stamp-based
+        stale guard is needed.
         """
-        self._latest_trunk_pose = msg.pose
-
-        if self._trunk_received_event is None:
-            # Nobody is waiting right now — just cache the pose and return.
+        if not self._trunk_trigger_active:
             return
 
-        # If we recorded a trigger time, only unblock on messages that
-        # arrived AFTER the trigger was sent.
-        if self._trunk_trigger_ros_time is not None:
-            try:
-                msg_stamp = rclpy.time.Time.from_msg(msg.pose.header.stamp)
-                if msg_stamp <= self._trunk_trigger_ros_time:
-                    self.get_logger().debug(
-                        'Ignoring pre-trigger trunk measurement '
-                        f'(stamp {msg_stamp.nanoseconds} <= '
-                        f'trigger {self._trunk_trigger_ros_time.nanoseconds})'
-                    )
-                    return
-            except Exception as exc:
-                # If stamp parsing fails, fall through and accept the message.
-                self.get_logger().debug(f'Could not parse trunk msg stamp: {exc}')
+        self._trunk_detections.append(msg)
 
-        self._trunk_received_event.set()
+        if self._trunk_received_event is not None:
+            self._trunk_received_event.set()
 
     # =========================================================================
     #  Parameter / vision helpers
@@ -239,24 +224,41 @@ class OrchardTemplating(Node):
             self.get_logger().error("Failed to set apple_prediction tree id: no response")
         return resp
 
+    def set_base_cam_frame_index(self, offset: int):
+        """Tell apple_prediction to switch the canonical base_cam topic to *offset*.
+
+        *offset* must be one of -2, -1, 0, 1, 2 (signed frame offset relative to
+        the broadside timestamp).  The latched republish happens immediately on the
+        apple_prediction side, so callers should allow a brief propagation delay
+        (~100 ms) before triggering trunk estimation.
+        """
+        pv  = ParameterValue(type=ParameterType.PARAMETER_INTEGER,
+                             integer_value=int(offset))
+        p   = Parameter(name='presaved_images.base_cam_frame_index', value=pv)
+        req = SetParameters.Request()
+        req.parameters = [p]
+        resp = self.apple_prediction_set_params_client.call(req)
+        if resp is None:
+            self.get_logger().warn(
+                f"set_base_cam_frame_index({offset}): no response from apple_prediction")
+        return resp
+
     def trigger_trunk_estimation(self, timeout_sec: float = 3.0):
         """Fire /trigger_estimation and block until a fresh measurement arrives
         on /trunk_measurements_raw or the timeout expires.
 
         Design notes
         ------------
-        * The ROS time is snapshotted and the event is armed BEFORE the
+        * Trigger state (_trunk_trigger_active, event) is armed BEFORE the
           trigger fires so that even a very fast response is never missed.
-        * _trunk_measurement_callback uses _trunk_trigger_ros_time to reject
-          stale latched / transient-local replays from previous runs.
         * We intentionally keep waiting for the measurement even when the
           service call itself times out — the trigger may still be processing
           (ML inference can take >5 s) and the measurement will arrive shortly.
         """
-        # Snapshot current ROS time, clear stale data, and arm the event
-        # BEFORE firing the trigger so fast replies are never missed.
-        self._trunk_trigger_ros_time = self.get_clock().now()
+        # Arm trigger state BEFORE firing so fast replies are never missed.
         self._latest_trunk_pose = None
+        self._trunk_detections = []
+        self._trunk_trigger_active = True
         self._trunk_received_event = threading.Event()
 
         # Allow plenty of time for ML inference; do NOT exit early if this
@@ -268,7 +270,7 @@ class OrchardTemplating(Node):
             self.get_logger().warn(
                 f'Trunk estimation trigger reported failure: {result.message}')
             self._trunk_received_event = None
-            self._trunk_trigger_ros_time = None
+            self._trunk_trigger_active = False
             return result
 
         if result is None:
@@ -287,11 +289,25 @@ class OrchardTemplating(Node):
         # from the executor's ReentrantCallbackGroup thread.
         received = self._trunk_received_event.wait(timeout=timeout_sec)
         self._trunk_received_event = None
-        self._trunk_trigger_ros_time = None
 
         if received:
-            self.get_logger().info('Trunk measurement received — ready for correction.')
+            # Brief pause to let any additional detections from the same frame
+            # arrive before we close the accumulation window.
+            time.sleep(0.05)
+
+        self._trunk_trigger_active = False
+
+        if self._trunk_detections:
+            best = self._select_most_central_detection(self._trunk_detections)
+            self._latest_trunk_pose = best.pose
+            self.get_logger().info(
+                f'Trunk measurement received — '
+                f'{len(self._trunk_detections)} detection(s), '
+                f'selected most central '
+                f'(cam_lateral={best.cam_lateral:.3f} m, cam_depth={best.cam_depth:.3f} m).'
+            )
         else:
+            self._latest_trunk_pose = None
             self.get_logger().warn(
                 f'Timed out after {timeout_sec}s waiting for trunk measurement. '
                 'Check that the camera has a clear view of the trunk and '
@@ -299,6 +315,117 @@ class OrchardTemplating(Node):
             )
 
         return result
+
+    def trigger_trunk_estimation_buffer(
+        self,
+        offsets: tuple = (-2, -1, 0, 1, 2),
+        timeout_sec: float = 3.0,
+    ) -> list:
+        """Trigger trunk estimation for every frame in the base_cam buffer.
+
+        For each *offset* in *offsets*:
+          1. Switch apple_prediction's canonical base_cam topic to that frame.
+          2. Wait briefly for the latched republish to reach the trunk estimator.
+          3. Call trigger_trunk_estimation() and record the result.
+
+        Returns a flat list of ``(offset, TrunkInfo)`` tuples — one entry per
+        detection across all frames.  Frames with multiple detections each
+        contribute multiple entries; frames with no detection contribute none.
+        """
+        all_detections = []
+        for offset in offsets:
+            self.get_logger().info(
+                f"[buffer] Switching base_cam active frame → offset {offset:+d}")
+            self.set_base_cam_frame_index(offset)
+            time.sleep(0.1)  # allow latched publish to reach the trunk estimator
+
+            self.trigger_trunk_estimation(timeout_sec=timeout_sec)
+
+            # Snapshot every TrunkInfo from this frame (trigger_trunk_estimation
+            # freezes _trunk_detections before returning).
+            frame_detections = list(self._trunk_detections)
+            for trunk_info in frame_detections:
+                all_detections.append((offset, trunk_info))
+
+            if frame_detections:
+                self.get_logger().info(
+                    f"[buffer] offset={offset:+d}  {len(frame_detections)} detection(s): "
+                    + ", ".join(
+                        f"(x={ti.pose.position.x:.3f}, y={ti.pose.position.y:.3f}, "
+                        f"cam_depth={ti.cam_depth:.3f})"
+                        for ti in frame_detections
+                    ))
+            else:
+                self.get_logger().warn(f"[buffer] offset={offset:+d}  no detection")
+
+        self.get_logger().info(
+            f"[buffer] {len(all_detections)} total detection(s) across {len(offsets)} frames")
+        return all_detections
+
+    def _select_most_central_detection(self, detections: list):
+        """Return the TrunkInfo from *detections* whose angular offset from the
+        camera optical axis is smallest (|cam_lateral / cam_depth|).
+
+        When the trunk estimator finds multiple trunks in a single frame, the
+        one closest to the image centre is most likely to be the target tree
+        rather than a neighbouring trunk or artefact near the frame edge.
+        """
+        best = min(detections, key=lambda m: m.cam_lateral ** 2 + m.cam_depth ** 2)
+
+        if len(detections) > 1:
+            self.get_logger().info(
+                f'[centrality] {len(detections)} detections; '
+                + ', '.join(
+                    f'(lat={m.cam_lateral:.3f}, dep={m.cam_depth:.3f}){"*" if m is best else ""}'
+                    for m in detections
+                )
+            )
+        return best
+
+    def _select_best_trunk_detection(self, detections: list) -> int:
+        """Cluster all detections from the buffer sweep and return the offset
+        of the best detection in the cluster nearest to the camera.
+
+        detections: flat list of (offset, TrunkInfo) as returned by
+                    trigger_trunk_estimation_buffer().
+        Returns: the signed frame offset to re-trigger on.
+        """
+        if len(detections) == 1:
+            return detections[0][0]
+
+        positions = np.array(
+            [[d[1].pose.position.x, d[1].pose.position.y] for d in detections]
+        )
+
+        # DBSCAN: eps=0.5 m in base-frame XY; min_samples=1 so every point
+        # belongs to a cluster (no noise points).
+        labels = DBSCAN(eps=0.5, min_samples=1).fit_predict(positions)
+        unique_labels = np.unique(labels)
+
+        cluster_avg_depths = {}
+        for label in unique_labels:
+            idxs = [i for i, l in enumerate(labels) if l == label]
+            avg_depth = float(np.mean([detections[i][1].cam_depth for i in idxs]))
+            cluster_avg_depths[label] = avg_depth
+            centroid = positions[idxs].mean(axis=0)
+            self.get_logger().info(
+                f"[cluster {label}] {len(idxs)} detection(s), "
+                f"centroid=({centroid[0]:.3f}, {centroid[1]:.3f}), "
+                f"avg_cam_depth={avg_depth:.3f} m")
+
+        # Select cluster with smallest average cam_depth (nearest to camera).
+        best_label = min(unique_labels, key=lambda l: cluster_avg_depths[l])
+        best_cluster_idxs = [i for i, l in enumerate(labels) if l == best_label]
+
+        # Within that cluster pick the detection with the smallest individual cam_depth.
+        best_idx = min(best_cluster_idxs, key=lambda i: detections[i][1].cam_depth)
+        best_offset = detections[best_idx][0]
+
+        self.get_logger().info(
+            f"[buffer] {len(unique_labels)} cluster(s) → selected cluster {best_label} "
+            f"(avg_cam_depth={cluster_avg_depths[best_label]:.3f} m), "
+            f"best offset={best_offset:+d}")
+        return best_offset
 
     def correct_template_anchor(self):
         """Delegate anchor correction to trellis_from_rgbd_extraction node."""
@@ -464,26 +591,35 @@ class OrchardTemplating(Node):
         self.set_template_anchor(self.tree_number)
         self.get_logger().info('Template anchor set.')
 
-        # Trigger depth estimation and block until a fresh trunk measurement
-        # arrives on /trunk_measurements_raw before proceeding.
-        self.get_logger().info('Triggering trunk estimation...')
-        self.trigger_trunk_estimation()
+        # Sweep all 5 base_cam buffer frames and collect trunk detections.
+        self.get_logger().info('Triggering trunk estimation across buffer frames...')
+        detections = self.trigger_trunk_estimation_buffer()
 
-        if self._latest_trunk_pose is None:
+        if not detections:
             self.get_logger().warn(
-                'No trunk measurement was received — skipping template '
+                'No trunk detections across any buffer frame — skipping '
                 'anchor correction. Check camera view and relay node.'
             )
         else:
-            # Brief propagation delay: trellis_from_rgbd_extraction subscribes
-            # to /trunk_measurements_raw independently.  Give its executor a
-            # moment to dispatch the callback before we ask it to correct the
-            # anchor, so it reads the FRESH measurement, not the previous one.
-            time.sleep(0.3)
+            # Pick the frame whose detection is closest to the median position
+            # (robust against frames blocked by foliage).
+            best_offset = self._select_best_trunk_detection(detections)
+            self.get_logger().info(
+                f'Re-triggering estimation on best frame (offset={best_offset:+d})...')
+            self.set_base_cam_frame_index(best_offset)
+            time.sleep(0.1)  # allow latched republish to reach trunk estimator
+            self.trigger_trunk_estimation()
 
-            # Correct the anchor trunk position using the live depth measurement.
-            self.get_logger().info('Requesting template anchor correction...')
-            self.correct_template_anchor()
+            if self._latest_trunk_pose is None:
+                self.get_logger().warn(
+                    f'Final estimation on offset={best_offset:+d} produced no '
+                    'detection — skipping anchor correction.')
+            else:
+                # Brief propagation delay so trellis_from_rgbd_extraction has
+                # dispatched its own callback before we ask it to correct.
+                time.sleep(0.3)
+                self.get_logger().info('Requesting template anchor correction...')
+                self.correct_template_anchor()
 
         # # Apply gripper approach offset to each apple location
         # apple_coords = copy.deepcopy(apple_coords)

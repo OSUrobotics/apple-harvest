@@ -48,7 +48,7 @@ def generate_launch_description():
     
 
     ### apple_prediction presaved_images parameters
-    declared_arguments.append(DeclareLaunchArgument("presaved_images.rgbd_dir_path", default_value="/home/marcus/apple_harvest_ws/data/post_slam_image_processing/test_06162026",
+    declared_arguments.append(DeclareLaunchArgument("presaved_images.rgbd_dir_path", default_value="/home/marcus/apple_harvest_ws/data/post_slam_image_processing/test_06262026_full_res",
                                     description="High-level path containing tree subdirectories (tree_002, tree_003, ...)."))
     declared_arguments.append(DeclareLaunchArgument("presaved_images.tree_id", default_value="-1",
                                     description="(Optional) Specific tree id (integer) to load when presaved_images is True. Use -1 for unset.") )
