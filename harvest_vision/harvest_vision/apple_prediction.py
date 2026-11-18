@@ -2,6 +2,7 @@
 
 import os
 from threading import Event, Lock
+import yaml
 import open3d as o3d
 import numpy as np
 import cv2
@@ -37,6 +38,34 @@ from .sphere_ransac import Sphere
 # Signed offsets for the base-cam frame buffer produced by fast_slam_rgbd_extraction.
 # On disk the directories are frame_-2 … frame_2; on ROS topics negatives use 'n'.
 _BASE_CAM_OFFSETS = (-2, -1, 0, 1, 2)
+
+
+def _load_color_camera_info(cam_dir: str):
+    """
+    Return (fx, fy, cx, cy, width, height) of the color camera from cam_dir/camera_info.yaml
+    (fast_slam_rgbd_extraction writes it). Return None if the file is missing or has no color data.
+    """
+    path = os.path.join(cam_dir, "camera_info.yaml")
+    if not os.path.exists(path):
+        return None
+    with open(path, "r") as f:
+        info = (yaml.safe_load(f) or {}).get("color")
+    if not info:
+        return None
+    k = info["k"]
+    return float(k[0]), float(k[4]), float(k[2]), float(k[5]), int(info["width"]), int(info["height"])
+
+
+def _depth_path_for(img_dir: str):
+    """
+    Return (path, aligned) of the depth image to use with color.png in img_dir.
+    depth_aligned.png (registered to color) is preferred. depth.png is used if it has the color size;
+    aligned is then False if depth_aligned.png is missing (the caller warns).
+    """
+    aligned = os.path.join(img_dir, "depth_aligned.png")
+    if os.path.exists(aligned):
+        return aligned, True
+    return os.path.join(img_dir, "depth.png"), False
 
 
 def _buffer_stem(off: int) -> str:
@@ -192,8 +221,14 @@ class ApplePredictionNode(Node):
         # which base_cam buffer frame is the active/canonical one (signed offset)
         self.declare_parameter("presaved_images.base_cam_frame_index", 0)
         self._base_cam_frame_index = 0  # signed offset: -2, -1, 0, 1, 2
+        self.rgb_image = None           # mast_cam, set when a tree loads
+        self.depth_image = None
+        self.base_buffer_rgb = [None] * len(_BASE_CAM_OFFSETS)
+        self.base_buffer_depth = [None] * len(_BASE_CAM_OFFSETS)
 
         # ---- camera intrinsics ----
+        # Fallback values only. When the tree folder has mast_cam/camera_info.yaml, _set_presaved_tree uses it
+        # and does not resize the images.
         if self.camera_type == "azure":
             self.target_size = (1920, 1080)
             _k = [902.98, 0.0, 956.55, 0.0, 902.77, 547.68, 0.0, 0.0, 1.0]
@@ -210,7 +245,7 @@ class ApplePredictionNode(Node):
             raise ValueError(f"Unknown camera_type: {self.camera_type}")
 
         self.get_logger().info(
-            f"Presaved mode | camera={self.camera_type} | "
+            f"Presaved mode | fallback intrinsics camera={self.camera_type} | "
             f"size={self.target_size} | "
             f"fx={self.fx} fy={self.fy} cx={self.cx} cy={self.cy}"
         )
@@ -399,30 +434,54 @@ class ApplePredictionNode(Node):
         mast_dir = os.path.join(tree_dir, "mast_cam")
         base_dir = os.path.join(tree_dir, "base_cam")
 
-        mast_rgb = os.path.join(mast_dir, "color.png")
-        mast_depth = os.path.join(mast_dir, "depth.png")
-        self.get_logger().info(f"Loading mast_cam images from '{mast_rgb}' for tree_id='{tree_id}'")
+        # mast_cam is optional: without it the base_cam frames still load (trunk correction), but
+        # /apple_prediction returns no apples.
+        try:
+            mast_rgb = os.path.join(mast_dir, "color.png")
+            self.get_logger().info(f"Loading mast_cam images from '{mast_rgb}' for tree_id='{tree_id}'")
+            rgb_img = cv2.imread(mast_rgb) if os.path.exists(mast_rgb) else None
+            if rgb_img is None:
+                raise FileNotFoundError(f"Missing or unreadable {mast_rgb}")
+            mast_depth, depth_is_aligned = _depth_path_for(mast_dir)
+            depth_img = cv2.imread(mast_depth, cv2.IMREAD_UNCHANGED) if os.path.exists(mast_depth) else None
+            if depth_img is None:
+                raise FileNotFoundError(f"Missing or unreadable {mast_depth}")
 
-        if not os.path.exists(mast_rgb) or not os.path.exists(mast_depth):
-            raise FileNotFoundError(f"Missing mast_cam images in {mast_dir}")
+            cinfo = _load_color_camera_info(mast_dir)
+            if cinfo is not None and (cinfo[4], cinfo[5]) == (rgb_img.shape[1], rgb_img.shape[0]):
+                # Intrinsics of the saved color image; no resize
+                self.fx, self.fy, self.cx, self.cy, W, H = cinfo
+                self.target_size = (W, H)
+                if depth_img.shape[:2] != rgb_img.shape[:2]:
+                    raise ValueError(f"{mast_depth} is {depth_img.shape[:2]}, color is {rgb_img.shape[:2]}; "
+                                     f"re-extract with depth registration (depth_aligned.png)")
+                if not depth_is_aligned:
+                    self.get_logger().warn(
+                        f"[mast_cam] no depth_aligned.png in {mast_dir}; depth.png has the color size, "
+                        f"so it is used as if it is aligned to color.")
+                self.get_logger().info(
+                    f"[mast_cam] intrinsics from camera_info.yaml: {W}x{H} "
+                    f"fx={self.fx:.2f} fy={self.fy:.2f} cx={self.cx:.2f} cy={self.cy:.2f}")
+            else:
+                self.get_logger().warn(
+                    f"[mast_cam] no usable camera_info.yaml in {mast_dir}. The images are resized to "
+                    f"{self.target_size} and the hardcoded '{self.camera_type}' intrinsics are used. "
+                    f"Apple positions can be biased.")
+                rgb_img = cv2.resize(rgb_img, self.target_size, interpolation=cv2.INTER_LINEAR)
+                depth_img = cv2.resize(depth_img, self.target_size, interpolation=cv2.INTER_NEAREST)
 
-        # load mast images
-        rgb_img = cv2.imread(mast_rgb)
-        depth_img = cv2.imread(mast_depth, cv2.IMREAD_UNCHANGED)
-        if rgb_img is None or depth_img is None:
-            raise FileNotFoundError(f"Failed to read mast_cam images in {mast_dir}")
+            self.rgb_image = rgb_img
+            self.depth_image = depth_img
 
-        rgb_img = cv2.resize(rgb_img, self.target_size, interpolation=cv2.INTER_LINEAR)
-        depth_img = cv2.resize(depth_img, self.target_size, interpolation=cv2.INTER_NEAREST)
-
-        self.rgb_image = rgb_img
-        self.depth_image = depth_img
-
-        self.get_logger().info(
-            f"[mast_cam] Loaded RGB: dtype={self.rgb_image.dtype} shape={self.rgb_image.shape} | "
-            f"Depth: dtype={self.depth_image.dtype} min={self.depth_image.min()} "
-            f"max={self.depth_image.max()} shape={self.depth_image.shape}"
-        )
+            self.get_logger().info(
+                f"[mast_cam] Loaded RGB: dtype={self.rgb_image.dtype} shape={self.rgb_image.shape} | "
+                f"Depth: dtype={self.depth_image.dtype} min={self.depth_image.min()} "
+                f"max={self.depth_image.max()} shape={self.depth_image.shape}"
+            )
+        except (FileNotFoundError, ValueError) as e:
+            self.get_logger().warn(f"[mast_cam] not loaded: {e}. /apple_prediction returns no apples for this tree.")
+            self.rgb_image = None
+            self.depth_image = None
 
         # load base_cam 5-frame buffer; individual missing frames are non-fatal
         self.base_buffer_rgb   = []
@@ -430,11 +489,15 @@ class ApplePredictionNode(Node):
         for off in _BASE_CAM_OFFSETS:
             frame_dir  = os.path.join(base_dir, f"frame_{off}")
             rgb_path   = os.path.join(frame_dir, "color.png")
-            depth_path = os.path.join(frame_dir, "depth.png")
+            depth_path, b_aligned = _depth_path_for(frame_dir)
             if os.path.exists(rgb_path) and os.path.exists(depth_path):
                 b_rgb   = cv2.imread(rgb_path)
                 b_depth = cv2.imread(depth_path, cv2.IMREAD_UNCHANGED)
                 if b_rgb is not None and b_depth is not None:
+                    if not b_aligned:
+                        self.get_logger().warn(
+                            f"[base_cam] frame_{off}: no depth_aligned.png; depth.png {b_depth.shape} is not "
+                            f"registered to color {b_rgb.shape[:2]}. Trunk positions can be biased.")
                     self.base_buffer_rgb.append(b_rgb)
                     self.base_buffer_depth.append(b_depth)
                     self.get_logger().info(
@@ -557,6 +620,10 @@ class ApplePredictionNode(Node):
     # ------------------------------------------------------------------ presaved predict
 
     def _on_predict_presaved(self, req, res):
+        if self.rgb_image is None:
+            self.get_logger().error("No mast_cam images for this tree; no apple prediction.")
+            res.apple_poses = PoseArray()
+            return res
         # 1) Segment with YOLO
         apple_masks = self._presaved_segment_apples(self.rgb_image)
         self.get_logger().info(f"[1] YOLO found {len(apple_masks)} apple mask(s)")
@@ -689,13 +756,14 @@ class ApplePredictionNode(Node):
             return  # service callback is running — skip this cycle
 
         # mast_cam — full inference pipeline images
-        rgb_msg   = self.bridge.cv2_to_imgmsg(self.rgb_image,   encoding="bgr8")
-        depth_msg = self.bridge.cv2_to_imgmsg(self.depth_image, encoding="mono16")
-        rgb_msg.header.stamp    = self.get_clock().now().to_msg()
-        rgb_msg.header.frame_id = self.source_frame
-        depth_msg.header        = rgb_msg.header
-        self.rgb_pub.publish(rgb_msg)
-        self.depth_pub.publish(depth_msg)
+        if self.rgb_image is not None:
+            rgb_msg   = self.bridge.cv2_to_imgmsg(self.rgb_image,   encoding="bgr8")
+            depth_msg = self.bridge.cv2_to_imgmsg(self.depth_image, encoding="mono16")
+            rgb_msg.header.stamp    = self.get_clock().now().to_msg()
+            rgb_msg.header.frame_id = self.source_frame
+            depth_msg.header        = rgb_msg.header
+            self.rgb_pub.publish(rgb_msg)
+            self.depth_pub.publish(depth_msg)
 
         # base_cam — publish all 5 buffer frames to per-frame topics
         now_stamp = self.get_clock().now().to_msg()
@@ -799,7 +867,7 @@ class ApplePredictionNode(Node):
 
     def _presaved_publish_pointcloud(self):
         """Timer callback: republish the full RGBD point cloud at 2 Hz."""
-        if self._predict_lock.locked():
+        if self.rgb_image is None or self._predict_lock.locked():
             return  # service callback is running — skip this cycle
         self._publish_pointcloud(
             rgb_bgr=self.rgb_image,
@@ -949,8 +1017,14 @@ class ApplePredictionNode(Node):
         return centers, radii, kept_bboxes
 
     def _to_pose_array(self, centers_xyz, source_frame, target_frame):
+        """
+        Return the centers as a PoseArray in target_frame. If the TF lookup fails, return an empty PoseArray
+        (header.frame_id "") and log an error: poses in the camera frame must not go out labelled as target_frame.
+        """
         pa  = PoseArray()
         now = self.get_clock().now().to_msg()
+        pa.header.stamp = now
+        pa.header.frame_id = target_frame
 
         # If source == target, skip the TF lookup entirely (common in presaved/offline mode).
         skip_tf = (source_frame == target_frame)
@@ -963,13 +1037,13 @@ class ApplePredictionNode(Node):
                     rclpy.time.Time(), timeout=Duration(seconds=1.0),
                 )
             except Exception as e:
-                # Catch all exceptions (TransformException, LookupException, etc.)
-                # so a missing TF in offline/presaved mode doesn't silently kill the callback.
-                self.get_logger().warn(
+                # Catch all exceptions (TransformException, LookupException, etc.) so the service still returns.
+                self.get_logger().error(
                     f"TF lookup failed {source_frame}→{target_frame}: {type(e).__name__}: {e}. "
-                    f"Returning poses in source frame '{source_frame}' instead."
+                    f"Returning no apple poses ({len(centers_xyz)} detection(s) dropped)."
                 )
-                skip_tf = True
+                pa.header.frame_id = ""
+                return pa
 
         for c in centers_xyz:
             src = PoseStamped()
