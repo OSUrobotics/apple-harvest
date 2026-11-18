@@ -16,9 +16,9 @@ from rcl_interfaces.msg import Parameter, ParameterValue, ParameterType
 
 # Interfaces
 from harvest_interfaces.srv import ApplePrediction, VoxelGrid, MoveToPose, SendTrajectory
-from tree_template_interfaces.srv import CorrectAnchor
 
 # Python
+import json
 import threading
 import numpy as np
 import os
@@ -53,7 +53,8 @@ class OrchardTemplating(Node):
         self.unreachable_idx_arm_ws = []
         self.side_branch_locations = []
 
-        # Result of the last /correct_template_anchor call (CorrectAnchor response)
+        # Result of the last /correct_template_anchor call: dict from the JSON in Trigger.message
+        # (see trellis_from_rgbd_extraction.py), plus "success"
         self.correction = None
 
         # Publishers
@@ -78,7 +79,7 @@ class OrchardTemplating(Node):
             self.get_logger().info('Waiting for template anchor parameter service...')
 
         self.correct_template_anchor_client = self.create_client(
-            CorrectAnchor, '/correct_template_anchor', callback_group=m_callback_group)
+            Trigger, '/correct_template_anchor', callback_group=m_callback_group)
         while not self.correct_template_anchor_client.wait_for_service(timeout_sec=1.0):
             self.get_logger().info('Waiting for /correct_template_anchor service...')
 
@@ -178,17 +179,24 @@ class OrchardTemplating(Node):
         Ask trellis_from_rgbd_extraction to correct the template map from the base-camera trunk detections
         (it selects the frames, triggers the detector, matches and fits). Keep the response in self.correction.
         """
-        result = self.correct_template_anchor_client.call(CorrectAnchor.Request())
-        self.correction = result
-        if result is None:
+        resp = self.correct_template_anchor_client.call(Trigger.Request())
+        if resp is None:
+            self.correction = {'success': False, 'error': 'no response'}
             self.get_logger().warn('Template anchor correction failed: no response')
-        elif result.success:
+            return self.correction
+        try:
+            self.correction = json.loads(resp.message)
+        except ValueError:
+            self.correction = {'error' if not resp.success else 'summary': resp.message}
+        self.correction['success'] = bool(resp.success)
+        if resp.success:
             self.get_logger().info(
-                f'Template corrected: {result.message} (matched trees {list(result.matched_tree_ids)}, '
-                f'frames {list(result.frames_used)})')
+                f"Template corrected: {self.correction.get('summary')} "
+                f"(matched trees {self.correction.get('matched_tree_ids')}, "
+                f"frames {self.correction.get('frames_used')})")
         else:
-            self.get_logger().warn(f'Template anchor correction failed: {result.message}')
-        return result
+            self.get_logger().warn(f"Template anchor correction failed: {self.correction.get('error')}")
+        return self.correction
 
     # =========================================================================
     #  Scene management
