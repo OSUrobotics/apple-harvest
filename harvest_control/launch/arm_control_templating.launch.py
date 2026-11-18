@@ -1,17 +1,14 @@
 import os
-from ament_index_python.packages import get_package_prefix, get_package_share_directory
+from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
-from launch.substitutions import LaunchConfiguration
-from launch.actions import ExecuteProcess, IncludeLaunchDescription
+from launch.substitutions import EqualsSubstitution, IfElseSubstitution, LaunchConfiguration, TextSubstitution
+from launch.actions import IncludeLaunchDescription
 from launch_ros.actions import Node
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 
 def generate_launch_description():
-    # Get the path to the installed Python scripts in the C++ package
-    package_name = 'harvest_control'
-
     declared_arguments = []
 
     ### UR driver and MoveIt arguments
@@ -23,6 +20,9 @@ def generate_launch_description():
                                   description="Use fake hardware for the UR robot."))
     declared_arguments.append(DeclareLaunchArgument('launch_rviz', default_value="true", 
                                   description="Launch RViz for visualization."))
+    declared_arguments.append(DeclareLaunchArgument('rviz_file', default_value="view_templating.rviz",
+                                  description="RViz config in harvest_hardware_moveit_config/rviz (planning scene, "
+                                              "mast and base-cam point clouds, apple and voxel markers)."))
 
 
     ### generate_trellis_collision_obj node parameters
@@ -48,36 +48,57 @@ def generate_launch_description():
     declared_arguments.append(DeclareLaunchArgument('traj_time_step', default_value="0.05", 
                                   description="Time step (in seconds) between UR5 joint trajectory waypoints."))
 
-    # Path to UR5 launch files
-    ur_driver_launch_path = os.path.join(
-        get_package_share_directory('ur_robot_driver'),
-        'launch',
-        'ur_control_custom_hw.launch.py')
-    
-    ur_moveit_launch_path = os.path.join(
-        get_package_share_directory('ur_moveit_config'),
-        'launch',
-        'ur_moveit_custom_hw.launch.py')
-
+    # UR driver (controllers), robot description and MoveIt: the same includes as arm_control.launch.py
+    moveit_config = get_package_share_directory('harvest_hardware_moveit_config')
+    description = get_package_share_directory('harvest_hardware_description')
+    initial_controller = IfElseSubstitution(
+        EqualsSubstitution(LaunchConfiguration('use_fake_hardware'), TextSubstitution(text='true')),
+        TextSubstitution(text='joint_trajectory_controller'),
+        TextSubstitution(text='scaled_joint_trajectory_controller'),
+    )
 
     return LaunchDescription(declared_arguments + [
-        # Include UR driver launch
         IncludeLaunchDescription(
-            PythonLaunchDescriptionSource(ur_driver_launch_path),
+            PythonLaunchDescriptionSource(os.path.join(moveit_config, 'launch', 'ur_control_no_rsp.launch.py')),
             launch_arguments={
                 'ur_type': LaunchConfiguration('ur_type'),
                 'robot_ip': LaunchConfiguration('robot_ip'),
                 'use_fake_hardware': LaunchConfiguration('use_fake_hardware'),
-                'launch_rviz': LaunchConfiguration('launch_rviz'),
+                'use_mock_hardware': LaunchConfiguration('use_fake_hardware'),
+                'description_package': 'harvest_hardware_description',
+                'description_file': 'amiga_ur_gripper.urdf.xacro',
+                'launch_rviz': 'false',
+                'initial_joint_controller': initial_controller,
+                'controllers_file': os.path.join(moveit_config, 'config', 'ur_controllers.yaml'),
             }.items(),
         ),
 
-        # Include UR MoveIt launch
         IncludeLaunchDescription(
-            PythonLaunchDescriptionSource(ur_moveit_launch_path),
+            PythonLaunchDescriptionSource(os.path.join(description, 'launch', 'robot_state_publisher.launch.py')),
             launch_arguments={
                 'ur_type': LaunchConfiguration('ur_type'),
-                'launch_rviz': LaunchConfiguration('launch_rviz'),
+                'robot_ip': LaunchConfiguration('robot_ip'),
+                'use_fake_hardware': LaunchConfiguration('use_fake_hardware'),
+                'use_mock_hardware': LaunchConfiguration('use_fake_hardware'),
+                'description_package': 'harvest_hardware_description',
+                'description_file': 'amiga_ur_gripper.urdf.xacro',
+            }.items(),
+        ),
+
+        IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(os.path.join(moveit_config, 'launch', 'ur_moveit.launch.py')),
+            launch_arguments={
+                'ur_type': LaunchConfiguration('ur_type'),
+                'view_rviz': LaunchConfiguration('launch_rviz'),
+                'rviz_file': LaunchConfiguration('rviz_file'),
+                'robot_ip': LaunchConfiguration('robot_ip'),
+                'use_fake_hardware': LaunchConfiguration('use_fake_hardware'),
+                'description_file': 'amiga_ur_gripper.urdf.xacro',
+                'launch_servo': 'false',
+                # move_arm_node (started by ur_moveit.launch.py)
+                'max_accel': LaunchConfiguration('max_accel'),
+                'max_vel': LaunchConfiguration('max_vel'),
+                'traj_time_step': LaunchConfiguration('traj_time_step'),
             }.items(),
         ),
 
@@ -103,16 +124,4 @@ def generate_launch_description():
             name='tf_listener',
         ),
         
-        # Launch C++ node
-        Node(
-            package='harvest_control',
-            executable='move_arm',
-            name='move_arm_node',
-            parameters=[
-                    {"max_accel": LaunchConfiguration("max_accel"),
-                     "max_vel": LaunchConfiguration("max_vel"),
-                     "traj_time_step": LaunchConfiguration("traj_time_step"),
-                      }
-                    ]
-        ),
     ])

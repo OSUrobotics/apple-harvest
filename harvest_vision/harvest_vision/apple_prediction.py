@@ -87,12 +87,12 @@ class ApplePredictionNode(Node):
         RANSAC to estimate apple positions.
 
     presaved_images = True
-        Loads a pre-saved color and depth image from disk at startup.
-        Camera intrinsics are taken from hard-coded values selected by the
-        ``camera_type`` parameter ("azure" or "realsense").  The inference
-        pipeline uses open3d RGBD → point-cloud → RANSAC.  Image and
-        point-cloud publishers fire on timers so downstream nodes can
-        visualise the static data.
+        Loads the images of one tree (presaved_images.tree_id) from a fast_slam_rgbd_extraction folder:
+        mast_cam (apple prediction) and the base_cam buffer frames (trunk detector input).
+        Camera intrinsics come from <cam>/camera_info.yaml; without it, from hard-coded values selected by
+        the ``camera_type`` parameter ("azure" or "realsense"). The inference pipeline uses open3d RGBD →
+        point-cloud → RANSAC. The images and point clouds are published latched when a tree loads
+        (rgbd_pointcloud: mast_cam; base_cam/pointcloud: the active base_cam frame).
     """
 
     # ------------------------------------------------------------------ init
@@ -144,7 +144,9 @@ class ApplePredictionNode(Node):
             QoSProfile(reliability=ReliabilityPolicy.RELIABLE,
                        history=HistoryPolicy.KEEP_LAST, depth=10),
         )
-        self.pc_pub = self.create_publisher(PointCloud2, "rgbd_pointcloud", 10)
+        # Latched: voxelize_scan gets the last cloud also when it subscribes after the publish
+        self.pc_pub = self.create_publisher(PointCloud2, "rgbd_pointcloud", QoSProfile(
+            depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL, reliability=ReliabilityPolicy.RELIABLE))
 
         # ---- TF ----
         self.tf_buffer   = Buffer()
@@ -303,6 +305,9 @@ class ApplePredictionNode(Node):
             Image, "base_cam/rgb_image",   latched_qos)
         self.base_cam_active_depth_pub = self.create_publisher(
             Image, "base_cam/depth_image", latched_qos)
+        # base_cam — point cloud of the active frame (RViz check of the template against the trunks)
+        self.base_cam_pc_pub = self.create_publisher(PointCloud2, "base_cam/pointcloud", latched_qos)
+        self.base_cam_intrinsics = None   # (fx, fy, cx, cy, W, H) from base_cam/camera_info.yaml
 
 
         # If a tree was already selected earlier, publish the loaded images
@@ -484,6 +489,7 @@ class ApplePredictionNode(Node):
             self.depth_image = None
 
         # load base_cam 5-frame buffer; individual missing frames are non-fatal
+        self.base_cam_intrinsics = _load_color_camera_info(base_dir)
         self.base_buffer_rgb   = []
         self.base_buffer_depth = []
         for off in _BASE_CAM_OFFSETS:
@@ -813,29 +819,32 @@ class ApplePredictionNode(Node):
         depth_msg.header             = rgb_msg.header
         self.base_cam_active_rgb_pub.publish(rgb_msg)
         self.base_cam_active_depth_pub.publish(depth_msg)
+        ci = self.base_cam_intrinsics
+        if ci is not None and depth_img.shape[:2] == rgb_img.shape[:2] == (ci[5], ci[4]):
+            self._publish_pointcloud(rgb_img, depth_img, *ci[:4], stamp=now,
+                                     publisher=self.base_cam_pc_pub, frame_id="base_camera_color_optical_frame")
         self.get_logger().info(
             f"[base_cam/active] Published frame_{offset} "
             f"({_buffer_stem(offset)})")
 
-    def _publish_pointcloud(self, rgb_bgr, depth, fx, fy, cx, cy, stamp=None):
+    def _publish_pointcloud(self, rgb_bgr, depth, fx, fy, cx, cy, stamp=None, publisher=None, frame_id=None):
         """Build and publish an XYZRGB PointCloud2 from a BGR image and depth map.
 
         Works for both live and presaved modes.  *stamp* defaults to now when
-        not supplied (presaved / timer path).  The image is converted BGR→RGB
-        internally so callers can pass the raw OpenCV frame either way.
+        not supplied (presaved / timer path). The image is converted BGR→RGB
+        internally; the rgb field is packed as (r << 16) | (g << 8) | b.
 
         Args:
             rgb_bgr:  uint8 BGR image (H×W×3).
             depth:    uint16 depth image in the node's depth_scale units.
             fx, fy:   focal lengths in pixels.
             cx, cy:   principal point in pixels.
-            stamp:    rospy/rclpy stamp to embed in the header; uses clock.now() if None.
+            stamp:    rclpy stamp to embed in the header; uses clock.now() if None.
+            publisher: PointCloud2 publisher (default rgbd_pointcloud).
+            frame_id: header frame (default source_frame).
         """
         H, W = rgb_bgr.shape[:2]
-        if self.presaved_images:
-            rgb_o3d   = o3d.geometry.Image(rgb_bgr)
-        else:
-            rgb_o3d   = o3d.geometry.Image(cv2.cvtColor(rgb_bgr, cv2.COLOR_BGR2RGB))
+        rgb_o3d   = o3d.geometry.Image(cv2.cvtColor(rgb_bgr, cv2.COLOR_BGR2RGB))
         depth_o3d = o3d.geometry.Image(depth.astype(np.uint16))
         intrinsic = o3d.camera.PinholeCameraIntrinsic(
             width=W, height=H, fx=fx, fy=fy, cx=cx, cy=cy,
@@ -850,24 +859,31 @@ class ApplePredictionNode(Node):
         points = np.asarray(pcd.points)
         colors = (np.asarray(pcd.colors) * 255).astype(np.uint8)
 
-        packed = [
-            (x, y, z, int(b) | (int(g) << 8) | (int(r) << 16))
-            for (x, y, z), (b, g, r) in zip(points, colors)
-        ]
+        rgb = (colors[:, 0].astype(np.uint32) << 16) | (colors[:, 1].astype(np.uint32) << 8) | colors[:, 2]
+        packed = [(x, y, z, int(c)) for (x, y, z), c in zip(points, rgb)]
         header          = Header()
         header.stamp    = stamp if stamp is not None else self.get_clock().now().to_msg()
-        header.frame_id = self.source_frame
+        header.frame_id = frame_id or self.source_frame
         fields = [
             PointField(name="x",   offset=0,  datatype=PointField.FLOAT32, count=1),
             PointField(name="y",   offset=4,  datatype=PointField.FLOAT32, count=1),
             PointField(name="z",   offset=8,  datatype=PointField.FLOAT32, count=1),
             PointField(name="rgb", offset=12, datatype=PointField.UINT32,  count=1),
         ]
-        self.pc_pub.publish(point_cloud2.create_cloud(header, fields, packed))
+        (publisher or self.pc_pub).publish(point_cloud2.create_cloud(header, fields, packed))
 
     def _presaved_publish_pointcloud(self):
-        """Timer callback: republish the full RGBD point cloud at 2 Hz."""
-        if self.rgb_image is None or self._predict_lock.locked():
+        """
+        Publish the mast-camera RGB-D point cloud (latched) when a tree loads. Without mast-camera images, publish
+        an empty cloud, so voxelize_scan does not use the cloud of a different tree.
+        """
+        if self.rgb_image is None:
+            header = Header(stamp=self.get_clock().now().to_msg(), frame_id=self.source_frame)
+            fields = [PointField(name=n, offset=4 * i, datatype=PointField.FLOAT32, count=1)
+                      for i, n in enumerate(("x", "y", "z"))]
+            self.pc_pub.publish(point_cloud2.create_cloud(header, fields, []))
+            return
+        if self._predict_lock.locked():
             return  # service callback is running — skip this cycle
         self._publish_pointcloud(
             rgb_bgr=self.rgb_image,

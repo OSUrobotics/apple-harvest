@@ -25,9 +25,9 @@ from launch_ros.substitutions import FindPackageShare
 #   voxel collision objects         harvest_vision voxelize_scan
 # It does not start SLAM (row_fast_slam), odom_reframer or save_best_particle_map.
 #
-# Then run the trial:
-#   ros2 run harvest orchard_templating.py --ros-args -p tree_id:=0
-#   ros2 run harvest orchard_templating.py --ros-args -p "tree_ids:=[0, 1, 2]"
+# Then run the trial (trial_dir names the output folder; results go to data_save_dir/<dataset>/<time>/tree_<id>/):
+#   ros2 run harvest orchard_templating.py --ros-args -p tree_id:=0 -p trial_dir:=<trial_dir>
+#   ros2 run harvest orchard_templating.py --ros-args -p "tree_ids:=[0, 1, 2]" -p trial_dir:=<trial_dir>
 
 
 def generate_launch_description():
@@ -89,6 +89,8 @@ def generate_launch_description():
                               description="azure | realsense: camera intrinsics for the presaved mast images"),
         DeclareLaunchArgument("source_frame", default_value="mast_camera_color_optical_frame"),
         DeclareLaunchArgument("target_frame", default_value="amiga__base"),
+        DeclareLaunchArgument("voxel_y_abs_max", default_value="2.5",
+                              description="voxelize_scan: keep voxels with |y| <= this in target_frame [m]"),
 
         # ----------------------------
         # Trunk detector (trunk_width_ws)
@@ -191,9 +193,8 @@ def generate_launch_description():
             name="voxelize_scan",
             output="screen",
             parameters=[{
-                "camera_type": LaunchConfiguration("camera_type"),
-                "source_frame": LaunchConfiguration("source_frame"),
                 "target_frame": LaunchConfiguration("target_frame"),
+                "y_abs_max": LaunchConfiguration("voxel_y_abs_max"),
             }],
         ),
     ])

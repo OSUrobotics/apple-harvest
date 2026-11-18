@@ -68,23 +68,34 @@ There are currently two main control schemes: apple harvesting (real or simulate
 With that, you can flexibly tune your harvest run from the command line, point recordings wherever you like, and turn subsystems on or off without editing any Python.
 
 ### Tree Templating:
-*Currently only tested in simulation*
+Reachability trial on presaved data: template collision geometry vs. voxelized point cloud, for the same apples.
+The data folder (`trial_dir`) is one `fast_slam_rgbd_extraction` output (orchard_tree_templating): `tree_*/` and
+the `slam_trunks_*.yaml` of the same SLAM run.
 
-1. In the first terminal:
+1. In the first terminal, start the arm (fake hardware), MoveIt and the trial nodes:
     ```bash
-    ros2 launch harvest_control arm_control_templating.launch.py ur_type:=ur5e robot_ip:=yyy.yyy.yyy.yyy use_fake_hardware:=true launch_rviz:=true
+    ros2 launch harvest templating_trial.launch.py trial_dir:=<trial_dir>
     ```
 
-2. In a second terminal run the vision:
+2. In a second terminal, run the trial for one or more trees:
     ```bash
-    ros2 launch harvest launch_vision_templating.launch.py
+    ros2 run harvest orchard_templating.py --ros-args -p "tree_ids:=[0, 1, 2]" -p trial_dir:=<trial_dir>
     ```
+   For each tree: load the images, place and correct the template, detect the apples once, plan to each apple
+   with the template, then with the voxels (free space only around the target apple). Plans start from the home
+   joint state and do not move the arm. Results: `data_save_dir/<dataset>/<time>/tree_<id>/results.yaml`.
+   Each tree folder also has `apples_annotated.png` and the trunk segmentations of the correction
+   (`trunk_seg_<n>.png`). `results.yaml` has the git commits, the settings, the template registry before and after
+   the correction, the correction (detections, residuals, `anchor_residual_m` with `anchor_check_ok` for < 5 cm)
+   and the result of each method for each apple.
 
-3. In a third terminal run the control script to execute actions from the running nodes:
+Checks:
+- Before a trial session, run the geometry test of the datasets (orchard_tree_templating, no ROS needed):
     ```bash
-    ros2 run harvest orchard_templating.py
+    cd src/orchard_tree_templating/tree_template && python3 -m pytest test/ -q
     ```
-
+- In RViz (`view_templating.rviz`), compare the template cylinders with `/base_cam/pointcloud` (the active
+  base-camera frame) after the correction, for each tree.
 
 ### Details
 - The default kinematics plug-in is `KDLKinematicsPlugin`
