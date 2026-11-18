@@ -1,0 +1,294 @@
+<?xml version="1.0"?>
+<!--
+  Clearpath Warthog TF tree from the 2023 Prosser bag 2023-10-17-16-32-29_267. It replaces the /tf and /tf_static
+  of the bag. tree_template robot_tf.launch.py (robot_platform:=warthog) loads it.
+
+  - From the bag: all /tf_static, and /tf at the start of the bag (the wheels are fixed at their start angle).
+    Not odom -> base_link (the robot pose).
+  - warthog_base_link is the base_link of the bag (the UR arm uses the name base_link). It is
+    base_link_height above $(arg parent) (warthog_base_footprint, ground level), so the 0.3 m wheels touch the ground.
+  - Not in the bag: reach_rs (GPS antenna, not measured), a RealSense D435i named camera (harvest sensor_d435i
+    macro, nominal extrinsics; camera_link 1 in ahead of the front-right wheel, at the y of that wheel,
+    z = 3/4 of the wheel diameter; gives camera_color_optical_frame, the frame of the bag images),
+    cam_2_link (only with mount_cam_2:=true).
+
+  Play the bag with /tf and /tf_static remapped (for example to /bag/tf, /bag/tf_static). If not, frames get
+  two parents.
+-->
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="warthog_2023">
+
+  <xacro:arg name="parent" default="warthog_base_footprint"/>
+  <!-- height of the bag base_link above the ground: wheel radius 0.3 - axle height above base_link 0.012023 -->
+  <xacro:arg name="base_link_height" default="0.287977"/>
+  <xacro:arg name="mount_camera" default="true"/>
+  <!-- camera_link pose of the D435i: at the front-right wheel. x = axle x 0.457367 + radius 0.3 + 1 in (0.0254);
+       y = wheel y -0.56821; z = 3/4 of the 0.6 m wheel diameter; yaw: the camera looks to the right -->
+  <xacro:arg name="camera_x" default="0.782767"/>
+  <xacro:arg name="camera_y" default="-0.56821"/>
+  <xacro:arg name="camera_z" default="0.45"/>
+  <xacro:arg name="camera_yaw" default="-1.57"/>
+  <xacro:arg name="mount_cam_2" default="false"/>
+  <xacro:arg name="cam_2_xyz" default="0 0 0"/>
+  <xacro:arg name="cam_2_rpy" default="0 0 0"/>
+
+  <link name="$(arg parent)"/>
+
+  <!-- ======================= bag tree under base_link (as warthog_base_link) ======================= -->
+  <link name="warthog_base_link"/>
+  <joint name="warthog_base_link_joint" type="fixed">
+    <parent link="$(arg parent)"/>
+    <child link="warthog_base_link"/>
+    <origin xyz="0 0 $(arg base_link_height)" rpy="0 0 0"/>
+  </joint>
+  <link name="chassis_link"/>
+  <joint name="chassis_link_joint" type="fixed">
+    <parent link="warthog_base_link"/>
+    <child link="chassis_link"/>
+    <origin xyz="0 0 0.025" rpy="0 0 0"/>
+  </joint>
+  <link name="diff_link"/>
+  <joint name="diff_link_joint" type="fixed">
+    <parent link="chassis_link"/>
+    <child link="diff_link"/>
+    <origin xyz="-0.5826 0 0.24979" rpy="0 0 0"/>
+  </joint>
+  <link name="imu_link"/>
+  <joint name="imu_link_joint" type="fixed">
+    <parent link="chassis_link"/>
+    <child link="imu_link"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+  </joint>
+  <!-- from /tf (does not change in the bag) -->
+  <link name="left_diff_unit_link"/>
+  <joint name="left_diff_unit_link_joint" type="fixed">
+    <parent link="chassis_link"/>
+    <child link="left_diff_unit_link"/>
+    <origin xyz="0 0.56821 0" rpy="0 0 0"/>
+  </joint>
+  <!-- from /tf: value at the start of the bag (the wheel turns) -->
+  <link name="front_left_wheel_link"/>
+  <joint name="front_left_wheel_link_joint" type="fixed">
+    <parent link="left_diff_unit_link"/>
+    <child link="front_left_wheel_link"/>
+    <origin xyz="0.457367 0 -0.012977" rpy="0 0.29054 0"/>
+  </joint>
+  <link name="left_diff_unit_headlight_link"/>
+  <joint name="left_diff_unit_headlight_link_joint" type="fixed">
+    <parent link="left_diff_unit_link"/>
+    <child link="left_diff_unit_headlight_link"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+  </joint>
+  <link name="left_diff_unit_taillight_link"/>
+  <joint name="left_diff_unit_taillight_link_joint" type="fixed">
+    <parent link="left_diff_unit_link"/>
+    <child link="left_diff_unit_taillight_link"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+  </joint>
+  <!-- from /tf: value at the start of the bag (the wheel turns) -->
+  <link name="rear_left_wheel_link"/>
+  <joint name="rear_left_wheel_link_joint" type="fixed">
+    <parent link="left_diff_unit_link"/>
+    <child link="rear_left_wheel_link"/>
+    <origin xyz="-0.457367 0 -0.012977" rpy="0 0.29054 0"/>
+  </joint>
+  <!-- from /tf (does not change in the bag) -->
+  <link name="right_diff_unit_link"/>
+  <joint name="right_diff_unit_link_joint" type="fixed">
+    <parent link="chassis_link"/>
+    <child link="right_diff_unit_link"/>
+    <origin xyz="0 -0.56821 0" rpy="0 0 0"/>
+  </joint>
+  <!-- from /tf: value at the start of the bag (the wheel turns) -->
+  <link name="front_right_wheel_link"/>
+  <joint name="front_right_wheel_link_joint" type="fixed">
+    <parent link="right_diff_unit_link"/>
+    <child link="front_right_wheel_link"/>
+    <origin xyz="0.457367 0 -0.012977" rpy="0 -0.042829 0"/>
+  </joint>
+  <!-- from /tf: value at the start of the bag (the wheel turns) -->
+  <link name="rear_right_wheel_link"/>
+  <joint name="rear_right_wheel_link_joint" type="fixed">
+    <parent link="right_diff_unit_link"/>
+    <child link="rear_right_wheel_link"/>
+    <origin xyz="-0.457367 0 -0.012977" rpy="0 -0.042829 0"/>
+  </joint>
+  <link name="right_diff_unit_headlight_link"/>
+  <joint name="right_diff_unit_headlight_link_joint" type="fixed">
+    <parent link="right_diff_unit_link"/>
+    <child link="right_diff_unit_headlight_link"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+  </joint>
+  <link name="right_diff_unit_taillight_link"/>
+  <joint name="right_diff_unit_taillight_link_joint" type="fixed">
+    <parent link="right_diff_unit_link"/>
+    <child link="right_diff_unit_taillight_link"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+  </joint>
+  <link name="top_chassis_link"/>
+  <joint name="top_chassis_link_joint" type="fixed">
+    <parent link="chassis_link"/>
+    <child link="top_chassis_link"/>
+    <origin xyz="0 0 0.27218" rpy="0 0 0"/>
+  </joint>
+  <link name="bulkhead_link"/>
+  <joint name="bulkhead_link_joint" type="fixed">
+    <parent link="top_chassis_link"/>
+    <child link="bulkhead_link"/>
+    <origin xyz="0.00705 0 0.24184" rpy="0 0 0"/>
+  </joint>
+  <link name="bulkhead_front_mount_link"/>
+  <joint name="bulkhead_front_mount_link_joint" type="fixed">
+    <parent link="bulkhead_link"/>
+    <child link="bulkhead_front_mount_link"/>
+    <origin xyz="0.33987 0 0" rpy="0 0 0"/>
+  </joint>
+  <link name="arm_mount_link"/>
+  <joint name="arm_mount_link_joint" type="fixed">
+    <parent link="bulkhead_front_mount_link"/>
+    <child link="arm_mount_link"/>
+    <origin xyz="0 0 0.02" rpy="0 0 0"/>
+  </joint>
+  <link name="router_jetson_switch"/>
+  <joint name="router_jetson_switch_joint" type="fixed">
+    <parent link="bulkhead_link"/>
+    <child link="router_jetson_switch"/>
+    <origin xyz="0.085 0.015 0.025" rpy="0 0 0"/>
+  </joint>
+  <link name="zed_lock_base_link"/>
+  <joint name="zed_lock_base_link_joint" type="fixed">
+    <parent link="bulkhead_link"/>
+    <child link="zed_lock_base_link"/>
+    <origin xyz="0.575 0 -0.038" rpy="0 0.785 0"/>
+  </joint>
+  <link name="zed_lock_hinge_link"/>
+  <joint name="zed_lock_hinge_link_joint" type="fixed">
+    <parent link="zed_lock_base_link"/>
+    <child link="zed_lock_hinge_link"/>
+    <origin xyz="0 0 0.0225" rpy="0 -0.785 0"/>
+  </joint>
+  <link name="zed_lock_mount"/>
+  <joint name="zed_lock_mount_joint" type="fixed">
+    <parent link="zed_lock_hinge_link"/>
+    <child link="zed_lock_mount"/>
+    <origin xyz="0 0 0.0225" rpy="0 0 0"/>
+  </joint>
+  <link name="zed_link"/>
+  <joint name="zed_link_joint" type="fixed">
+    <parent link="zed_lock_mount"/>
+    <child link="zed_link"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+  </joint>
+  <link name="zed2_base_link"/>
+  <joint name="zed2_base_link_joint" type="fixed">
+    <parent link="zed_link"/>
+    <child link="zed2_base_link"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+  </joint>
+  <link name="zed2_camera_center"/>
+  <joint name="zed2_camera_center_joint" type="fixed">
+    <parent link="zed2_base_link"/>
+    <child link="zed2_camera_center"/>
+    <origin xyz="0 0 0.015" rpy="0 0.05 0"/>
+  </joint>
+  <link name="zed2_baro_link"/>
+  <joint name="zed2_baro_link_joint" type="fixed">
+    <parent link="zed2_camera_center"/>
+    <child link="zed2_baro_link"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+  </joint>
+  <link name="zed2_left_camera_frame"/>
+  <joint name="zed2_left_camera_frame_joint" type="fixed">
+    <parent link="zed2_camera_center"/>
+    <child link="zed2_left_camera_frame"/>
+    <origin xyz="0 0.06 0" rpy="0 0 0"/>
+  </joint>
+  <link name="zed2_left_camera_optical_frame"/>
+  <joint name="zed2_left_camera_optical_frame_joint" type="fixed">
+    <parent link="zed2_left_camera_frame"/>
+    <child link="zed2_left_camera_optical_frame"/>
+    <origin xyz="-0.01 0 0" rpy="-1.570796 0 -1.570796"/>
+  </joint>
+  <link name="zed2_temp_left_link"/>
+  <joint name="zed2_temp_left_link_joint" type="fixed">
+    <parent link="zed2_left_camera_frame"/>
+    <child link="zed2_temp_left_link"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+  </joint>
+  <link name="zed2_mag_link"/>
+  <joint name="zed2_mag_link_joint" type="fixed">
+    <parent link="zed2_camera_center"/>
+    <child link="zed2_mag_link"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+  </joint>
+  <link name="zed2_right_camera_frame"/>
+  <joint name="zed2_right_camera_frame_joint" type="fixed">
+    <parent link="zed2_camera_center"/>
+    <child link="zed2_right_camera_frame"/>
+    <origin xyz="0 -0.06 0" rpy="0 0 0"/>
+  </joint>
+  <link name="zed2_right_camera_optical_frame"/>
+  <joint name="zed2_right_camera_optical_frame_joint" type="fixed">
+    <parent link="zed2_right_camera_frame"/>
+    <child link="zed2_right_camera_optical_frame"/>
+    <origin xyz="-0.01 0 0" rpy="-1.570796 0 -1.570796"/>
+  </joint>
+  <link name="zed2_temp_right_link"/>
+  <joint name="zed2_temp_right_link_joint" type="fixed">
+    <parent link="zed2_right_camera_frame"/>
+    <child link="zed2_temp_right_link"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+  </joint>
+  <!-- from /tf (does not change in the bag) -->
+  <link name="cloud"/>
+  <joint name="cloud_joint" type="fixed">
+    <parent link="warthog_base_link"/>
+    <child link="cloud"/>
+    <origin xyz="0.8 0 0" rpy="3.14 0 0"/>
+  </joint>
+
+  <!-- ======================= GPS antenna (not in the bag) ======================= -->
+  <link name="reach_rs"/>
+  <joint name="reach_rs_joint" type="fixed">
+    <parent link="$(arg parent)"/>
+    <child link="reach_rs"/>
+    <origin xyz="-0.5 0 2.25" rpy="0 0 0"/>
+  </joint>
+
+  <!-- ======================= base camera (/camera/*): RealSense D435i ======================= -->
+  <xacro:if value="$(arg mount_camera)">
+    <xacro:include filename="$(find harvest_hardware_description)/urdf/_d435i.urdf.xacro"/>
+    <!-- D435 offset from the bottom screw (macro origin) to camera_link -->
+    <xacro:property name="cam_ox" value="${0.0149 - 0.1e-3 - 4.2e-3}"/>
+    <xacro:property name="cam_oy" value="0.0175"/>
+    <xacro:property name="cam_oz" value="${0.025 / 2}"/>
+    <xacro:property name="cam_yaw" value="$(arg camera_yaw)"/>
+    <xacro:sensor_d435i parent="$(arg parent)" name="camera" use_nominal_extrinsics="true">
+      <origin xyz="${$(arg camera_x) - (cos(cam_yaw) * cam_ox - sin(cam_yaw) * cam_oy)}
+                   ${$(arg camera_y) - (sin(cam_yaw) * cam_ox + cos(cam_yaw) * cam_oy)}
+                   ${$(arg camera_z) - cam_oz}" rpy="0 0 ${cam_yaw}"/>
+    </xacro:sensor_d435i>
+  </xacro:if>
+
+  <!-- ======================= second camera (/cam_2/*) ======================= -->
+  <xacro:if value="$(arg mount_cam_2)">
+  <link name="cam_2_link"/>
+  <joint name="cam_2_link_joint" type="fixed">
+    <parent link="$(arg parent)"/>
+    <child link="cam_2_link"/>
+    <origin xyz="$(arg cam_2_xyz)" rpy="$(arg cam_2_rpy)"/>
+  </joint>
+  <link name="cam_2_color_frame"/>
+  <joint name="cam_2_color_frame_joint" type="fixed">
+    <parent link="cam_2_link"/>
+    <child link="cam_2_color_frame"/>
+    <origin xyz="-0.000368 0.014825 0.000148" rpy="0.010769 -0.004209 0.002733"/>
+  </joint>
+  <link name="cam_2_color_optical_frame"/>
+  <joint name="cam_2_color_optical_frame_joint" type="fixed">
+    <parent link="cam_2_color_frame"/>
+    <child link="cam_2_color_optical_frame"/>
+    <origin xyz="0 0 0" rpy="-1.570796 0 -1.570796"/>
+  </joint>
+  </xacro:if>
+
+</robot>

@@ -1,7 +1,8 @@
 <?xml version="1.0"?>
 <robot xmlns:xacro="https://ros.org/wiki/xacro" name="amiga">
 
-<xacro:macro name="amiga_macro" params="amiga_prefix:='amiga__' amiga_parent:='' mesh_base_path">
+<xacro:macro name="amiga_macro" params="amiga_prefix:='amiga__' amiga_parent:='' mesh_base_path
+                                       ikit_xyz:='0.57 -0.06 1.6' ikit_yaw:='${pi / 2}'">
     <!-- ================== -->
     <!--     Amiga Macro    -->
     <!-- ================== -->
@@ -20,6 +21,19 @@
     <xacro:property name="amiga_collision_box2_z" value='0.25' />
 
     <xacro:property name="amiga_tool0_mount_rotation" value="0.0 0.0 ${pi / 4}"/>
+
+    <!-- farm-ng Intelligence Kit (mast): OAK-D W PoE camera oak0 with its IMU, and the dual-band GPS antenna.
+         ikit_xyz / ikit_yaw: oak0 mount point and the horizontal direction that oak0 looks (default: +y, left).
+         Kit geometry (two OAK cameras back to back, GPS antenna centered between them; from the
+         ucmercedrobotics/amiga-ros2-bridge description of the kit):
+           - oak0 pitch: 15 deg down (the 2025 bag IMU gravity vector gives 12.4 deg),
+           - GPS antenna: 0.09465 m behind oak0 (opposite its view direction), 0.06485 m above it,
+           - IMU in the OAK: (-0.008, -0.04, -0.020265) from the camera body. Its axes (x up, y camera left,
+             z camera back) agree with the 2025 bag: gravity, gyro yaw rate and forward acceleration.
+         Frame names agree with the 2025 bag messages: /oak0/imu -> oak0/imu, /gps/pvt -> gps_antenna. -->
+    <xacro:property name="ikit_oak0_pitch" value="${15.0 * pi / 180.0}"/>
+    <xacro:property name="ikit_gps_back" value="0.09465"/>
+    <xacro:property name="ikit_gps_up" value="0.06485"/>
     <xacro:property name="amiga_tool0_mount_position" value="-0.095 0.306 1.04775"/>
 
     <!-- ================== -->
@@ -109,6 +123,11 @@
 
     <link name="${amiga_prefix}tool0"/>
 
+    <link name="${amiga_prefix}intelligence_kit"/>
+    <link name="oak0"/>
+    <link name="oak0/imu"/>
+    <link name="gps_antenna"/>
+
     <!-- ================== -->
     <!--       Joints       -->
     <!-- ================== -->
@@ -128,6 +147,31 @@
         <origin rpy="${amiga_tool0_mount_rotation}" xyz="${amiga_tool0_mount_position}"/>
         <parent link="${amiga_prefix}body"/>
         <child link="${amiga_prefix}tool0"/>
+    </joint>
+
+    <!-- Intelligence Kit: level mount frame at the oak0 mount point, x = oak0 view direction -->
+    <joint name="${amiga_prefix}base--${amiga_prefix}intelligence_kit" type="fixed">
+        <origin rpy="0 0 ${ikit_yaw}" xyz="${ikit_xyz}"/>
+        <parent link="${amiga_prefix}base"/>
+        <child link="${amiga_prefix}intelligence_kit"/>
+    </joint>
+    <!-- oak0 camera body (x view direction, y left, z up), pitched down -->
+    <joint name="${amiga_prefix}intelligence_kit--oak0" type="fixed">
+        <origin rpy="0 ${ikit_oak0_pitch} 0" xyz="0 0 0"/>
+        <parent link="${amiga_prefix}intelligence_kit"/>
+        <child link="oak0"/>
+    </joint>
+    <!-- oak0 IMU: x = camera up, y = camera left, z = camera back -->
+    <joint name="oak0--oak0/imu" type="fixed">
+        <origin rpy="0 ${-pi / 2} 0" xyz="-0.008 -0.04 -0.020265"/>
+        <parent link="oak0"/>
+        <child link="oak0/imu"/>
+    </joint>
+    <!-- GPS antenna (center of the antenna), level -->
+    <joint name="${amiga_prefix}intelligence_kit--gps_antenna" type="fixed">
+        <origin rpy="0 0 0" xyz="${-ikit_gps_back} 0 ${ikit_gps_up}"/>
+        <parent link="${amiga_prefix}intelligence_kit"/>
+        <child link="gps_antenna"/>
     </joint>
 
 </xacro:macro>
