@@ -5,6 +5,7 @@ from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
 from launch.actions import ExecuteProcess, IncludeLaunchDescription
 from launch_ros.actions import Node
+from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 
 def generate_launch_description():
@@ -25,6 +26,9 @@ def generate_launch_description():
 
 
     ### generate_trellis_collision_obj node parameters
+    declared_arguments.append(DeclareLaunchArgument('use_tree_scene', default_value="true",
+                                  description="Start the trellis collision object node. Set false when a different launch "
+                                              "starts it (for example templating_trial.launch.py)."))
     declared_arguments.append(DeclareLaunchArgument('leader_branch_radii', default_value="0.08", 
                                   description="Leader branch radius for trellis template."))
     declared_arguments.append(DeclareLaunchArgument("leader_branch_len", default_value="2.0",
@@ -82,6 +86,7 @@ def generate_launch_description():
             package='tree_template',
             executable='tree_template',
             name='update_trellis_position',
+            condition=IfCondition(LaunchConfiguration('use_tree_scene')),
             parameters=[
                     {"leader_branch_radii": LaunchConfiguration("leader_branch_radii"),
                      "leader_branch_len": LaunchConfiguration("leader_branch_len"),

@@ -334,8 +334,8 @@ class ApplePredictionNode(Node):
                     new_path = ""
                 if new_path != self._rgbd_dir_path:
                     self._rgbd_dir_path = new_path
-                    # if we already have a tree_id, reload images from new path
-                    if getattr(self, "tree_id", None):
+                    # if a tree is loaded (tree ids start at 0), load it again from the new path
+                    if self.tree_id is not None and int(self.tree_id) >= 0:
                         try:
                             self._set_presaved_tree(self.tree_id)
                             self.get_logger().info(f"Reloaded tree '{self.tree_id}' from new path")

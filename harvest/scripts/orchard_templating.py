@@ -143,20 +143,20 @@ class OrchardTemplating(Node):
         while not self.get_planning_scene_client.wait_for_service(timeout_sec=1.0):
             self.get_logger().info('Waiting for get_planning_scene_client to be available...')
 
-        # # Local tree id parameter for this node. Default -1 means unset.
-        # self.declare_parameter('tree_id', -1)
-        # try:
-        #     p = self.get_parameter('tree_id')
-        #     if int(p.value) >= 0:
-        #         self.tree_number = int(p.value)
-        #     else:
-        #         self.tree_number = None
-        #         self.get_logger().warning('tree_id parameter was not set; defaulting to unset')
-        # except Exception:
-        #     self.tree_number = None
-        #     self.get_logger().warning('tree_id parameter was not set or could not be read; defaulting to unset')
+        # Trees to run, by SLAM map tree id. tree_ids (list) wins over tree_id. -1 = not set.
+        #   ros2 run harvest orchard_templating.py --ros-args -p tree_id:=3
+        #   ros2 run harvest orchard_templating.py --ros-args -p "tree_ids:=[0, 1, 2]"
+        self.declare_parameter('tree_id', -1)
+        self.declare_parameter('tree_ids', [-1])
+        self.declare_parameter('data_save_dir', self.data_save_dir)
+        self.data_save_dir = os.path.join(str(self.get_parameter('data_save_dir').value), '')
 
-        self.tree_number = 0
+        tree_ids = [int(t) for t in self.get_parameter('tree_ids').value if int(t) >= 0]
+        if not tree_ids and int(self.get_parameter('tree_id').value) >= 0:
+            tree_ids = [int(self.get_parameter('tree_id').value)]
+        self.tree_ids = tree_ids
+        if not self.tree_ids:
+            self.get_logger().error('No tree set. Set the tree_id or tree_ids parameter.')
 
     # =========================================================================
     #  Callbacks
@@ -560,13 +560,21 @@ class OrchardTemplating(Node):
     # =========================================================================
 
     def start(self):
+        self.get_logger().info(f'Trees to run: {self.tree_ids}')
+        for tree_id in self.tree_ids:
+            self.run_tree(tree_id)
+        self.get_logger().info('Trial complete!')
+
+    def run_tree(self, tree_id: int):
+        self.tree_number = tree_id
+
         ### Set presaved_images.tree_id on apple_prediction node
-        if self.tree_number is not None:
-            self.get_logger().info(f"Setting apple_prediction tree id to {self.tree_number}")
-            resp = self.set_apple_prediction_tree_id(self.tree_number)
-            if resp is None:
-                self.get_logger().warn('Failed to set tree id on apple_prediction; stopping...')
-                return
+        self.get_logger().info(f"Setting apple_prediction tree id to {self.tree_number}")
+        resp = self.set_apple_prediction_tree_id(self.tree_number)
+        if resp is None or not all(r.successful for r in resp.results):
+            self.get_logger().error(
+                f'apple_prediction could not load tree {self.tree_number}; skipping this tree.')
+            return
 
         ### STAGE 0 - INITIALIZE ARM POSITION AND LOCATE APPLES
         # self.get_logger().info('Moving arm to home')
@@ -588,7 +596,11 @@ class OrchardTemplating(Node):
         # Place trellis template at the stored anchor position.
         # Blocks until trellis_from_rgbd_extraction has published the registry.
         self.get_logger().info('Setting template anchor...')
-        self.set_template_anchor(self.tree_number)
+        resp = self.set_template_anchor(self.tree_number)
+        if resp is None or not all(r.successful for r in resp.results):
+            self.get_logger().error(
+                f'Could not set the template anchor to tree {self.tree_number}; skipping this tree.')
+            return
         self.get_logger().info('Template anchor set.')
 
         # Sweep all 5 base_cam buffer frames and collect trunk detections.
@@ -687,8 +699,7 @@ class OrchardTemplating(Node):
         ### STAGE 3 - SAVE DATA
         # self.save_metadata()
 
-        ### COMPLETE
-        self.get_logger().info('Trial complete!')
+        self.get_logger().info(f'Tree {self.tree_number} complete.')
 
 
 def main(args=None):
