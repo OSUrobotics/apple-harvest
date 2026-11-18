@@ -12,24 +12,23 @@ def generate_launch_description():
     declared_arguments = []
 
     ### UR driver and MoveIt arguments
-    declared_arguments.append(DeclareLaunchArgument('ur_type', default_value="ur5e", 
+    declared_arguments.append(DeclareLaunchArgument('ur_type', default_value="ur5e",
                                   description="Type of Universal Robot."))
-    declared_arguments.append(DeclareLaunchArgument('robot_ip', default_value="yyy.yyy.yyy.yyy", 
+    declared_arguments.append(DeclareLaunchArgument('robot_ip', default_value="yyy.yyy.yyy.yyy",
                                   description="IP address of the robot."))
-    declared_arguments.append(DeclareLaunchArgument('use_fake_hardware', default_value="true", 
+    declared_arguments.append(DeclareLaunchArgument('use_fake_hardware', default_value="true",
                                   description="Use fake hardware for the UR robot."))
-    declared_arguments.append(DeclareLaunchArgument('launch_rviz', default_value="true", 
+    declared_arguments.append(DeclareLaunchArgument('launch_rviz', default_value="true",
                                   description="Launch RViz for visualization."))
     declared_arguments.append(DeclareLaunchArgument('rviz_file', default_value="view_templating.rviz",
                                   description="RViz config in harvest_hardware_moveit_config/rviz (planning scene, "
                                               "mast and base-cam point clouds, apple and voxel markers)."))
 
-
     ### generate_trellis_collision_obj node parameters
     declared_arguments.append(DeclareLaunchArgument('use_tree_scene', default_value="true",
                                   description="Start the trellis collision object node. Set false when a different launch "
                                               "starts it (for example templating_trial.launch.py)."))
-    declared_arguments.append(DeclareLaunchArgument('leader_branch_radii', default_value="0.08", 
+    declared_arguments.append(DeclareLaunchArgument('leader_branch_radii', default_value="0.08",
                                   description="Leader branch radius for trellis template."))
     declared_arguments.append(DeclareLaunchArgument("leader_branch_len", default_value="2.0",
                                   description="Leader branch length for trellis template."))
@@ -41,11 +40,11 @@ def generate_launch_description():
                                   description="Side branch length for trellis template."))
 
     ### move_arm node parameters
-    declared_arguments.append(DeclareLaunchArgument('max_accel', default_value="0.05", 
-                                  description="Set the max accelleration of the UR5."))
-    declared_arguments.append(DeclareLaunchArgument('max_vel', default_value="0.05", 
+    declared_arguments.append(DeclareLaunchArgument('max_accel', default_value="0.05",
+                                  description="Set the max acceleration of the UR5."))
+    declared_arguments.append(DeclareLaunchArgument('max_vel', default_value="0.05",
                                   description="Set the max velocity of the UR5."))
-    declared_arguments.append(DeclareLaunchArgument('traj_time_step', default_value="0.05", 
+    declared_arguments.append(DeclareLaunchArgument('traj_time_step', default_value="0.05",
                                   description="Time step (in seconds) between UR5 joint trajectory waypoints."))
 
     # UR driver (controllers), robot description and MoveIt: the same includes as arm_control.launch.py
@@ -102,7 +101,7 @@ def generate_launch_description():
             }.items(),
         ),
 
-        # Launch the generate_trellis_collision_obj_node from external package
+        # Trellis collision objects (tree_template generate_trellis_collision_obj)
         Node(
             package='tree_template',
             executable='tree_template',
@@ -117,11 +116,11 @@ def generate_launch_description():
                       }
                     ]
         ),
-        
+
         Node(
             package='harvest_control',
             executable='pose_listener.py',
             name='tf_listener',
         ),
-        
+
     ])

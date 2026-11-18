@@ -2,8 +2,8 @@
 """
 orchard_templating.py
 
-Reachability trial: template collision geometry vs. voxelized point cloud, on presaved data
-(harvest/launch/templating_trial.launch.py starts the other nodes).
+Reachability trial on presaved data: template collision geometry vs. voxelized point cloud.
+harvest/launch/templating_trial.launch.py starts the other nodes.
 
 For each tree in tree_ids:
    1. Load the tree (apple_prediction presaved_images.tree_id).
@@ -20,14 +20,12 @@ For each tree in tree_ids:
   11. Save the results: results.yaml and the images (apples_annotated.png, trunk_seg_<n>.png) in
       data_save_dir/<dataset>/<YYYYmmdd_HHMMSS>/tree_<id>/.
 
-results.yaml: dataset, tree id, git commit of the two repos, settings, the template registry before and after the
-correction, the correction result (deltas, detections, residuals, anchor validation), and for each apple its
-position, in_workspace and for each method the result, error name and planning time.
+results.yaml: dataset, tree id, git state of the two repos, settings, template registry before and after the
+correction, correction result, and for each apple its position, in_workspace and the result of each method.
 
-Planning: MoveIt /plan_kinematic_path (plan only, no motion). Each plan starts from the home joint state and uses
-the same planner settings, so both methods have the same start conditions. The goal is the gripper_link position
-(apple position moved apple_approach_offset toward the robot) with the move_arm_node default gripper orientation,
-turned 180 deg about z for apples on the right side (-y).
+Planning: MoveIt /plan_kinematic_path (no motion), from the home joint state, with the same settings for both
+methods. Goal: gripper_link at the apple moved apple_approach_offset toward the robot, with the move_arm_node default
+orientation (turned 180 deg about z for apples on the right, -y).
 
 Run:
     ros2 run harvest orchard_templating.py --ros-args -p tree_id:=3
@@ -43,7 +41,7 @@ from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from rclpy.duration import Duration
 from geometry_msgs.msg import Point, Pose, Quaternion
 from moveit_msgs.msg import (
-    BoundingVolume, CollisionObject, Constraints, MoveItErrorCodes, OrientationConstraint, PlanningScene,
+    BoundingVolume, Constraints, MoveItErrorCodes, OrientationConstraint, PlanningScene,
     PlanningSceneComponents, PositionConstraint,
 )
 from moveit_msgs.srv import ApplyPlanningScene, GetMotionPlan, GetPlanningScene
@@ -57,12 +55,13 @@ import tf2_ros
 # Interfaces
 from cv_bridge import CvBridge
 from harvest_interfaces.srv import ApplePrediction, VoxelGrid
+from harvest_vision.voxelize_scan import collision_object
+from tree_template.trellis_geometry import load_meta_yamls
 from tree_template_interfaces.msg import TrunkRegistry
 
 # Python
 import cv2
 import datetime
-import glob
 import json
 import math
 import os
@@ -74,13 +73,13 @@ import numpy as np
 import yaml
 from scipy.spatial.transform import Rotation
 
-# MoveItErrorCodes value -> name (for the results file)
+# MoveItErrorCodes value -> name
 _ERROR_NAMES = {getattr(MoveItErrorCodes, n): n for n in dir(MoveItErrorCodes)
                 if n.isupper() and isinstance(getattr(MoveItErrorCodes, n), int)}
 
 
 def git_info(repo_dir: str) -> dict:
-    """Commit and dirty flag of a git repo (for the results file)."""
+    """Commit, branch and dirty flag of a git repo."""
     def run(*args):
         return subprocess.run(['git', '-C', repo_dir, *args], capture_output=True, text=True, timeout=10).stdout.strip()
     try:
@@ -88,17 +87,6 @@ def git_info(repo_dir: str) -> dict:
                 'dirty': bool(run('status', '--porcelain', '--untracked-files=no'))}
     except Exception as e:
         return {'error': str(e)}
-
-
-def tree_ids_with_position(trial_dir: str) -> list:
-    """Tree ids in trial_dir with tree_world_xy_m, sorted (the order of the trellis_from_rgbd_extraction registry)."""
-    ids = []
-    for p in sorted(glob.glob(os.path.join(trial_dir, 'tree_*', 'meta.yaml'))):
-        with open(p) as f:
-            meta = yaml.safe_load(f) or {}
-        if 'tree_world_xy_m' in meta:
-            ids.append(int(meta.get('tree_id', os.path.basename(os.path.dirname(p)).split('_')[-1])))
-    return sorted(ids)
 
 
 class OrchardTemplating(Node):
@@ -177,7 +165,7 @@ class OrchardTemplating(Node):
         self.run_stamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
         self.git = {os.path.basename(d): git_info(d) for d in gp('repo_dirs')}
 
-        # ---- Subscriptions for the results (they run while start() waits on service calls) ----
+        # ---- Subscriptions for the results (they run while start() waits for service responses) ----
         sub_group = ReentrantCallbackGroup()
         self.bridge = CvBridge()
         self._lock = threading.Lock()
@@ -192,10 +180,6 @@ class OrchardTemplating(Node):
                                  callback_group=sub_group)
         self.create_subscription(Image, str(gp('trunk_image_topic')), self._trunk_image_cb, 10,
                                  callback_group=sub_group)
-
-        # Result of the last /correct_template_anchor call: dict from the JSON in Trigger.message
-        # (see trellis_from_rgbd_extraction.py), plus "success"
-        self.correction = None
 
         # ---- Service clients -------------------------------------------------
         def client(srv_type, name):
@@ -244,10 +228,11 @@ class OrchardTemplating(Node):
         return None
 
     def registry_dict(self, msg) -> list:
-        """Registry trunks with their tree ids (the registry is in tree-id order of the trees with a position)."""
+        """Trunks of a TrunkRegistry with their tree ids (the registry has the trees with a position, in id order)."""
         if msg is None:
             return []
-        ids = tree_ids_with_position(self.trial_dir)
+        data = load_meta_yamls(self.trial_dir) if self.trial_dir else {}
+        ids = [t for t in sorted(data) if 'tree_world_xy_m' in data[t]]
         if len(ids) != len(msg.trunks):
             ids = [None] * len(msg.trunks)
         out = []
@@ -263,10 +248,7 @@ class OrchardTemplating(Node):
     # =========================================================================
 
     def _call(self, client, request, timeout_sec: float = 30.0):
-        """
-        Service call with a timeout (rclpy client.call() waits forever when a response is lost).
-        Return the response, or None on timeout.
-        """
+        """Service call with a timeout. Return the response, or None on timeout."""
         done = threading.Event()
         future = client.call_async(request)
         future.add_done_callback(lambda _f: done.set())
@@ -292,29 +274,16 @@ class OrchardTemplating(Node):
     def set_apple_prediction_tree_id(self, tree_id: int) -> bool:
         return self._set_int_param(self.apple_prediction_set_params_client, 'presaved_images.tree_id', tree_id)
 
-    def correct_template_anchor(self):
-        """
-        Ask trellis_from_rgbd_extraction to correct the template map from the base-camera trunk detections
-        (it selects the frames, triggers the detector, matches and fits). Keep the response in self.correction.
-        """
+    def correct_template_anchor(self) -> dict:
+        """/correct_template_anchor result: the JSON of Trigger.message plus 'success'."""
         resp = self._call(self.correct_template_anchor_client, Trigger.Request(), 300.0)
-        if resp is None:
-            self.correction = {'success': False, 'error': 'no response'}
-            self.get_logger().warn('Template anchor correction failed: no response')
-            return self.correction
-        try:
-            self.correction = json.loads(resp.message)
-        except ValueError:
-            self.correction = {'error' if not resp.success else 'summary': resp.message}
-        self.correction['success'] = bool(resp.success)
-        if resp.success:
-            self.get_logger().info(
-                f"Template corrected: {self.correction.get('summary')} "
-                f"(matched trees {self.correction.get('matched_tree_ids')}, "
-                f"frames {self.correction.get('frames_used')})")
+        result = json.loads(resp.message) if resp is not None else {'error': 'no response'}
+        result['success'] = resp is not None and resp.success
+        if result['success']:
+            self.get_logger().info(f"Template corrected: {result['summary']}")
         else:
-            self.get_logger().warn(f"Template anchor correction failed: {self.correction.get('error')}")
-        return self.correction
+            self.get_logger().warn(f"Template correction failed: {result['error']}")
+        return result
 
     def detect_apples(self) -> np.ndarray:
         """(N, 3) apple centers in the planning frame (empty if the prediction failed)."""
@@ -364,12 +333,7 @@ class OrchardTemplating(Node):
 
     def set_voxel_object(self, centers: np.ndarray) -> bool:
         """Put the voxel collision object in the scene with these voxel centers (ADD replaces the object)."""
-        co = CollisionObject(id=self.voxel_object_id, operation=CollisionObject.ADD)
-        co.header.frame_id = self.planning_frame
-        box = SolidPrimitive(type=SolidPrimitive.BOX, dimensions=[self.voxel_size] * 3)
-        co.primitives = [box] * len(centers)
-        co.primitive_poses = [Pose(position=Point(x=float(c[0]), y=float(c[1]), z=float(c[2])),
-                                   orientation=Quaternion(w=1.0)) for c in centers]
+        co = collision_object(self.voxel_object_id, self.planning_frame, centers, self.voxel_size)
         req = ApplyPlanningScene.Request(scene=PlanningScene(is_diff=True))
         req.scene.world.collision_objects = [co]
         resp = self._call(self.apply_scene_client, req)
@@ -392,10 +356,8 @@ class OrchardTemplating(Node):
 
     def goal_for(self, apple: np.ndarray, base: np.ndarray):
         """
-        Gripper goal for one apple: (position, orientation quaternion xyzw).
-        The position moves apple_approach_offset toward the robot (lateral, from the apple side). The orientation
-        is the move_arm_node default (RPY pi/2, pi, pi: for apples on the left, +y), turned by pi about z for
-        apples on the right.
+        Gripper goal (position, quaternion xyzw) for one apple: apple_approach_offset toward the robot (y), and the
+        move_arm_node default orientation (RPY pi/2, pi, pi, gripper to +y) turned by pi about z for -y apples.
         """
         side = 1.0 if apple[1] >= base[1] else -1.0
         position = apple - np.array([0.0, side * self.apple_approach_offset, 0.0])
@@ -405,7 +367,7 @@ class OrchardTemplating(Node):
         return position, rot.as_quat()
 
     def plan_to(self, position: np.ndarray, quat_xyzw: np.ndarray) -> dict:
-        """Plan (no motion) from the home joint state to the goal. Return the result for the results file."""
+        """Plan (no motion) from the home joint state to the goal. Return the result for results.yaml."""
         req = GetMotionPlan.Request()
         mp = req.motion_plan_request
         mp.group_name = self.planning_group
@@ -458,7 +420,7 @@ class OrchardTemplating(Node):
         for tree_id in self.tree_ids:
             try:
                 self.run_tree(tree_id)
-            except Exception as e:  # keep the other trees running
+            except Exception as e:  # the next trees still run
                 self.get_logger().error(f'Tree {tree_id} failed: {type(e).__name__}: {e}')
         self.get_logger().info('Trial complete!')
 
@@ -581,9 +543,8 @@ def main(args=None):
     node = OrchardTemplating()
     executor = MultiThreadedExecutor()
     executor.add_node(node)
-    # Run start() in a daemon thread so executor.spin() can run concurrently: start() makes blocking
-    # service calls, and the executor must be free to handle their responses. When start() is done, the
-    # executor stops and the process exits.
+    # start() waits for service responses, so it runs in a thread while the executor spins.
+    # The executor stops when start() is done.
     def run():
         try:
             node.start()

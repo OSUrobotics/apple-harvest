@@ -1,50 +1,63 @@
 #!/usr/bin/env python3
+"""
+apple_prediction.py
+
+/apple_prediction (harvest_interfaces/ApplePrediction): apple centers in target_frame. YOLO masks -> depth
+back-projection -> sphere RANSAC.
+
+presaved_images = False: color + depth + camera_info from live topics (camera_ns); each call uses a new synced pair.
+presaved_images = True:  the images of one tree (presaved_images.tree_id) of a fast_slam_rgbd_extraction folder
+    (presaved_images.rgbd_dir_path): mast_cam for the apples, the base_cam buffer frames for the trunk detector.
+    Intrinsics from <cam>/camera_info.yaml; without it, the images are resized to the camera_type intrinsics.
+    Latched topics when a tree loads: rgb_image, depth_image, rgbd_pointcloud (mast_cam; empty without mast_cam),
+    base_cam/frame_<n>/{rgb,depth}_image, and base_cam/{rgb_image,depth_image,pointcloud} for the frame
+    presaved_images.base_cam_frame_index.
+"""
 
 import os
 from threading import Event, Lock
-import yaml
-import open3d as o3d
-import numpy as np
+
 import cv2
-import torch
-
+import numpy as np
+import open3d as o3d
 import rclpy
-from rclpy.node import Node
-from rclpy.duration import Duration
-from rclpy.qos import (
-    qos_profile_sensor_data, QoSProfile,
-    ReliabilityPolicy, HistoryPolicy, DurabilityPolicy,
-)
+import torch
+import yaml
+from cv_bridge import CvBridge
+from geometry_msgs.msg import PoseArray, PoseStamped
+from message_filters import ApproximateTimeSynchronizer, Subscriber
+from rcl_interfaces.msg import SetParametersResult
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
-
-from sensor_msgs.msg import Image, CameraInfo, PointCloud2, PointField
+from rclpy.duration import Duration
+from rclpy.executors import MultiThreadedExecutor
+from rclpy.node import Node
+from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
+from sensor_msgs.msg import CameraInfo, Image, PointCloud2, PointField
 from sensor_msgs_py import point_cloud2
 from std_msgs.msg import Header
-from visualization_msgs.msg import Marker, MarkerArray
-from geometry_msgs.msg import PoseStamped, PoseArray
-from harvest_interfaces.srv import ApplePrediction
-
 from tf2_geometry_msgs import do_transform_pose_stamped
 from tf2_ros import Buffer, TransformListener
-from rcl_interfaces.msg import SetParametersResult
-
-from cv_bridge import CvBridge
 from ultralytics import YOLO
-from message_filters import ApproximateTimeSynchronizer, Subscriber
+from visualization_msgs.msg import Marker, MarkerArray
+
+from harvest_interfaces.srv import ApplePrediction
 
 from .sphere_ransac import Sphere
 
+BASE_CAM_OFFSETS = (-2, -1, 0, 1, 2)       # base_cam buffer frames frame_-2 ... frame_2
+BASE_CAM_FRAME = "base_camera_color_optical_frame"
+# Intrinsics (target size, fx, fy, cx, cy) for presaved images without camera_info.yaml
+FALLBACK_INTRINSICS = {
+    "azure": ((1920, 1080), 902.98, 902.77, 956.55, 547.68),
+    "realsense": ((848, 480), 609.6989, 609.8549, 420.2079, 235.2782),
+}
+LATCHED = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL, reliability=ReliabilityPolicy.RELIABLE)
+CLOUD_FIELDS = [PointField(name=n, offset=4 * i, datatype=PointField.FLOAT32, count=1) for i, n in enumerate("xyz")] + \
+               [PointField(name="rgb", offset=12, datatype=PointField.UINT32, count=1)]
 
-# Signed offsets for the base-cam frame buffer produced by fast_slam_rgbd_extraction.
-# On disk the directories are frame_-2 … frame_2; on ROS topics negatives use 'n'.
-_BASE_CAM_OFFSETS = (-2, -1, 0, 1, 2)
 
-
-def _load_color_camera_info(cam_dir: str):
-    """
-    Return (fx, fy, cx, cy, width, height) of the color camera from cam_dir/camera_info.yaml
-    (fast_slam_rgbd_extraction writes it). Return None if the file is missing or has no color data.
-    """
+def load_color_camera_info(cam_dir: str):
+    """(fx, fy, cx, cy, width, height) of the color camera in cam_dir/camera_info.yaml, or None."""
     path = os.path.join(cam_dir, "camera_info.yaml")
     if not os.path.exists(path):
         return None
@@ -56,1067 +69,399 @@ def _load_color_camera_info(cam_dir: str):
     return float(k[0]), float(k[4]), float(k[2]), float(k[5]), int(info["width"]), int(info["height"])
 
 
-def _depth_path_for(img_dir: str):
-    """
-    Return (path, aligned) of the depth image to use with color.png in img_dir.
-    depth_aligned.png (registered to color) is preferred. depth.png is used if it has the color size;
-    aligned is then False if depth_aligned.png is missing (the caller warns).
-    """
-    aligned = os.path.join(img_dir, "depth_aligned.png")
-    if os.path.exists(aligned):
-        return aligned, True
-    return os.path.join(img_dir, "depth.png"), False
+def read_rgbd(img_dir: str):
+    """(color BGR, depth, depth is aligned) of img_dir; depth_aligned.png before depth.png. None if missing."""
+    color = cv2.imread(os.path.join(img_dir, "color.png"))
+    for name, aligned in (("depth_aligned.png", True), ("depth.png", False)):
+        path = os.path.join(img_dir, name)
+        if color is not None and os.path.exists(path):
+            return color, cv2.imread(path, cv2.IMREAD_UNCHANGED), aligned
+    return None
 
 
-def _buffer_stem(off: int) -> str:
-    """Convert a signed frame offset to a ROS-safe topic stem."""
+def buffer_topic_stem(off: int) -> str:
+    """Topic name of a buffer frame: frame_n2 ... frame_2."""
     return f"frame_n{abs(off)}" if off < 0 else f"frame_{off}"
 
 
-def stamp_to_ns(stamp) -> int:
-    return int(stamp.sec) * 10**9 + int(stamp.nanosec)
-
-
 class ApplePredictionNode(Node):
-    """
-    Apple prediction node that supports two operating modes:
-
-    presaved_images = False  (default)
-        Subscribes to live color + depth ROS topics, waits for a fresh
-        synced pair on each service call, then runs YOLO → back-projection
-        RANSAC to estimate apple positions.
-
-    presaved_images = True
-        Loads the images of one tree (presaved_images.tree_id) from a fast_slam_rgbd_extraction folder:
-        mast_cam (apple prediction) and the base_cam buffer frames (trunk detector input).
-        Camera intrinsics come from <cam>/camera_info.yaml; without it, from hard-coded values selected by
-        the ``camera_type`` parameter ("azure" or "realsense"). The inference pipeline uses open3d RGBD →
-        point-cloud → RANSAC. The images and point clouds are published latched when a tree loads
-        (rgbd_pointcloud: mast_cam; base_cam/pointcloud: the active base_cam frame).
-    """
-
-    # ------------------------------------------------------------------ init
 
     def __init__(self):
         super().__init__("apple_prediction")
+        for name, default in [
+            ("presaved_images", False), ("prediction_model_path", "NA"), ("prediction_yolo_conf", 0.85),
+            ("prediction_radius_min", 0.03), ("prediction_radius_max", 0.06), ("prediction_distance_max", 1.0),
+            ("source_frame", "mast_camera_color_optical_frame"), ("target_frame", "world"),
+            ("camera_type", "realsense"), ("ransac_iters", 1000), ("ransac_thresh", 0.005), ("depth_scale", 1000.0),
+        ]:
+            self.declare_parameter(name, default)
+        gp = lambda n: self.get_parameter(n).value  # noqa: E731
+        self.presaved_images = bool(gp("presaved_images"))
+        self.conf_thr = float(gp("prediction_yolo_conf"))
+        self.rad_min = float(gp("prediction_radius_min"))
+        self.rad_max = float(gp("prediction_radius_max"))
+        self.dist_max = float(gp("prediction_distance_max"))
+        self.source_frame = str(gp("source_frame"))
+        self.target_frame = str(gp("target_frame"))
+        self.camera_type = str(gp("camera_type"))
+        self.ransac_iters = int(gp("ransac_iters"))
+        self.ransac_thresh = float(gp("ransac_thresh"))
+        self.depth_scale = float(gp("depth_scale"))
 
-        # ---- common parameters ----
-        self.declare_parameter("presaved_images", False)
-        self.declare_parameter("prediction_model_path", "NA")
-        self.declare_parameter("prediction_yolo_conf", 0.85)
-        self.declare_parameter("prediction_radius_min", 0.03)
-        self.declare_parameter("prediction_radius_max", 0.06)
-        self.declare_parameter("prediction_distance_max", 1.0)
-        self.declare_parameter("source_frame", "mast_camera_color_optical_frame")
-        self.declare_parameter("target_frame", "world")
-        self.declare_parameter("camera_type", "realsense")
-        self.declare_parameter("ransac_iters", 1000)
-        self.declare_parameter("ransac_thresh", 0.005)
-        self.declare_parameter("depth_scale", 1000.0)
-
-        self.presaved_images = bool(self.get_parameter("presaved_images").value)
-        self.conf_thr   = float(self.get_parameter("prediction_yolo_conf").value)
-        self.rad_min    = float(self.get_parameter("prediction_radius_min").value)
-        self.rad_max    = float(self.get_parameter("prediction_radius_max").value)
-        self.dist_max   = float(self.get_parameter("prediction_distance_max").value)
-        self.source_frame = self.get_parameter("source_frame").value
-        self.target_frame = self.get_parameter("target_frame").value
-        self.camera_type = self.get_parameter("camera_type").get_parameter_value().string_value
-        self.ransac_iters = int(self.get_parameter("ransac_iters").value)
-        self.ransac_thresh = float(self.get_parameter("ransac_thresh").value)
-        self.depth_scale = float(self.get_parameter("depth_scale").value)
-
-        # ---- YOLO ----
-        self.model = YOLO(self.get_parameter("prediction_model_path").value)
-        try:
-            self.model.model.eval()
-        except Exception:
-            pass
-
-        # ---- shared I/O ----
+        self.model = YOLO(str(gp("prediction_model_path")))
         self.bridge = CvBridge()
         self._predict_lock = Lock()
-        self.service_group = MutuallyExclusiveCallbackGroup()
-
-        self.marker_pub = self.create_publisher(MarkerArray, "apple_markers", 10)
-        self.annotated_pub = self.create_publisher(
-            Image, "apple_annotated",
-            QoSProfile(reliability=ReliabilityPolicy.RELIABLE,
-                       history=HistoryPolicy.KEEP_LAST, depth=10),
-        )
-        # Latched: voxelize_scan gets the last cloud also when it subscribes after the publish
-        self.pc_pub = self.create_publisher(PointCloud2, "rgbd_pointcloud", QoSProfile(
-            depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL, reliability=ReliabilityPolicy.RELIABLE))
-
-        # ---- TF ----
-        self.tf_buffer   = Buffer()
+        self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
 
-        # ---- mode-specific setup ----
+        self.marker_pub = self.create_publisher(MarkerArray, "apple_markers", 10)
+        self.annotated_pub = self.create_publisher(Image, "apple_annotated", 10)
+        self.pc_pub = self.create_publisher(PointCloud2, "rgbd_pointcloud", LATCHED)
+
         if self.presaved_images:
             self._init_presaved()
         else:
             self._init_live()
+        self.create_service(ApplePrediction, "apple_prediction", self.on_predict,
+                            callback_group=MutuallyExclusiveCallbackGroup())
 
-    # ------------------------------------------------------------------ live init
+    # ================================================================== live
 
     def _init_live(self):
-        """Set up live-camera subscriptions and sync."""
-        self.declare_parameter("camera_ns", "camera/mast_camera")
-        self.declare_parameter("use_aligned_depth", True)
-        self.declare_parameter("allow_reuse_latest_frame", False)
-        self.declare_parameter("x_tolerance", 0.5)
-
-        self.ns             = self.get_parameter("camera_ns").value
-        self.use_aligned    = bool(self.get_parameter("use_aligned_depth").value)
+        for name, default in [("camera_ns", "camera/mast_camera"), ("use_aligned_depth", True),
+                              ("allow_reuse_latest_frame", False), ("x_tolerance", 0.5)]:
+            self.declare_parameter(name, default)
+        ns = self.get_parameter("camera_ns").value
+        self.use_aligned = bool(self.get_parameter("use_aligned_depth").value)
         self.allow_reuse_latest = bool(self.get_parameter("allow_reuse_latest_frame").value)
-        self.x_tol          = float(self.get_parameter("x_tolerance").value)
-
-        self.color_topic = f"/{self.ns}/color/image_raw"
-        if self.use_aligned:
-            self.depth_topic = f"/{self.ns}/aligned_depth_to_color/image_raw"
-            self.cinfo_topic = f"/{self.ns}/color/camera_info"
-        else:
-            self.depth_topic = f"/{self.ns}/depth/image_rect_raw"
-            self.cinfo_topic = f"/{self.ns}/depth/camera_info"
+        self.x_tol = float(self.get_parameter("x_tolerance").value)
+        color_topic = f"/{ns}/color/image_raw"
+        depth_topic = f"/{ns}/aligned_depth_to_color/image_raw" if self.use_aligned else f"/{ns}/depth/image_rect_raw"
+        cinfo_topic = f"/{ns}/color/camera_info" if self.use_aligned else f"/{ns}/depth/camera_info"
 
         self._last_cinfo = None
-        self.cinfo_sub = self.create_subscription(
-            CameraInfo, self.cinfo_topic, self._cinfo_cb,
-            qos_profile=qos_profile_sensor_data,
-        )
-
-        self.color_sub = Subscriber(self, Image, self.color_topic,
-                                    qos_profile=qos_profile_sensor_data)
-        self.depth_sub = Subscriber(self, Image, self.depth_topic,
-                                    qos_profile=qos_profile_sensor_data)
-
+        self._last_pair = None
+        self._last_used_stamp = None
+        self._new_pair = Event()
+        self.create_subscription(CameraInfo, cinfo_topic, self._cinfo_cb, qos_profile_sensor_data)
         self.sync = ApproximateTimeSynchronizer(
-            [self.color_sub, self.depth_sub], queue_size=10, slop=0.50
-        )
-        self.sync.registerCallback(self._sync_cd_cb)
+            [Subscriber(self, Image, color_topic, qos_profile=qos_profile_sensor_data),
+             Subscriber(self, Image, depth_topic, qos_profile=qos_profile_sensor_data)], queue_size=10, slop=0.5)
+        self.sync.registerCallback(self._sync_cb)
+        self.get_logger().info(f"Live mode: {color_topic}, {depth_topic}, {cinfo_topic}")
 
-        self._last_pair          = None
-        self._new_pair_event     = Event()
-        self._last_used_pair_key = None
+    def _cinfo_cb(self, msg: CameraInfo):
+        self._last_cinfo = msg
 
-        self.srv = self.create_service(
-            ApplePrediction, "apple_prediction",
-            self.on_predict, callback_group=self.service_group,
-        )
+    def _sync_cb(self, color_msg: Image, depth_msg: Image):
+        self._last_pair = (color_msg, depth_msg)
+        self._new_pair.set()
 
-        self.get_logger().info(
-            "ApplePredictionNode (live) ready.\n"
-            f"  color: {self.color_topic}\n"
-            f"  depth: {self.depth_topic}\n"
-            f"  cinfo: {self.cinfo_topic}"
-        )
+    def _wait_for_new_pair(self, timeout_sec: float):
+        """A synced (color, depth) pair newer than the last used one (or the last one, allow_reuse_latest_frame)."""
+        def is_new(pair):
+            return pair is not None and (self.allow_reuse_latest or pair[0].header.stamp != self._last_used_stamp)
+        if not is_new(self._last_pair):
+            self._new_pair.clear()
+            if not self._new_pair.wait(timeout=timeout_sec) or not is_new(self._last_pair):
+                return None
+        self._last_used_stamp = self._last_pair[0].header.stamp
+        return self._last_pair
 
-    # ------------------------------------------------------------------ presaved init
+    def _predict_live(self) -> PoseArray:
+        if self._last_cinfo is None:
+            self.get_logger().warn("No CameraInfo yet.")
+            return PoseArray()
+        pair = self._wait_for_new_pair(3.0)
+        if pair is None:
+            self.get_logger().warn("No new synced color/depth pair.")
+            return PoseArray()
+        color_msg, depth_msg = pair
+        color = self.bridge.imgmsg_to_cv2(color_msg, desired_encoding="bgr8")
+        depth = self.bridge.imgmsg_to_cv2(depth_msg, desired_encoding="passthrough")
+        k = self._last_cinfo.k
+        intr = (k[0], k[4], k[2], k[5])
+        self._publish_pointcloud(color, depth, intr, self.pc_pub, self.source_frame, color_msg.header.stamp)
+        poses, radii, boxes, labels = self._predict(color, depth, intr)
+        keep = [i for i, p in enumerate(poses.poses) if abs(p.position.x) <= self.x_tol]   # |x| in target_frame
+        poses.poses = [poses.poses[i] for i in keep]
+        self._publish_results(color, poses, [radii[i] for i in keep], [boxes[i] for i in keep],
+                              [labels[i] for i in keep], color_msg.header)
+        return poses
+
+    # ================================================================== presaved
 
     def _init_presaved(self):
-        """Set up presaved-image mode: load intrinsics, images, timers, publishers."""
+        for name, default in [("presaved_images.rgbd_dir_path", ""), ("presaved_images.tree_id", -1),
+                              ("presaved_images.base_cam_frame_index", 0)]:
+            self.declare_parameter(name, default)
+        if self.camera_type not in FALLBACK_INTRINSICS:
+            raise ValueError(f"camera_type must be one of {list(FALLBACK_INTRINSICS)}")
+        self._rgbd_dir = str(self.get_parameter("presaved_images.rgbd_dir_path").value)
+        self.tree_id = -1
+        self.mast = None                   # (color, depth, (fx, fy, cx, cy))
+        self.base_frames = {}              # offset -> (color, depth)
+        self.base_intrinsics = None        # (fx, fy, cx, cy, W, H)
+        self.base_index = 0
 
-        self.declare_parameter("presaved_images.rgbd_dir_path", "")
-        # tree id as integer; -1 means unset
-        self.declare_parameter("presaved_images.tree_id", -1)
-        # which base_cam buffer frame is the active/canonical one (signed offset)
-        self.declare_parameter("presaved_images.base_cam_frame_index", 0)
-        self._base_cam_frame_index = 0  # signed offset: -2, -1, 0, 1, 2
-        self.rgb_image = None           # mast_cam, set when a tree loads
-        self.depth_image = None
-        self.base_buffer_rgb = [None] * len(_BASE_CAM_OFFSETS)
-        self.base_buffer_depth = [None] * len(_BASE_CAM_OFFSETS)
+        self.rgb_pub = self.create_publisher(Image, "rgb_image", LATCHED)
+        self.depth_pub = self.create_publisher(Image, "depth_image", LATCHED)
+        self.apple_poses_pub = self.create_publisher(PoseArray, "apple_poses", LATCHED)
+        self.base_buffer_pubs = {off: (self.create_publisher(Image, f"base_cam/{buffer_topic_stem(off)}/rgb_image", LATCHED),
+                                       self.create_publisher(Image, f"base_cam/{buffer_topic_stem(off)}/depth_image", LATCHED))
+                                 for off in BASE_CAM_OFFSETS}
+        self.base_rgb_pub = self.create_publisher(Image, "base_cam/rgb_image", LATCHED)
+        self.base_depth_pub = self.create_publisher(Image, "base_cam/depth_image", LATCHED)
+        self.base_pc_pub = self.create_publisher(PointCloud2, "base_cam/pointcloud", LATCHED)
 
-        # ---- camera intrinsics ----
-        # Fallback values only. When the tree folder has mast_cam/camera_info.yaml, _set_presaved_tree uses it
-        # and does not resize the images.
-        if self.camera_type == "azure":
-            self.target_size = (1920, 1080)
-            _k = [902.98, 0.0, 956.55, 0.0, 902.77, 547.68, 0.0, 0.0, 1.0]
-            self.fx, self.fy = _k[0], _k[4]
-            self.cx, self.cy = _k[2], _k[5]
-        elif self.camera_type == "realsense":
-            self.target_size = (848, 480)
-            self.fx, self.fy = 609.6989, 609.8549
-            self.cx, self.cy = 420.2079, 235.2782
-        else:
-            self.get_logger().error(
-                f"Invalid camera_type '{self.camera_type}'. Must be 'azure' or 'realsense'."
-            )
-            raise ValueError(f"Unknown camera_type: {self.camera_type}")
-
-        self.get_logger().info(
-            f"Presaved mode | fallback intrinsics camera={self.camera_type} | "
-            f"size={self.target_size} | "
-            f"fx={self.fx} fy={self.fy} cx={self.cx} cy={self.cy}"
-        )
-
-        # ---- load images ----
-        # We'll load images only once a `presaved_images.tree_id` is set. The
-        # high-level directory is `presaved_images.rgbd_dir_path` and each tree
-        # sits in a subdirectory (eg. tree_002). We watch the tree_id parameter
-        # and load/reload images on changes.
-        self._rgbd_dir_path = self.get_parameter(
-            "presaved_images.rgbd_dir_path"
-        ).get_parameter_value().string_value
-
-        # current tree id (-1 means not set)
-        try:
-            p = self.get_parameter("presaved_images.tree_id")
-            self.tree_id = int(p.value)
-        except Exception:
-            self.tree_id = -1
-
-        if self.tree_id is not None and int(self.tree_id) >= 0:
-            try:
-                self._set_presaved_tree(int(self.tree_id))
-            except Exception as e:
-                self.get_logger().warn(f"Failed to load initial presaved tree '{self.tree_id}': {e}")
-        else:
-            self.get_logger().info("Presaved images enabled, waiting for 'presaved_images.tree_id' parameter to be set.")
-
-        # Register parameter change callback so we can load a new tree when
-        # `presaved_images.tree_id` or the top-level path is updated.
+        tree_id = int(self.get_parameter("presaved_images.tree_id").value)
+        if tree_id >= 0:
+            self.load_tree(tree_id)
         self.add_on_set_parameters_callback(self._on_params_set)
 
-        # ---- extra publishers (presaved only) ----
-        latched_qos = QoSProfile(
-            depth=1,
-            durability=DurabilityPolicy.TRANSIENT_LOCAL,
-            reliability=ReliabilityPolicy.RELIABLE,
-        )
-        # mast_cam — full inference pipeline
-        self.rgb_pub   = self.create_publisher(Image, "rgb_image", latched_qos)
-        self.depth_pub = self.create_publisher(Image, "depth_image", latched_qos)
-        self.apple_poses_pub = self.create_publisher(PoseArray, "apple_poses", latched_qos)
-
-        # base_cam — per-frame latched topics for the 5-frame buffer
-        self.base_buffer_rgb_pubs = [
-            self.create_publisher(Image, f"base_cam/{_buffer_stem(off)}/rgb_image", latched_qos)
-            for off in _BASE_CAM_OFFSETS
-        ]
-        self.base_buffer_depth_pubs = [
-            self.create_publisher(Image, f"base_cam/{_buffer_stem(off)}/depth_image", latched_qos)
-            for off in _BASE_CAM_OFFSETS
-        ]
-        # base_cam — canonical active-frame topic (trunk estimator subscribes here)
-        self.base_cam_active_rgb_pub   = self.create_publisher(
-            Image, "base_cam/rgb_image",   latched_qos)
-        self.base_cam_active_depth_pub = self.create_publisher(
-            Image, "base_cam/depth_image", latched_qos)
-        # base_cam — point cloud of the active frame (RViz check of the template against the trunks)
-        self.base_cam_pc_pub = self.create_publisher(PointCloud2, "base_cam/pointcloud", latched_qos)
-        self.base_cam_intrinsics = None   # (fx, fy, cx, cy, W, H) from base_cam/camera_info.yaml
-
-
-        # If a tree was already selected earlier, publish the loaded images
-        # now that the publishers exist.
+    def _on_params_set(self, params) -> SetParametersResult:
         try:
-            self._presaved_publish_images()
-            self._presaved_publish_pointcloud()
+            for p in params:
+                if p.name == "presaved_images.rgbd_dir_path" and p.value != self._rgbd_dir:
+                    self._rgbd_dir = str(p.value)
+                    if self.tree_id >= 0:
+                        self.load_tree(self.tree_id)
+                elif p.name == "presaved_images.tree_id" and int(p.value) != self.tree_id:
+                    self.load_tree(int(p.value))
+                elif p.name == "presaved_images.base_cam_frame_index":
+                    if int(p.value) not in BASE_CAM_OFFSETS:
+                        raise ValueError(f"base_cam_frame_index must be one of {BASE_CAM_OFFSETS}")
+                    self.base_index = int(p.value)
+                    self._publish_base_frame()
         except Exception as e:
-            self.get_logger().warn(f"Publishing presaved images failed: {e}")
+            self.get_logger().error(f"{type(e).__name__}: {e}")
+            return SetParametersResult(successful=False, reason=str(e))
+        return SetParametersResult(successful=True)
 
-        # ---- misc state ----
-        self._presaved_apple_centers = None
-        self._presaved_apple_radii   = None
-        self._presaved_yolo_result   = None
-        self._marker_counter         = 0
-
-        # ---- service ----
-        self.srv = self.create_service(
-            ApplePrediction, "apple_prediction",
-            self.on_predict, callback_group=self.service_group,
-        )
-
-        self.get_logger().info("ApplePredictionNode (presaved) ready.")
-
-    # ------------------------------------------------------------------ params
-
-    def _on_params_set(self, params):
-        """Called whenever parameters are set; watches for rgbd_dir_path/tree_id changes.
-
-        Returns a SetParametersResult signaling success/failure.
-        """
-        result = SetParametersResult()
-        result.successful = True
-        result.reason = ""
-
-        for p in params:
-            if p.name == "presaved_images.tree_id":
-                new_tree = p.value
-                # allow strings or ints; coerce to int
-                try:
-                    if new_tree is None or (isinstance(new_tree, str) and new_tree == ""):
-                        tid = -1
-                    else:
-                        tid = int(new_tree)
-                except Exception as e:
-                    result.successful = False
-                    result.reason = f"presaved_images.tree_id must be an integer: {e}"
-                    self.get_logger().error(result.reason)
-                    return result
-
-                if int(tid) != int(self.tree_id if self.tree_id is not None else -1):
-                    try:
-                        self._set_presaved_tree(tid)
-                        self.tree_id = int(tid)
-                        self.get_logger().info(f"Loaded presaved tree '{tid}'")
-                    except Exception as e:
-                        result.successful = False
-                        result.reason = f"Failed to load tree '{tid}': {e}"
-                        self.get_logger().error(result.reason)
-                        return result
-            elif p.name == "presaved_images.rgbd_dir_path":
-                new_path = p.value
-                if new_path is None:
-                    new_path = ""
-                if new_path != self._rgbd_dir_path:
-                    self._rgbd_dir_path = new_path
-                    # if a tree is loaded (tree ids start at 0), load it again from the new path
-                    if self.tree_id is not None and int(self.tree_id) >= 0:
-                        try:
-                            self._set_presaved_tree(self.tree_id)
-                            self.get_logger().info(f"Reloaded tree '{self.tree_id}' from new path")
-                        except Exception as e:
-                            result.successful = False
-                            result.reason = f"Failed to reload tree '{self.tree_id}' from new path: {e}"
-                            self.get_logger().error(result.reason)
-                            return result
-
-            elif p.name == "presaved_images.base_cam_frame_index":
-                try:
-                    off = int(p.value)
-                except Exception as e:
-                    result.successful = False
-                    result.reason = f"base_cam_frame_index must be an integer: {e}"
-                    self.get_logger().error(result.reason)
-                    return result
-                if off not in _BASE_CAM_OFFSETS:
-                    result.successful = False
-                    result.reason = (f"base_cam_frame_index {off} not in "
-                                     f"{_BASE_CAM_OFFSETS}")
-                    self.get_logger().error(result.reason)
-                    return result
-                self._base_cam_frame_index = off
-                try:
-                    self._publish_active_base_cam_frame(off)
-                except Exception as e:
-                    self.get_logger().warn(
-                        f"Failed to publish active base_cam frame: {e}")
-
-        return result
-
-    def _set_presaved_tree(self, tree_id: str):
-        """Load images for the given tree_id from the configured high-level dir.
-
-        Accepts either 'tree_002' or '002' and normalizes to the directory name.
-        Raises FileNotFoundError on missing files.
-        """
-        # clear images when tree_id < 0
-        if tree_id is None or (isinstance(tree_id, int) and tree_id < 0):
-            self.rgb_image         = None
-            self.depth_image       = None
-            self.base_buffer_rgb   = [None] * len(_BASE_CAM_OFFSETS)
-            self.base_buffer_depth = [None] * len(_BASE_CAM_OFFSETS)
-            self._base_cam_frame_index = 0
+    def load_tree(self, tree_id: int):
+        """Load and publish the images of one tree (tree_id < 0: no tree). mast_cam is optional."""
+        self.tree_id, self.mast, self.base_frames, self.base_index = tree_id, None, {}, 0
+        if tree_id < 0:
             return
-
-        # coerce and format tree directory name as tree_###
-        try:
-            tid_int = int(tree_id)
-        except Exception:
-            raise ValueError(f"tree_id must be integer-like, got: {tree_id}")
-
-        dir_name = f"tree_{tid_int:03d}"
-
-        rgbd_dir_path = self._rgbd_dir_path
-        if not rgbd_dir_path:
+        if not self._rgbd_dir:
             raise FileNotFoundError("presaved_images.rgbd_dir_path is empty")
+        tree_dir = os.path.join(self._rgbd_dir, f"tree_{tree_id:03d}")
 
-        tree_dir = os.path.join(rgbd_dir_path, dir_name)
         mast_dir = os.path.join(tree_dir, "mast_cam")
-        base_dir = os.path.join(tree_dir, "base_cam")
-
-        # mast_cam is optional: without it the base_cam frames still load (trunk correction), but
-        # /apple_prediction returns no apples.
-        try:
-            mast_rgb = os.path.join(mast_dir, "color.png")
-            self.get_logger().info(f"Loading mast_cam images from '{mast_rgb}' for tree_id='{tree_id}'")
-            rgb_img = cv2.imread(mast_rgb) if os.path.exists(mast_rgb) else None
-            if rgb_img is None:
-                raise FileNotFoundError(f"Missing or unreadable {mast_rgb}")
-            mast_depth, depth_is_aligned = _depth_path_for(mast_dir)
-            depth_img = cv2.imread(mast_depth, cv2.IMREAD_UNCHANGED) if os.path.exists(mast_depth) else None
-            if depth_img is None:
-                raise FileNotFoundError(f"Missing or unreadable {mast_depth}")
-
-            cinfo = _load_color_camera_info(mast_dir)
-            if cinfo is not None and (cinfo[4], cinfo[5]) == (rgb_img.shape[1], rgb_img.shape[0]):
-                # Intrinsics of the saved color image; no resize
-                self.fx, self.fy, self.cx, self.cy, W, H = cinfo
-                self.target_size = (W, H)
-                if depth_img.shape[:2] != rgb_img.shape[:2]:
-                    raise ValueError(f"{mast_depth} is {depth_img.shape[:2]}, color is {rgb_img.shape[:2]}; "
-                                     f"re-extract with depth registration (depth_aligned.png)")
-                if not depth_is_aligned:
-                    self.get_logger().warn(
-                        f"[mast_cam] no depth_aligned.png in {mast_dir}; depth.png has the color size, "
-                        f"so it is used as if it is aligned to color.")
-                self.get_logger().info(
-                    f"[mast_cam] intrinsics from camera_info.yaml: {W}x{H} "
-                    f"fx={self.fx:.2f} fy={self.fy:.2f} cx={self.cx:.2f} cy={self.cy:.2f}")
+        rgbd = read_rgbd(mast_dir)
+        if rgbd is None:
+            self.get_logger().warn(f"No mast_cam images in {tree_dir}: no apple prediction for this tree.")
+        else:
+            color, depth, aligned = rgbd
+            cinfo = load_color_camera_info(mast_dir)
+            if cinfo is not None and (cinfo[4], cinfo[5]) == (color.shape[1], color.shape[0]):
+                if depth.shape[:2] != color.shape[:2]:
+                    raise ValueError(f"mast_cam depth {depth.shape[:2]} is not the color size {color.shape[:2]}")
+                if not aligned:
+                    self.get_logger().warn("mast_cam: no depth_aligned.png; depth.png (color size) is used.")
+                self.mast = (color, depth, cinfo[:4])
             else:
-                self.get_logger().warn(
-                    f"[mast_cam] no usable camera_info.yaml in {mast_dir}. The images are resized to "
-                    f"{self.target_size} and the hardcoded '{self.camera_type}' intrinsics are used. "
-                    f"Apple positions can be biased.")
-                rgb_img = cv2.resize(rgb_img, self.target_size, interpolation=cv2.INTER_LINEAR)
-                depth_img = cv2.resize(depth_img, self.target_size, interpolation=cv2.INTER_NEAREST)
+                size, fx, fy, cx, cy = FALLBACK_INTRINSICS[self.camera_type]
+                self.get_logger().warn(f"mast_cam: no camera_info.yaml; images resized to {size}, "
+                                       f"'{self.camera_type}' intrinsics.")
+                self.mast = (cv2.resize(color, size, interpolation=cv2.INTER_LINEAR),
+                             cv2.resize(depth, size, interpolation=cv2.INTER_NEAREST), (fx, fy, cx, cy))
 
-            self.rgb_image = rgb_img
-            self.depth_image = depth_img
+        base_dir = os.path.join(tree_dir, "base_cam")
+        self.base_intrinsics = load_color_camera_info(base_dir)
+        for off in BASE_CAM_OFFSETS:
+            rgbd = read_rgbd(os.path.join(base_dir, f"frame_{off}"))
+            if rgbd is None:
+                self.get_logger().warn(f"base_cam frame_{off}: missing")
+                continue
+            if not rgbd[2]:
+                self.get_logger().warn(f"base_cam frame_{off}: no depth_aligned.png; depth is not registered to color.")
+            self.base_frames[off] = rgbd[:2]
+        self.get_logger().info(f"Tree {tree_id}: mast_cam {'yes' if self.mast else 'no'}, "
+                               f"base_cam frames {sorted(self.base_frames)}")
+        self._publish_tree()
 
-            self.get_logger().info(
-                f"[mast_cam] Loaded RGB: dtype={self.rgb_image.dtype} shape={self.rgb_image.shape} | "
-                f"Depth: dtype={self.depth_image.dtype} min={self.depth_image.min()} "
-                f"max={self.depth_image.max()} shape={self.depth_image.shape}"
-            )
-        except (FileNotFoundError, ValueError) as e:
-            self.get_logger().warn(f"[mast_cam] not loaded: {e}. /apple_prediction returns no apples for this tree.")
-            self.rgb_image = None
-            self.depth_image = None
+    def _image_msgs(self, color, depth, frame_id, stamp):
+        rgb_msg = self.bridge.cv2_to_imgmsg(color, encoding="bgr8")
+        depth_msg = self.bridge.cv2_to_imgmsg(depth, encoding="mono16")
+        rgb_msg.header = depth_msg.header = Header(stamp=stamp, frame_id=frame_id)
+        return rgb_msg, depth_msg
 
-        # load base_cam 5-frame buffer; individual missing frames are non-fatal
-        self.base_cam_intrinsics = _load_color_camera_info(base_dir)
-        self.base_buffer_rgb   = []
-        self.base_buffer_depth = []
-        for off in _BASE_CAM_OFFSETS:
-            frame_dir  = os.path.join(base_dir, f"frame_{off}")
-            rgb_path   = os.path.join(frame_dir, "color.png")
-            depth_path, b_aligned = _depth_path_for(frame_dir)
-            if os.path.exists(rgb_path) and os.path.exists(depth_path):
-                b_rgb   = cv2.imread(rgb_path)
-                b_depth = cv2.imread(depth_path, cv2.IMREAD_UNCHANGED)
-                if b_rgb is not None and b_depth is not None:
-                    if not b_aligned:
-                        self.get_logger().warn(
-                            f"[base_cam] frame_{off}: no depth_aligned.png; depth.png {b_depth.shape} is not "
-                            f"registered to color {b_rgb.shape[:2]}. Trunk positions can be biased.")
-                    self.base_buffer_rgb.append(b_rgb)
-                    self.base_buffer_depth.append(b_depth)
-                    self.get_logger().info(
-                        f"[base_cam] frame_{off}: rgb {b_rgb.shape} | "
-                        f"depth {b_depth.shape} min={b_depth.min()} max={b_depth.max()}"
-                    )
-                    continue
-            self.get_logger().warn(f"[base_cam] frame_{off}: missing or unreadable")
-            self.base_buffer_rgb.append(None)
-            self.base_buffer_depth.append(None)
+    def _publish_tree(self):
+        stamp = self.get_clock().now().to_msg()
+        if self.mast is not None:
+            color, depth, intr = self.mast
+            for pub, msg in zip((self.rgb_pub, self.depth_pub), self._image_msgs(color, depth, self.source_frame, stamp)):
+                pub.publish(msg)
+            self._publish_pointcloud(color, depth, intr, self.pc_pub, self.source_frame, stamp)
+        else:
+            # Empty cloud: voxelize_scan does not use the cloud of a different tree
+            self.pc_pub.publish(point_cloud2.create_cloud(Header(stamp=stamp, frame_id=self.source_frame),
+                                                          CLOUD_FIELDS, []))
+        for off, (color, depth) in self.base_frames.items():
+            for pub, msg in zip(self.base_buffer_pubs[off], self._image_msgs(color, depth, BASE_CAM_FRAME, stamp)):
+                pub.publish(msg)
+        self._publish_base_frame()
 
-        # Reset any cached results and active frame selection
-        self._presaved_apple_centers = None
-        self._presaved_apple_radii = None
-        self._presaved_yolo_result = None
-        self._base_cam_frame_index = 0
+    def _publish_base_frame(self):
+        """Publish the base_cam frame base_index on base_cam/rgb_image, depth_image and pointcloud."""
+        if self.base_index not in self.base_frames:
+            self.get_logger().warn(f"base_cam frame_{self.base_index} not loaded")
+            return
+        color, depth = self.base_frames[self.base_index]
+        stamp = self.get_clock().now().to_msg()
+        rgb_msg, depth_msg = self._image_msgs(color, depth, BASE_CAM_FRAME, stamp)
+        self.base_rgb_pub.publish(rgb_msg)
+        self.base_depth_pub.publish(depth_msg)
+        ci = self.base_intrinsics
+        if ci is not None and depth.shape[:2] == color.shape[:2] == (ci[5], ci[4]):
+            self._publish_pointcloud(color, depth, ci[:4], self.base_pc_pub, BASE_CAM_FRAME, stamp)
 
-        # Publish loaded images/pointcloud so downstream visualisers see the change
-        try:
-            self._presaved_publish_images()
-            self._presaved_publish_pointcloud()
-        except Exception as e:
-            self.get_logger().warn(f"Publishing presaved images failed: {e}")
+    def _predict_presaved(self) -> PoseArray:
+        if self.mast is None:
+            self.get_logger().error("No mast_cam images for this tree.")
+            return PoseArray()
+        color, depth, intr = self.mast
+        poses, radii, boxes, labels = self._predict(color, depth, intr)
+        self._publish_results(color, poses, radii, boxes, labels, None)
+        self.apple_poses_pub.publish(poses)
+        return poses
 
-    # ================================================================== service
+    # ================================================================== prediction
 
     def on_predict(self, req, res):
         with self._predict_lock:
-            if self.presaved_images:
-                return self._on_predict_presaved(req, res)
-            else:
-                return self._on_predict_live(req, res)
+            res.apple_poses = self._predict_presaved() if self.presaved_images else self._predict_live()
+        self.get_logger().info(f"{len(res.apple_poses.poses)} apple(s)")
+        return res
 
-    # ------------------------------------------------------------------ live predict
-
-    def _on_predict_live(self, req, res):
-        if self._last_cinfo is None:
-            self.get_logger().warn("No CameraInfo received yet.")
-            res.apple_poses = PoseArray()
-            return res
-
-        pair = self._wait_for_new_synced(timeout_sec=3.0)
-        if pair is None:
-            self.get_logger().warn("Timed out waiting for fresh synced frames.")
-            res.apple_poses = PoseArray()
-            return res
-
-        color_msg, depth_msg = pair
-        cinfo_msg = self._last_cinfo
-
-        self._last_used_pair_key = (
-            stamp_to_ns(color_msg.header.stamp),
-            stamp_to_ns(depth_msg.header.stamp),
-        )
-
-        color_bgr = self.bridge.imgmsg_to_cv2(color_msg, desired_encoding="bgr8")
-        depth_mm  = self.bridge.imgmsg_to_cv2(depth_msg, desired_encoding="passthrough")
-
-        Hc, Wc = color_bgr.shape[:2]
-        if (cinfo_msg.height != Hc) or (cinfo_msg.width != Wc):
-            self.get_logger().warn(
-                f"CameraInfo size ({cinfo_msg.width}x{cinfo_msg.height}) "
-                f"!= color size ({Wc}x{Hc}). Using color size for back-projection."
-            )
-        if self.use_aligned and (depth_mm.shape[:2] != (Hc, Wc)):
-            self.get_logger().warn(
-                f"Aligned depth size {depth_mm.shape[1]}x{depth_mm.shape[0]} "
-                f"!= color size {Wc}x{Hc}; masks will be resized."
-            )
-
-        fx = float(cinfo_msg.k[0]); fy = float(cinfo_msg.k[4])
-        cx = float(cinfo_msg.k[2]); cy = float(cinfo_msg.k[5])
-
-        # Publish full RGBD point cloud
-        self._publish_pointcloud(
-            rgb_bgr=color_bgr,
-            depth=depth_mm,
-            fx=fx, fy=fy, cx=cx, cy=cy,
-            stamp=color_msg.header.stamp,
-        )
-
-        # 1) YOLO
+    def _predict(self, color, depth, intr):
+        """YOLO + sphere fit. Returns (PoseArray in target_frame, radii, boxes, labels)."""
         with torch.inference_mode():
-            results = self.model(color_bgr, conf=self.conf_thr, verbose=False)[0]
+            results = self.model(color, conf=self.conf_thr, verbose=False)[0]
+        masks, boxes, confs = self._instance_masks(results, *color.shape[:2])
+        centers, radii, kept = self._fit_spheres(depth, masks, intr)
+        poses = self._to_pose_array(centers)
+        if not poses.header.frame_id:          # TF failure: no poses
+            return poses, [], [], []
+        return poses, radii, [boxes[i] for i in kept], [f"apple {confs[i]:.2f}" for i in kept]
 
-        # 2) Masks & boxes
-        masks, bboxes = self._build_instance_masks_and_boxes(results, Hc, Wc)
-
-        # 3) Back-project → RANSAC sphere fit
-        centers, radii, kept_bboxes = self._estimate_apples_backproject(
-            depth_mm, masks, bboxes, fx, fy, cx, cy
-        )
-
-        self.get_logger().info(
-            f"Live predict ts=({color_msg.header.stamp.sec}."
-            f"{color_msg.header.stamp.nanosec:09d}) → {len(centers)} detections."
-        )
-
-        # 4) Transform to target frame
-        poses_world = self._to_pose_array(centers, self.source_frame, self.target_frame)
-
-        # 5) Filter by |x| in target frame
-        poses_world_f, radii_f, bboxes_f, _ = self._filter_by_x_range(
-            poses_world, radii, kept_bboxes, self.x_tol
-        )
-        if len(poses_world.poses) != len(poses_world_f.poses):
-            self.get_logger().info(
-                f"Filtered {len(poses_world.poses) - len(poses_world_f.poses)} detections "
-                f"by |x| <= {self.x_tol} in '{self.target_frame}'. "
-                f"Kept {len(poses_world_f.poses)}."
-            )
-
-        # 6) Publish
-        self._publish_markers(poses_world_f, radii_f, frame_id=self.target_frame)
-        self._publish_annotated_image(color_bgr, bboxes_f, header=color_msg.header)
-
-        res.apple_poses = poses_world_f
-        return res
-
-    # ------------------------------------------------------------------ presaved predict
-
-    def _on_predict_presaved(self, req, res):
-        if self.rgb_image is None:
-            self.get_logger().error("No mast_cam images for this tree; no apple prediction.")
-            res.apple_poses = PoseArray()
-            return res
-        # 1) Segment with YOLO
-        apple_masks = self._presaved_segment_apples(self.rgb_image)
-        self.get_logger().info(f"[1] YOLO found {len(apple_masks)} apple mask(s)")
-
-        resized_masks = [
-            cv2.resize(m, self.target_size, interpolation=cv2.INTER_NEAREST)
-            for m in apple_masks
-        ]
-
-        # 2) Build point clouds per mask → RANSAC sphere fit
-        rgb_rgb = cv2.cvtColor(self.rgb_image, cv2.COLOR_BGR2RGB)
-        centers, radii = self._presaved_get_apple_centers(rgb_rgb, self.depth_image, resized_masks)
-        self.get_logger().info(f"[2] get_apple_centers returned {len(centers)} center(s)")
-
-        # 3) Transform to target frame
-        poses_world = self._to_pose_array(centers, self.source_frame, self.target_frame)
-        self.get_logger().info(f"[3] transform_apple_poses returned {len(poses_world.poses)} pose(s)")
-
-        # 4) Publish
-        self._publish_markers(poses_world, radii, frame_id=self.target_frame)
-
-        # Extract bboxes from the stored YOLO result for the annotated image
-        bboxes = []
-        if self._presaved_yolo_result is not None \
-                and self._presaved_yolo_result.boxes is not None:
-            bboxes = [
-                tuple(box.xyxy.cpu().numpy()[0].astype(int))
-                for box in self._presaved_yolo_result.boxes
-            ]
-        self._publish_annotated_image(self.rgb_image, bboxes)
-
-        # Latched poses topic
-        poses_world.header.stamp    = self.get_clock().now().to_msg()
-        poses_world.header.frame_id = self.target_frame
-        self.apple_poses_pub.publish(poses_world)
-        self.get_logger().info(
-            f"Published {len(poses_world.poses)} apple pose(s) to 'apple_poses'."
-        )
-
-        # Cache for timer-based republishing
-        self._presaved_apple_centers = poses_world
-        self._presaved_apple_radii   = radii
-
-        res.apple_poses = poses_world
-        return res
-
-    # ================================================================== presaved helpers
-
-    def _presaved_segment_apples(self, image):
-        """Run YOLO on *image* and return a list of per-apple uint8 masks."""
-        results = self.model(image, conf=self.conf_thr)[0]
-        self._presaved_yolo_result = results
-        apple_masks = []
-
-        for det in results:
-            if results.masks is not None:
-                img_h, img_w = results.masks.orig_shape
-                mask = np.zeros((img_h, img_w), dtype=np.uint8)
-                for poly in det.masks.xy:
-                    cv2.fillPoly(mask, [poly.astype(np.int32)], 255)
+    @staticmethod
+    def _instance_masks(results, H, W):
+        """(masks, boxes xyxy, confidences) of the YOLO instances; box masks when the model has no masks."""
+        if results.boxes is None or len(results.boxes) == 0:
+            return [], [], []
+        boxes = results.boxes.xyxy.cpu().numpy().astype(int)
+        confs = results.boxes.conf.cpu().numpy().astype(float)
+        polys = results.masks.xy if getattr(results, "masks", None) is not None else None
+        masks = []
+        for i, (x1, y1, x2, y2) in enumerate(boxes):
+            m = np.zeros((H, W), dtype=np.uint8)
+            if polys is not None:
+                cv2.fillPoly(m, [polys[i].astype(np.int32)], 255)
             else:
-                img_h, img_w = results.orig_shape
-                mask = np.zeros((img_h, img_w), dtype=np.uint8)
-                x1, y1, x2, y2 = det.boxes.xyxy.cpu().numpy()[0]
-                cv2.rectangle(mask, (int(x1), int(y1)), (int(x2), int(y2)), 255, -1)
-            apple_masks.append(mask)
+                cv2.rectangle(m, (max(0, x1), max(0, y1)), (min(W - 1, x2), min(H - 1, y2)), 255, -1)
+            masks.append(m)
+        keep = [i for i, m in enumerate(masks) if m.any()]
+        return [masks[i] for i in keep], [tuple(boxes[i]) for i in keep], [confs[i] for i in keep]
 
-        return apple_masks
-
-    def _presaved_get_apple_centers(self, rgb, depth, masks):
-        """
-        For each mask: build an open3d RGBD point cloud, run RANSAC sphere fit.
-        Returns (centers, radii) lists.
-        """
-        self.get_logger().info(
-            f"Depth dtype={depth.dtype} min={depth.min()} max={depth.max()} "
-            f"nonzero={np.count_nonzero(depth)} shape={depth.shape}"
-        )
-        apple_centers = []
-        apple_radii   = []
-
-        intrinsic = o3d.camera.PinholeCameraIntrinsic(
-            width=self.target_size[0], height=self.target_size[1],
-            fx=self.fx, fy=self.fy, cx=self.cx, cy=self.cy,
-        )
-
-        for mask in masks:
-            depth_seg = np.where(mask.astype(bool), depth, 0).astype(np.uint16)
-            valid_vals = depth_seg[depth_seg > 0]
-            if valid_vals.size == 0:
+    def _fit_spheres(self, depth, masks, intr):
+        """Sphere RANSAC on the back-projected depth of each mask. Returns (centers, radii, mask indices)."""
+        fx, fy, cx, cy = intr
+        centers, radii, kept = [], [], []
+        for i, m in enumerate(masks):
+            if m.shape != depth.shape[:2]:
+                m = cv2.resize(m, depth.shape[1::-1], interpolation=cv2.INTER_NEAREST)
+            ys, xs = np.nonzero(m)
+            z = depth[ys, xs].astype(np.float64) / self.depth_scale
+            ok = (z > 0) & (z <= self.dist_max)
+            if ok.sum() < 50 or np.median(z[ok]) > self.dist_max:
                 continue
-            if np.median(valid_vals) > self.dist_max * self.depth_scale:
+            xs, ys, z = xs[ok], ys[ok], z[ok]
+            pts = np.column_stack([(xs - cx) * z / fx, (ys - cy) * z / fy, z])
+            c, r, _ = Sphere().fit(pts, thresh=self.ransac_thresh, maxIteration=self.ransac_iters,
+                                   lower_rad_bound=self.rad_min, upper_rad_bound=self.rad_max)
+            if c is None or r is None or not np.isfinite(c).all() or not np.isfinite(r):
                 continue
-
-            rgb_o3d   = o3d.geometry.Image(rgb)
-            depth_o3d = o3d.geometry.Image(depth_seg.astype(np.uint16))
-            rgbd      = o3d.geometry.RGBDImage.create_from_color_and_depth(
-                rgb_o3d, depth_o3d,
-                depth_scale=self.depth_scale,
-                depth_trunc=self.dist_max,
-                convert_rgb_to_intensity=False,
-            )
-            pcd = o3d.geometry.PointCloud.create_from_rgbd_image(rgbd, intrinsic)
-
-            pts = np.asarray(pcd.points)
-            if pts.shape[0] < 50:
-                continue
-
-            center, radius = self._presaved_ransac_sphere(pts)
-            if center is not None and radius is not None:
-                apple_centers.append(center)
-                apple_radii.append(float(radius))
-
-        return apple_centers, apple_radii
-
-    def _presaved_ransac_sphere(self, pts):
-        sph = Sphere()
-        center, radius, _ = sph.fit(
-            pts,
-            thresh=self.ransac_thresh,
-            maxIteration=self.ransac_iters,
-            lower_rad_bound=self.rad_min,
-            upper_rad_bound=self.rad_max,
-        )
-        return center, radius
-
-    def _presaved_publish_images(self):
-        """Republish the loaded mast_cam RGB/depth images, and base_cam images if available."""
-        if self._predict_lock.locked():
-            return  # service callback is running — skip this cycle
-
-        # mast_cam — full inference pipeline images
-        if self.rgb_image is not None:
-            rgb_msg   = self.bridge.cv2_to_imgmsg(self.rgb_image,   encoding="bgr8")
-            depth_msg = self.bridge.cv2_to_imgmsg(self.depth_image, encoding="mono16")
-            rgb_msg.header.stamp    = self.get_clock().now().to_msg()
-            rgb_msg.header.frame_id = self.source_frame
-            depth_msg.header        = rgb_msg.header
-            self.rgb_pub.publish(rgb_msg)
-            self.depth_pub.publish(depth_msg)
-
-        # base_cam — publish all 5 buffer frames to per-frame topics
-        now_stamp = self.get_clock().now().to_msg()
-        for pub_rgb, pub_depth, rgb_img, depth_img in zip(
-            self.base_buffer_rgb_pubs, self.base_buffer_depth_pubs,
-            self.base_buffer_rgb,      self.base_buffer_depth,
-        ):
-            if rgb_img is None or depth_img is None:
-                continue
-            rgb_msg                 = self.bridge.cv2_to_imgmsg(
-                cv2.cvtColor(rgb_img, cv2.COLOR_BGR2RGB), encoding="rgb8")
-            depth_msg               = self.bridge.cv2_to_imgmsg(depth_img, encoding="mono16")
-            rgb_msg.header.stamp    = now_stamp
-            rgb_msg.header.frame_id = "base_camera_color_optical_frame"
-            depth_msg.header        = rgb_msg.header
-            pub_rgb.publish(rgb_msg)
-            pub_depth.publish(depth_msg)
-
-        # base_cam — publish the currently selected frame to the canonical topic
-        self._publish_active_base_cam_frame(self._base_cam_frame_index)
-
-    def _publish_active_base_cam_frame(self, offset: int):
-        """Publish the buffer frame at *offset* to the canonical base_cam topics.
-
-        base_cam/rgb_image and base_cam/depth_image always carry the currently
-        selected frame so downstream nodes (trunk estimator) need only subscribe
-        to one fixed topic pair.
-        """
-        try:
-            idx = _BASE_CAM_OFFSETS.index(offset)
-        except ValueError:
-            self.get_logger().warn(
-                f"[base_cam/active] offset {offset} not in {_BASE_CAM_OFFSETS}")
-            return
-        rgb_img   = self.base_buffer_rgb[idx]
-        depth_img = self.base_buffer_depth[idx]
-        if rgb_img is None or depth_img is None:
-            self.get_logger().warn(
-                f"[base_cam/active] frame_{offset} not loaded")
-            return
-        now                          = self.get_clock().now().to_msg()
-        rgb_msg                      = self.bridge.cv2_to_imgmsg(
-            cv2.cvtColor(rgb_img, cv2.COLOR_BGR2RGB), encoding="rgb8")
-        depth_msg                    = self.bridge.cv2_to_imgmsg(depth_img, encoding="mono16")
-        rgb_msg.header.stamp         = now
-        rgb_msg.header.frame_id      = "base_camera_color_optical_frame"
-        depth_msg.header             = rgb_msg.header
-        self.base_cam_active_rgb_pub.publish(rgb_msg)
-        self.base_cam_active_depth_pub.publish(depth_msg)
-        ci = self.base_cam_intrinsics
-        if ci is not None and depth_img.shape[:2] == rgb_img.shape[:2] == (ci[5], ci[4]):
-            self._publish_pointcloud(rgb_img, depth_img, *ci[:4], stamp=now,
-                                     publisher=self.base_cam_pc_pub, frame_id="base_camera_color_optical_frame")
-        self.get_logger().info(
-            f"[base_cam/active] Published frame_{offset} "
-            f"({_buffer_stem(offset)})")
-
-    def _publish_pointcloud(self, rgb_bgr, depth, fx, fy, cx, cy, stamp=None, publisher=None, frame_id=None):
-        """Build and publish an XYZRGB PointCloud2 from a BGR image and depth map.
-
-        Works for both live and presaved modes.  *stamp* defaults to now when
-        not supplied (presaved / timer path). The image is converted BGR→RGB
-        internally; the rgb field is packed as (r << 16) | (g << 8) | b.
-
-        Args:
-            rgb_bgr:  uint8 BGR image (H×W×3).
-            depth:    uint16 depth image in the node's depth_scale units.
-            fx, fy:   focal lengths in pixels.
-            cx, cy:   principal point in pixels.
-            stamp:    rclpy stamp to embed in the header; uses clock.now() if None.
-            publisher: PointCloud2 publisher (default rgbd_pointcloud).
-            frame_id: header frame (default source_frame).
-        """
-        H, W = rgb_bgr.shape[:2]
-        rgb_o3d   = o3d.geometry.Image(cv2.cvtColor(rgb_bgr, cv2.COLOR_BGR2RGB))
-        depth_o3d = o3d.geometry.Image(depth.astype(np.uint16))
-        intrinsic = o3d.camera.PinholeCameraIntrinsic(
-            width=W, height=H, fx=fx, fy=fy, cx=cx, cy=cy,
-        )
-        rgbd = o3d.geometry.RGBDImage.create_from_color_and_depth(
-            rgb_o3d, depth_o3d,
-            depth_scale=self.depth_scale,
-            depth_trunc=self.dist_max,
-            convert_rgb_to_intensity=False,
-        )
-        pcd    = o3d.geometry.PointCloud.create_from_rgbd_image(rgbd, intrinsic)
-        points = np.asarray(pcd.points)
-        colors = (np.asarray(pcd.colors) * 255).astype(np.uint8)
-
-        rgb = (colors[:, 0].astype(np.uint32) << 16) | (colors[:, 1].astype(np.uint32) << 8) | colors[:, 2]
-        packed = [(x, y, z, int(c)) for (x, y, z), c in zip(points, rgb)]
-        header          = Header()
-        header.stamp    = stamp if stamp is not None else self.get_clock().now().to_msg()
-        header.frame_id = frame_id or self.source_frame
-        fields = [
-            PointField(name="x",   offset=0,  datatype=PointField.FLOAT32, count=1),
-            PointField(name="y",   offset=4,  datatype=PointField.FLOAT32, count=1),
-            PointField(name="z",   offset=8,  datatype=PointField.FLOAT32, count=1),
-            PointField(name="rgb", offset=12, datatype=PointField.UINT32,  count=1),
-        ]
-        (publisher or self.pc_pub).publish(point_cloud2.create_cloud(header, fields, packed))
-
-    def _presaved_publish_pointcloud(self):
-        """
-        Publish the mast-camera RGB-D point cloud (latched) when a tree loads. Without mast-camera images, publish
-        an empty cloud, so voxelize_scan does not use the cloud of a different tree.
-        """
-        if self.rgb_image is None:
-            header = Header(stamp=self.get_clock().now().to_msg(), frame_id=self.source_frame)
-            fields = [PointField(name=n, offset=4 * i, datatype=PointField.FLOAT32, count=1)
-                      for i, n in enumerate(("x", "y", "z"))]
-            self.pc_pub.publish(point_cloud2.create_cloud(header, fields, []))
-            return
-        if self._predict_lock.locked():
-            return  # service callback is running — skip this cycle
-        self._publish_pointcloud(
-            rgb_bgr=self.rgb_image,
-            depth=self.depth_image,
-            fx=self.fx, fy=self.fy, cx=self.cx, cy=self.cy,
-        )
-
-    def _publish_annotated_image(self, bgr_img, bboxes, header=None):
-        """Draw bounding boxes on bgr_img and publish to apple_annotated.
-
-        In presaved mode, labels show confidence scores pulled from the stored
-        YOLO result.  In live mode, labels show the detection index.
-        """
-        if bgr_img is None:
-            return
-        annotated = bgr_img.copy()
-        H, W = annotated.shape[:2]
-
-        # Pull per-box confidence scores in presaved mode
-        confidences = []
-        if self.presaved_images \
-                and self._presaved_yolo_result is not None \
-                and self._presaved_yolo_result.boxes is not None:
-            confidences = [
-                float(box.conf.cpu().numpy()[0])
-                for box in self._presaved_yolo_result.boxes
-            ]
-
-        for i, (x1, y1, x2, y2) in enumerate(bboxes):
-            x1 = int(max(0, min(W - 1, x1))); y1 = int(max(0, min(H - 1, y1)))
-            x2 = int(max(0, min(W - 1, x2))); y2 = int(max(0, min(H - 1, y2)))
-            if x2 <= x1 or y2 <= y1:
-                continue
-
-            cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 255, 0), 2)
-
-            if self.presaved_images and i < len(confidences):
-                label       = f"apple {confidences[i]:.2f}"
-                font_scale  = 0.5
-                thickness   = 1
-            else:
-                label       = str(i)
-                font_scale  = 0.9
-                thickness   = 2
-
-            (tw, th), baseline = cv2.getTextSize(
-                label, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness
-            )
-            bg_y1 = max(0, y1 - th - baseline - 6)
-            cv2.rectangle(annotated,
-                          (x1, bg_y1),
-                          (min(W - 1, x1 + tw + 8), y1),
-                          (0, 255, 0), -1)
-            cv2.putText(annotated, label, (x1 + 4, max(0, y1 - 6)),
-                        cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 0, 0),
-                        thickness, cv2.LINE_AA)
-
-        msg = self.bridge.cv2_to_imgmsg(annotated, encoding="bgr8")
-        if header is not None:
-            msg.header = header
-        else:
-            msg.header.stamp    = self.get_clock().now().to_msg()
-            msg.header.frame_id = self.source_frame
-        self.annotated_pub.publish(msg)
-
-    def _build_instance_masks_and_boxes(self, results, H, W):
-        inst_n = int(len(results.boxes) if results.boxes is not None else 0)
-        if inst_n == 0:
-            return [], []
-
-        masks  = [None] * inst_n
-        bboxes = [None] * inst_n
-        xyxy   = results.boxes.xyxy.cpu().numpy().astype(int)
-
-        if getattr(results, "masks", None) is not None and \
-                getattr(results.masks, "xy", None) is not None:
-            polys = results.masks.xy
-            for i in range(inst_n):
-                mask = np.zeros((H, W), dtype=np.uint8)
-                pl   = polys[i]
-                if isinstance(pl, np.ndarray):
-                    cv2.fillPoly(mask, [pl.astype(np.int32)], 255)
-                else:
-                    for poly in pl:
-                        cv2.fillPoly(mask, [poly.astype(np.int32)], 255)
-                masks[i]  = mask
-                x1, y1, x2, y2 = xyxy[i]
-                bboxes[i] = (x1, y1, x2, y2)
-        else:
-            for i in range(inst_n):
-                x1, y1, x2, y2 = xyxy[i]
-                mask = np.zeros((H, W), dtype=np.uint8)
-                cv2.rectangle(mask,
-                              (max(0, x1), max(0, y1)),
-                              (min(W - 1, x2), min(H - 1, y2)), 255, -1)
-                masks[i]  = mask
-                bboxes[i] = (x1, y1, x2, y2)
-
-        pairs = [(m, b) for m, b in zip(masks, bboxes) if m is not None and m.any()]
-        if not pairs:
-            return [], []
-        masks, bboxes = zip(*pairs)
-        return list(masks), list(bboxes)
-
-    def _estimate_apples_backproject(self, depth_mm, masks, bboxes, fx, fy, cx, cy):
-        """Back-project depth pixels to 3-D then fit a sphere with RANSAC."""
-        centers, radii, kept_bboxes = [], [], []
-        Hd, Wd = depth_mm.shape[:2]
-
-        for m, bbox in zip(masks, bboxes):
-            if m.shape != depth_mm.shape:
-                m = cv2.resize(m, (Wd, Hd), interpolation=cv2.INTER_NEAREST)
-
-            ys, xs = np.where(m > 0)
-            if xs.size == 0:
-                continue
-            z = depth_mm[ys, xs].astype(np.float32) / 1000.0
-            valid = z > 0
-            if not np.any(valid):
-                continue
-            xs, ys, z = xs[valid], ys[valid], z[valid]
-            if z.size < 50:
-                continue
-            if float(np.median(z)) > self.dist_max:
-                continue
-
-            X   = (xs - cx) * z / fx
-            Y   = (ys - cy) * z / fy
-            pts = np.column_stack((X, Y, z))
-
-            fitter = Sphere()
-            c, r, ok = fitter.fit(
-                pts,
-                thresh=self.ransac_thresh,
-                maxIteration=self.ransac_iters,
-                lower_rad_bound=self.rad_min,
-                upper_rad_bound=self.rad_max,
-            )
-            if ok is False or c is None or r is None \
-                    or not np.isfinite(c).all() or not np.isfinite(r):
-                continue
-
             centers.append(c)
             radii.append(float(r))
-            kept_bboxes.append(tuple(bbox))
+            kept.append(i)
+        return centers, radii, kept
 
-        return centers, radii, kept_bboxes
-
-    def _to_pose_array(self, centers_xyz, source_frame, target_frame):
-        """
-        Return the centers as a PoseArray in target_frame. If the TF lookup fails, return an empty PoseArray
-        (header.frame_id "") and log an error: poses in the camera frame must not go out labelled as target_frame.
-        """
-        pa  = PoseArray()
-        now = self.get_clock().now().to_msg()
-        pa.header.stamp = now
-        pa.header.frame_id = target_frame
-
-        # If source == target, skip the TF lookup entirely (common in presaved/offline mode).
-        skip_tf = (source_frame == target_frame)
+    def _to_pose_array(self, centers) -> PoseArray:
+        """Centers (source_frame) as a PoseArray in target_frame. TF failure: empty PoseArray, frame_id ""."""
+        pa = PoseArray()
+        pa.header.stamp = self.get_clock().now().to_msg()
+        pa.header.frame_id = self.target_frame
         tf = None
-
-        if not skip_tf:
+        if self.source_frame != self.target_frame:
             try:
-                tf = self.tf_buffer.lookup_transform(
-                    target_frame, source_frame,
-                    rclpy.time.Time(), timeout=Duration(seconds=1.0),
-                )
+                tf = self.tf_buffer.lookup_transform(self.target_frame, self.source_frame, rclpy.time.Time(),
+                                                     timeout=Duration(seconds=1.0))
             except Exception as e:
-                # Catch all exceptions (TransformException, LookupException, etc.) so the service still returns.
-                self.get_logger().error(
-                    f"TF lookup failed {source_frame}→{target_frame}: {type(e).__name__}: {e}. "
-                    f"Returning no apple poses ({len(centers_xyz)} detection(s) dropped)."
-                )
+                self.get_logger().error(f"TF {self.source_frame} -> {self.target_frame}: {e}. No apple poses.")
                 pa.header.frame_id = ""
                 return pa
-
-        for c in centers_xyz:
-            src = PoseStamped()
-            src.header.frame_id    = source_frame
-            src.header.stamp       = now
-            src.pose.position.x    = float(c[0])
-            src.pose.position.y    = float(c[1])
-            src.pose.position.z    = float(c[2])
-            src.pose.orientation.w = 1.0
-
-            if skip_tf:
-                pa.poses.append(src.pose)
-            else:
-                pa.poses.append(do_transform_pose_stamped(src, tf).pose)
-
+        for c in centers:
+            ps = PoseStamped()
+            ps.header.frame_id = self.source_frame
+            ps.pose.position.x, ps.pose.position.y, ps.pose.position.z = (float(v) for v in c)
+            ps.pose.orientation.w = 1.0
+            pa.poses.append(ps.pose if tf is None else do_transform_pose_stamped(ps, tf).pose)
         return pa
 
-    def _filter_by_x_range(self, poses_world: PoseArray, radii, bboxes, x_abs_max: float):
-        kept_indices = []
-        out = PoseArray()
-        out.header = poses_world.header
+    # ================================================================== output
 
-        for i, p in enumerate(poses_world.poses):
-            if abs(float(p.position.x)) <= x_abs_max:
-                kept_indices.append(i)
-                out.poses.append(p)
-
-        radii_f  = [radii[i]  for i in kept_indices] if radii  else []
-        bboxes_f = [bboxes[i] for i in kept_indices] if bboxes else []
-        return out, radii_f, bboxes_f, kept_indices
-
-    def _publish_markers(self, poses, radii, frame_id="world"):
-        arr = MarkerArray()
-        for i, pose in enumerate(poses.poses):
-            m = Marker()
-            m.header.frame_id = frame_id
-            m.header.stamp    = self.get_clock().now().to_msg()
-            m.id              = i
-            m.type            = Marker.SPHERE
-            m.action          = Marker.ADD
-            r = float(radii[i]) if i < len(radii) else 0.04
+    def _publish_results(self, color, poses, radii, boxes, labels, header):
+        """Apple markers and the annotated image."""
+        stamp = self.get_clock().now().to_msg()
+        markers = MarkerArray(markers=[Marker(action=Marker.DELETEALL)])
+        for i, (pose, r) in enumerate(zip(poses.poses, radii)):
+            m = Marker(id=i, type=Marker.SPHERE, action=Marker.ADD, pose=pose)
+            m.header.frame_id, m.header.stamp = self.target_frame, stamp
             m.scale.x = m.scale.y = m.scale.z = 2.0 * r
-            m.color.r = 1.0; m.color.a = 1.0
-            m.pose    = pose
-            arr.markers.append(m)
-        self.marker_pub.publish(arr)
+            m.color.r = m.color.a = 1.0
+            markers.markers.append(m)
+        self.marker_pub.publish(markers)
+
+        img = color.copy()
+        for (x1, y1, x2, y2), label in zip(boxes, labels):
+            cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            (tw, th), base = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+            cv2.rectangle(img, (x1, max(0, y1 - th - base - 6)), (x1 + tw + 8, y1), (0, 255, 0), -1)
+            cv2.putText(img, label, (x1 + 4, max(0, y1 - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1, cv2.LINE_AA)
+        msg = self.bridge.cv2_to_imgmsg(img, encoding="bgr8")
+        msg.header = header if header is not None else Header(stamp=stamp, frame_id=self.source_frame)
+        self.annotated_pub.publish(msg)
+
+    def _publish_pointcloud(self, color_bgr, depth, intr, publisher, frame_id, stamp):
+        """XYZRGB cloud of an RGB-D image (rgb field: (r << 16) | (g << 8) | b; depth up to prediction_distance_max)."""
+        H, W = color_bgr.shape[:2]
+        fx, fy, cx, cy = intr
+        rgbd = o3d.geometry.RGBDImage.create_from_color_and_depth(
+            o3d.geometry.Image(cv2.cvtColor(color_bgr, cv2.COLOR_BGR2RGB)),
+            o3d.geometry.Image(depth.astype(np.uint16)),
+            depth_scale=self.depth_scale, depth_trunc=self.dist_max, convert_rgb_to_intensity=False)
+        pcd = o3d.geometry.PointCloud.create_from_rgbd_image(
+            rgbd, o3d.camera.PinholeCameraIntrinsic(W, H, fx, fy, cx, cy))
+        pts = np.asarray(pcd.points)
+        rgb = (np.asarray(pcd.colors) * 255).astype(np.uint32)
+        cloud = np.zeros(len(pts), dtype=point_cloud2.dtype_from_fields(CLOUD_FIELDS))
+        cloud["x"], cloud["y"], cloud["z"] = pts[:, 0], pts[:, 1], pts[:, 2]
+        cloud["rgb"] = (rgb[:, 0] << 16) | (rgb[:, 1] << 8) | rgb[:, 2]
+        publisher.publish(point_cloud2.create_cloud(Header(stamp=stamp, frame_id=frame_id), CLOUD_FIELDS, cloud))
 
 
 def main():
     rclpy.init()
-    node = ApplePredictionNode()
-    from rclpy.executors import MultiThreadedExecutor
     executor = MultiThreadedExecutor(num_threads=4)
-    executor.add_node(node)
-    executor.spin()
-    executor.shutdown()
-    rclpy.shutdown()
+    executor.add_node(ApplePredictionNode())
+    try:
+        executor.spin()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        rclpy.try_shutdown()
 
 
 if __name__ == "__main__":

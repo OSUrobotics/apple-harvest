@@ -17,6 +17,8 @@
   <depend>tf2_ros</depend>
   <depend>harvest_interfaces</depend>
   <depend>tree_template_interfaces</depend>
+  <exec_depend>tree_template</exec_depend>
+  <exec_depend>harvest_vision</exec_depend>
   <depend>moveit_msgs</depend>
   <depend>sensor_msgs</depend>
   <depend>cv_bridge</depend>

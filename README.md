@@ -90,7 +90,7 @@ the `slam_trunks_*.yaml` of the same SLAM run.
    and the result of each method for each apple.
 
 Checks:
-- Before a trial session, run the geometry test of the datasets (orchard_tree_templating, no ROS needed):
+- Before a trial session, run the orchard_tree_templating tests (they include a geometry check of each dataset):
     ```bash
     cd src/orchard_tree_templating/tree_template && python3 -m pytest test/ -q
     ```

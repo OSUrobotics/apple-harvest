@@ -9,11 +9,10 @@ from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 
-# Templating vs voxelization reachability trial on presaved data (notes/templating_trial_plan.md).
+# Templating vs voxelization reachability trial on presaved data.
 #
-# trial_dir is one fast_slam_rgbd_extraction output folder: tree_*/meta.yaml, tree_*/mast_cam, tree_*/base_cam and
-# the slam_trunks_*.yaml of the same SLAM run. All the nodes read the images and the map from it, because the
-# tree ids are not the same between SLAM runs.
+# trial_dir: one fast_slam_rgbd_extraction folder (tree_*/ and the slam_trunks_*.yaml of the same SLAM run). All the
+# nodes read the images and the map from it (tree ids are different in each SLAM run).
 #
 # This launch starts:
 #   arm control and MoveIt          harvest_control arm_control_templating.launch.py (use_tree_scene:=false)
