@@ -1,7 +1,7 @@
 import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, GroupAction
 from launch.substitutions import EqualsSubstitution, IfElseSubstitution, LaunchConfiguration, TextSubstitution
 from launch.actions import IncludeLaunchDescription
 from launch_ros.actions import Node
@@ -57,7 +57,9 @@ def generate_launch_description():
     )
 
     return LaunchDescription(declared_arguments + [
-        IncludeLaunchDescription(
+        # Scoped group: the launch arguments of an include stay in the context after the include. Without the group,
+        # launch_rviz 'false' of the UR driver would also set launch_rviz for ur_moveit.launch.py (view_rviz).
+        GroupAction(scoped=True, actions=[IncludeLaunchDescription(
             PythonLaunchDescriptionSource(os.path.join(moveit_config, 'launch', 'ur_control_no_rsp.launch.py')),
             launch_arguments={
                 'ur_type': LaunchConfiguration('ur_type'),
@@ -70,7 +72,7 @@ def generate_launch_description():
                 'initial_joint_controller': initial_controller,
                 'controllers_file': os.path.join(moveit_config, 'config', 'ur_controllers.yaml'),
             }.items(),
-        ),
+        )]),
 
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(os.path.join(description, 'launch', 'robot_state_publisher.launch.py')),
