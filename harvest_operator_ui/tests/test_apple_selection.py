@@ -30,6 +30,10 @@ flow_namespace = {
     "HarvestAborted": HarvestAborted,
     "input": lambda prompt: "",
     "print": lambda *args, **kwargs: None,
+    # geometry_msgs stand-ins for the pre-saved apple locations branch
+    "Point": SimpleNamespace,
+    "Pose": SimpleNamespace,
+    "PoseArray": lambda: SimpleNamespace(poses=[]),
 }
 exec(compile(ast.Module(body=[flow_method], type_ignores=[]), str(script), "exec"), flow_namespace)
 run_full_batch_flow = flow_namespace["_run_full_batch_flow"]
@@ -106,6 +110,7 @@ class AppleSelectionTests(unittest.TestCase):
             enable_picking=False,
             manual_apple_selection=True,
             abort_recovery_mode="freedrive",
+            use_fake_hardware=False,
             use_optimal_trajectory=False,
             batch_dir="/tmp/batch_1/",
             batch_number=1,
@@ -154,6 +159,7 @@ class AppleSelectionTests(unittest.TestCase):
             enable_recording=False,
             manual_apple_selection=True,
             abort_recovery_mode="freedrive",
+            use_fake_hardware=False,
             batch_dir="/tmp/batch_1/",
             batch_number=1,
             prediction_topics=[],
@@ -175,6 +181,56 @@ class AppleSelectionTests(unittest.TestCase):
         self.assertEqual(prediction_calls, 2)
         self.assertEqual(len(scan_calls), 2)
         self.assertEqual(node.apple_selection.selectable_ids(), [0])
+
+    def test_fake_hardware_abort_ends_batch_without_freedrive_retry(self):
+        pose = SimpleNamespace(position=SimpleNamespace(x=1.0, y=2.0, z=3.0))
+        approaches = []
+        final_approach_count = 0
+
+        def run_stage(topics, prefix, **kwargs):
+            nonlocal final_approach_count
+            if prefix.endswith("final_approach_and_pick"):
+                final_approach_count += 1
+                raise HarvestAborted("first attempt")
+            if kwargs.get("action_fn"):
+                kwargs["action_fn"]()
+
+        node = SimpleNamespace(
+            enable_apple_prediction=False,
+            pre_saved_apple_locations=[[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]],
+            publish_apple_markers=lambda poses: None,
+            enable_recording=False,
+            enable_visual_servo=False,
+            enable_pressure_servo=True,
+            enable_picking=False,
+            manual_apple_selection=False,
+            abort_recovery_mode="freedrive",
+            use_fake_hardware=True,
+            use_optimal_trajectory=False,
+            batch_dir="/tmp/batch_1/",
+            batch_number=1,
+            pressure_servo_and_pick_controller_topics=[],
+            final_approach_and_pick_file_name_prefix="final_approach_and_pick",
+            PICK_PATTERN="sweep",
+            apple_selection=AppleSelection(),
+            get_logger=lambda: SimpleNamespace(
+                info=lambda message: None,
+                warn=lambda message: None,
+                error=lambda message: None,
+            ),
+            go_to_scan_position=lambda: None,
+            run_stage=run_stage,
+            _publish_available_apple_ids=lambda: None,
+            trigger_move_arm_to_pose=lambda target: approaches.append(target),
+            _raise_if_aborted=lambda stage: None,
+            grasp_controller_action=lambda: None,
+            release_controller=lambda: None,
+        )
+        run_full_batch_flow(node)
+        # The second apple is never attempted and freedrive selection is not enabled
+        self.assertEqual(final_approach_count, 1)
+        self.assertEqual(len(approaches), 1)
+        self.assertFalse(node.manual_apple_selection)
 
 
 if __name__ == "__main__":

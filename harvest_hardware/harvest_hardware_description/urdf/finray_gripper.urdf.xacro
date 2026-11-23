@@ -22,6 +22,74 @@
             </visual>
         </link>
 
+        <link name="gripper_scups_A_link">
+            <!-- <visual>
+                <geometry>
+                    <box size="0.01 0.01 0.01" />
+                </geometry>
+                <material name="green">
+                    <color rgba="0 1 0 1" />
+                </material>
+            </visual> -->
+        </link>
+        
+        <link name="gripper_scups_B_link">
+            <!-- <visual>
+                <geometry>
+                    <box size="0.01 0.01 0.01" />
+                </geometry>
+                <material name="green">
+                    <color rgba="0 1 0 1" />
+                </material>
+            </visual> -->
+        </link>
+
+        <link name="gripper_scups_C_link">
+            <!-- <visual>
+                <geometry>
+                    <box size="0.01 0.01 0.01" />
+                </geometry>
+                <material name="green">
+                    <color rgba="0 1 0 1" />
+                </material>
+            </visual> -->
+        </link>
+
+        <link name="gripper_tof">
+            <!-- <visual>
+                <geometry>
+                    <box size="0.01 0.01 0.01" />
+                </geometry>
+                <material name="green">
+                    <color rgba="0 1 0 1" />
+                </material>
+            </visual> -->
+        </link>
+
+        <joint name="gripper_scups_A_joint" type="fixed">
+            <parent link="gripper_link" />
+            <child link="gripper_scups_A_link" />
+            <origin xyz="0.012596 0.021817 0.27563" rpy="0 0.4537856 4.1887902" />
+        </joint>
+
+        <joint name="gripper_scups_B_joint" type="fixed">
+            <parent link="gripper_link" />
+            <child link="gripper_scups_B_link" />
+            <origin xyz="-0.024315 0.0 0.27563" rpy="0 0.4537856 0.0" />
+        </joint>
+
+        <joint name="gripper_scups_C_joint" type="fixed">
+            <parent link="gripper_link" />
+            <child link="gripper_scups_C_link" />
+            <origin xyz="0.012158 -0.021058 0.27563" rpy="0 0.4537856 -4.1887902" />
+        </joint>
+
+        <joint name="gripper_tof_joint" type="fixed">
+            <parent link="gripper_link" />
+            <child link="gripper_tof" />
+            <origin xyz="0.016983 0.0 0.252321" rpy="0 0 0" />
+        </joint>
+
 
         <joint name="finray_gripper_palm_camera_joint" type="fixed">
             <parent link="gripper_link" />
