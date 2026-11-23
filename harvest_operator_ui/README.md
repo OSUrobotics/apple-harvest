@@ -25,18 +25,28 @@ Offline PySide6 control application for the `apple-harvest` ROS 2 pipeline.
 
 ## Run
 
-The configured virtual environment already contains PySide6. From this directory:
+From this directory:
 
 ```bash
 ./run.sh
 ```
 
-`run.sh` activates the Fin Ray virtual environment, sources ROS Humble, and then sources the local apple-harvest, apple-gripper, and Fin Ray overlays before starting the UI. Paths can be overridden with `ROS_SETUP`, `HARVEST_VENV`, `APPLE_GRIPPER_WS`, and `FINRAY_WS` environment variables.
+`run.sh` sources ROS Jazzy and the `apple_harvest_ws` overlay, activates `apple_harvest_ws/.venv`, and puts the venv's site-packages on `PYTHONPATH` so ROS nodes launched by the UI (which use `#!/usr/bin/python3`) also see the venv packages. Paths can be overridden with `ROS_SETUP`, `APPLE_WS`, and `HARVEST_VENV`.
 
-If dependencies need to be installed on another machine, do so while internet access is available:
+### Creating the virtual environment
+
+The venv lives at the workspace root and uses `--system-site-packages` so `rclpy`, `cv_bridge`, and the apt numpy/scipy stay visible. numpy is pinned below 2 because the ROS Python bindings are built against numpy 1.x.
 
 ```bash
-python -m pip install -r requirements.txt
+cd ~/apple_harvest_ws
+python3 -m venv --system-site-packages .venv   # add --without-pip if python3-venv is not installed
+touch .venv/COLCON_IGNORE
+.venv/bin/python -m pip install --upgrade pip
+# CPU-only torch; use the matching CUDA index on machines with an NVIDIA GPU.
+.venv/bin/python -m pip install "numpy>=1.24,<2" torch torchvision \
+    --index-url https://download.pytorch.org/whl/cpu --extra-index-url https://pypi.org/simple
+.venv/bin/python -m pip install -r src/apple-harvest/harvest_operator_ui/requirements.txt
+.venv/bin/python -m pip install "setuptools>=68,<80"   # colcon-core requires setuptools<80
 ```
 
 ROS packages (`rclpy`, message types, `cv_bridge`, launch files, and DDS middleware) remain system/workspace dependencies and are not installed by pip.

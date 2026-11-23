@@ -95,6 +95,7 @@ def generate_launch_description():
             'prefix': LaunchConfiguration('prefix'),
             'use_sim_time': LaunchConfiguration('use_sim_time'),
             'gripper_type': LaunchConfiguration('gripper_type'),
+            'headless_mode': LaunchConfiguration('headless_mode'),
         }.items(),
     )
 

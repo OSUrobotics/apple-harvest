@@ -34,7 +34,8 @@ import rclpy
 from rclpy.node import Node
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 from std_srvs.srv import Trigger, Empty
-from std_msgs.msg import Bool, Float64, Int8
+from std_msgs.msg import Bool, Float64
+from moveit_msgs.msg import ServoStatus
 from sensor_msgs.msg import JointState
 from rcl_interfaces.msg import Parameter, ParameterValue, ParameterType
 from rcl_interfaces.srv import SetParameters
@@ -74,7 +75,7 @@ class TestSweep(Node):
         self.sweep_running = False
         self.create_subscription(Bool, '/sweep/status', self._status_cb, 10)
         self.create_subscription(Float64, '/sweep/tracking_error', self._error_cb, 10)
-        self.create_subscription(Int8, '/servo_node/status', self._servo_status_cb, 10)
+        self.create_subscription(ServoStatus, '/servo_node/status', self._servo_status_cb, 10)
         self.create_subscription(JointState, '/joint_states', self._joint_state_cb, 10)
         self._last_err = None
         self._last_servo_status = None
@@ -115,15 +116,15 @@ class TestSweep(Node):
         self._latest_joint_state = msg
 
     def _servo_status_cb(self, msg):
-        if msg.data != 0 and msg.data != self._last_servo_status:
-            name = SERVO_STATUS_NAMES.get(msg.data, f'UNKNOWN({msg.data})')
-            self.get_logger().warn(f'/servo_node/status -> {msg.data} ({name})')
+        if msg.code != 0 and msg.code != self._last_servo_status:
+            name = SERVO_STATUS_NAMES.get(msg.code, f'UNKNOWN({msg.code})')
+            self.get_logger().warn(f'/servo_node/status -> {msg.code} ({name})')
             if self._latest_joint_state is not None:
                 js = self._latest_joint_state
                 joints = ', '.join(
                     f'{n}={p:.3f}' for n, p in zip(js.name, js.position))
                 self.get_logger().warn(f'  joint_states at that instant: {joints}')
-        self._last_servo_status = msg.data
+        self._last_servo_status = msg.code
 
     def detect_active_trajectory_controller(self):
         result = self.call_service(self.list_controllers_client, ListControllers.Request())

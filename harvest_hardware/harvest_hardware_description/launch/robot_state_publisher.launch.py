@@ -19,9 +19,11 @@ def generate_launch_description():
         DeclareLaunchArgument('prefix', default_value=''),
         DeclareLaunchArgument('use_sim_time', default_value='false'),
         DeclareLaunchArgument('gripper_type', default_value='finray'),
+        DeclareLaunchArgument('headless_mode', default_value='false'),
     ]
 
-    # Build robot_description from your xacro
+    # Build robot_description from your xacro. On Jazzy the controller manager
+    # reads its hardware config from this topic, so the UR driver files must be here.
     robot_description = {
         'robot_description': ParameterValue(
             Command([
@@ -37,11 +39,17 @@ def generate_launch_description():
                 'prefix:=', LaunchConfiguration('prefix'), ' ',
                 'robot_ip:=', LaunchConfiguration('robot_ip'), ' ',
                 'use_fake_hardware:=', LaunchConfiguration('use_fake_hardware'), ' ',
-                'headless_mode:=false ',
+                'headless_mode:=', LaunchConfiguration('headless_mode'), ' ',
                 'fake_sensor_commands:=false ',
                 'sim_gazebo:=false ',
                 'sim_ignition:=false ',
-                'safety_limits:=false ',
+                'safety_limits:=true ',
+                'script_filename:=',
+                PathJoinSubstitution([FindPackageShare('ur_client_library'), 'resources', 'external_control.urscript']), ' ',
+                'input_recipe_filename:=',
+                PathJoinSubstitution([FindPackageShare('ur_robot_driver'), 'resources', 'rtde_input_recipe.txt']), ' ',
+                'output_recipe_filename:=',
+                PathJoinSubstitution([FindPackageShare('ur_robot_driver'), 'resources', 'rtde_output_recipe.txt']), ' ',
                 'tool_device_name:=/tmp/ttyUR ',
                 'gripper_type:=', LaunchConfiguration('gripper_type'), ' ',
             ]),

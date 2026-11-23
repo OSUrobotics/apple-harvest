@@ -15,10 +15,11 @@ try:
     from geometry_msgs.msg import WrenchStamped
     from gripper_interfaces.msg import CanStatusMsg
     from harvest_interfaces.srv import SetAppleTarget
+    from moveit_msgs.msg import ServoStatus
     from rclpy.executors import SingleThreadedExecutor
     from rclpy.qos import DurabilityPolicy, QoSProfile, qos_profile_sensor_data
     from sensor_msgs.msg import Image
-    from std_msgs.msg import Bool, Float32MultiArray, Int16MultiArray, Int32MultiArray, Int8
+    from std_msgs.msg import Bool, Float32MultiArray, Int16MultiArray, Int32MultiArray
     from std_srvs.srv import SetBool, Trigger
 
     ROS_AVAILABLE = True
@@ -145,7 +146,7 @@ class RosBridge(QObject):
                 self._node.create_subscription(Float32MultiArray, topics["gripper_imu"], self._imu_callback, qos_profile_sensor_data),
                 self._node.create_subscription(CanStatusMsg, topics["can_status"], self._can_status_callback, qos_profile_sensor_data),
                 self._node.create_subscription(WrenchStamped, topics["wrench"], self._wrench_callback, qos_profile_sensor_data),
-                self._node.create_subscription(Int8, topics["servo_status"], self._servo_callback, 10),
+                self._node.create_subscription(ServoStatus, topics["servo_status"], self._servo_callback, 10),
                 self._node.create_subscription(Bool, topics["freedrive_status"], self._freedrive_callback, 10),
             ]
         )
@@ -277,7 +278,7 @@ class RosBridge(QObject):
         )
 
     def _servo_callback(self, msg: Any) -> None:
-        self.servo_status_received.emit(int(msg.data), time.monotonic())
+        self.servo_status_received.emit(int(msg.code), time.monotonic())
 
     def _freedrive_callback(self, msg: Any) -> None:
         self.freedrive_status_received.emit(bool(msg.data), time.monotonic())

@@ -11,12 +11,14 @@
 
   <depend>rclpy</depend>
   <depend>moveit_servo</depend>
+  <depend>moveit_msgs</depend>
   <depend>moveit</depend>
   <depend>std_msgs</depend>
   <depend>std_srvs</depend>
   <depend>tf2_ros</depend>
   <depend>harvest_interfaces</depend>
   <depend>geometry_msgs</depend>
+  <depend>visualization_msgs</depend>
   <depend>moveit_ros_planning_interface</depend>
   <exec_depend>topic_tools</exec_depend>
 

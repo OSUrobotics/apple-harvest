@@ -31,10 +31,17 @@
 
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterFile, ParameterValue
-from launch_ros.substitutions import FindPackageShare
+from launch_ros.substitutions import FindPackagePrefix, FindPackageShare
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, OpaqueFunction, IncludeLaunchDescription
+from launch.actions import (
+    DeclareLaunchArgument,
+    ExecuteProcess,
+    IncludeLaunchDescription,
+    OpaqueFunction,
+    RegisterEventHandler,
+)
+from launch.event_handlers import OnProcessExit
 from launch.launch_description_sources import AnyLaunchDescriptionSource
 from launch.conditions import IfCondition, UnlessCondition
 from launch.substitutions import (
@@ -226,28 +233,18 @@ def launch_setup(context, *args, **kwargs):
         ]
     )
 
+    # Jazzy uses the generic ros2_control_node for real and mock hardware. The
+    # controller manager reads robot_description from the topic published by
+    # robot_state_publisher (started by the including launch file).
     control_node = Node(
         package="controller_manager",
         executable="ros2_control_node",
         parameters=[
-            robot_description,
             update_rate_config_file,
+            {"overruns.print_warnings": NotSubstitution(headless_mode)},
             ParameterFile(initial_joint_controllers, allow_substs=True),
         ],
         output="screen",
-        condition=IfCondition(use_fake_hardware),
-    )
-
-    ur_control_node = Node(
-        package="ur_robot_driver",
-        executable="ur_ros2_control_node",
-        parameters=[
-            robot_description,
-            update_rate_config_file,
-            ParameterFile(initial_joint_controllers, allow_substs=True),
-        ],
-        output="screen",
-        condition=UnlessCondition(use_fake_hardware),
     )
 
     dashboard_client_node = IncludeLaunchDescription(
@@ -276,19 +273,25 @@ def launch_setup(context, *args, **kwargs):
         ],
     )
 
-    tool_communication_node = Node(
-        package="ur_robot_driver",
-        condition=IfCondition(use_tool_communication),
-        executable="tool_communication.py",
+    tool_communication_node = ExecuteProcess(
         name="ur_tool_comm",
-        output="screen",
-        parameters=[
-            {
-                "robot_ip": robot_ip,
-                "tcp_port": tool_tcp_port,
-                "device_name": tool_device_name,
-            }
+        condition=IfCondition(use_tool_communication),
+        cmd=[
+            PathJoinSubstitution(
+                [
+                    FindPackagePrefix("ur_client_library"),
+                    "lib",
+                    "ur_client_library",
+                    "tool_communication.py",
+                ]
+            ),
+            robot_ip,
+            "--tcp-port",
+            tool_tcp_port,
+            "--device-name",
+            tool_device_name,
         ],
+        output="screen",
     )
 
     urscript_interface = Node(
@@ -345,8 +348,7 @@ def launch_setup(context, *args, **kwargs):
         output="screen",
         parameters=[
             {
-                "motion_controller_uri": f"/{initial_joint_controller.perform(context)}/follow_joint_trajectory",
-                "until_action_uri": "tool_contact_controller/detect_tool_contact",
+                "motion_controller": initial_joint_controller,
             },
         ],
     )
@@ -375,9 +377,12 @@ def launch_setup(context, *args, **kwargs):
         "tcp_pose_broadcaster",
         "ur_configuration_controller",
     ]
-    controllers_inactive = [
-        "scaled_joint_trajectory_controller",
+    # There is some issue with launching these after ur specific ones are launched. (Also JTC needs to be launched before SJTC since SJTC is a ur one)
+    trajectory_controllers = [
         "joint_trajectory_controller",
+        "scaled_joint_trajectory_controller",
+    ]
+    controllers_inactive = [
         "forward_velocity_controller",
         "forward_position_controller",
         "forward_effort_controller",
@@ -386,21 +391,38 @@ def launch_setup(context, *args, **kwargs):
         "freedrive_mode_controller",
         "tool_contact_controller",
     ]
-    if activate_joint_controller.perform(context) == "true":
-        controllers_active.append(initial_joint_controller.perform(context))
-        controllers_inactive.remove(initial_joint_controller.perform(context))
+    active_trajectory_controller = (
+        initial_joint_controller.perform(context)
+        if activate_joint_controller.perform(context) == "true"
+        else None
+    )
 
     if use_fake_hardware.perform(context) == "true":
         controllers_active.remove("tcp_pose_broadcaster")
 
-    controller_spawners = [
+    # spawn controllers in order due to ur conflict
+    spawner_chain = [
+        controller_spawner([c], active=(c == active_trajectory_controller))
+        for c in trajectory_controllers
+    ]
+    remaining_spawners = [
         controller_spawner(controllers_active),
         controller_spawner(controllers_inactive, active=False),
     ]
 
+    controller_spawners = [spawner_chain[0]]
+    for previous, following in zip(spawner_chain, spawner_chain[1:] + [None]):
+        controller_spawners.append(
+            RegisterEventHandler(
+                OnProcessExit(
+                    target_action=previous,
+                    on_exit=[following] if following is not None else remaining_spawners,
+                )
+            )
+        )
+
     nodes_to_start = [
         control_node,
-        ur_control_node,
         dashboard_client_node,
         robot_state_helper_node,
         tool_communication_node,

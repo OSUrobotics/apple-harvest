@@ -3,13 +3,13 @@
 #include "harvest_interfaces/srv/send_trajectory.hpp"
 #include "trajectory_msgs/msg/joint_trajectory.hpp"
 #include "trajectory_msgs/msg/joint_trajectory_point.hpp"
-#include <moveit/move_group_interface/move_group_interface.h>
-#include <moveit/planning_scene_interface/planning_scene_interface.h>
-#include <moveit/robot_trajectory/robot_trajectory.h>
+#include <moveit/move_group_interface/move_group_interface.hpp>
+#include <moveit/planning_scene_interface/planning_scene_interface.hpp>
+#include <moveit/robot_trajectory/robot_trajectory.hpp>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 #include <builtin_interfaces/msg/duration.hpp>
-#include <tf2_ros/transform_listener.h>
-#include <tf2_ros/buffer.h>
+#include <tf2_ros/transform_listener.hpp>
+#include <tf2_ros/buffer.hpp>
 #include <geometry_msgs/msg/transform_stamped.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include "std_srvs/srv/empty.hpp"
@@ -235,14 +235,14 @@ void MoveArmNode::move_to_pose(const std::shared_ptr<harvest_interfaces::srv::Mo
         std_msgs::msg::Float32MultiArray reverse_traj;
         reverse_traj.layout.dim.resize(2);
         reverse_traj.layout.dim[0].label = "waypoints";
-        reverse_traj.layout.dim[0].size = goal.trajectory_.joint_trajectory.points.size();
-        reverse_traj.layout.dim[0].stride = goal.trajectory_.joint_trajectory.points.size() * goal.trajectory_.joint_trajectory.joint_names.size();
+        reverse_traj.layout.dim[0].size = goal.trajectory.joint_trajectory.points.size();
+        reverse_traj.layout.dim[0].stride = goal.trajectory.joint_trajectory.points.size() * goal.trajectory.joint_trajectory.joint_names.size();
         reverse_traj.layout.dim[1].label = "joints";
-        reverse_traj.layout.dim[1].size = goal.trajectory_.joint_trajectory.joint_names.size();
-        reverse_traj.layout.dim[1].stride = goal.trajectory_.joint_trajectory.joint_names.size();
+        reverse_traj.layout.dim[1].size = goal.trajectory.joint_trajectory.joint_names.size();
+        reverse_traj.layout.dim[1].stride = goal.trajectory.joint_trajectory.joint_names.size();
 
         
-        for (auto it = goal.trajectory_.joint_trajectory.points.rbegin(); it != goal.trajectory_.joint_trajectory.points.rend(); ++it)
+        for (auto it = goal.trajectory.joint_trajectory.points.rbegin(); it != goal.trajectory.joint_trajectory.points.rend(); ++it)
         {
             for (double position : it->positions)
             {
@@ -349,7 +349,7 @@ void MoveArmNode::execute_trajectory(const std::shared_ptr<harvest_interfaces::s
     robot_trajectory.joint_trajectory = joint_trajectory;
 
     moveit::planning_interface::MoveGroupInterface::Plan plan;
-    plan.trajectory_ = robot_trajectory;
+    plan.trajectory = robot_trajectory;
 
     // Plan and execute the trajectory
     bool plan_success = static_cast<bool>(move_group_->execute(plan));

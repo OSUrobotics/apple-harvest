@@ -81,7 +81,8 @@ class LocalPlanner(Node):
         ### Image Processing
         self.br = CvBridge()
         self.model = YOLO(self.model_path)  # pretrained YOLOv8n model
-        self.model.model = torch.compile(self.model.model)
+        if torch.cuda.is_available():
+            self.model.model = torch.compile(self.model.model)
 
         ### Tf2
         self.tf_buffer = Buffer()

@@ -501,13 +501,15 @@ class ApplePredictionNode(Node):
 
     def _presaved_ransac_sphere(self, pts):
         sph = Sphere()
-        center, radius, _ = sph.fit(
+        center, radius, inliers = sph.fit(
             pts,
             thresh=self.ransac_thresh,
             maxIteration=self.ransac_iters,
             lower_rad_bound=self.rad_min,
             upper_rad_bound=self.rad_max,
         )
+        if len(inliers) == 0 or len(center) != 3:
+            return None, None
         return center, radius
 
     def _presaved_publish_images(self):
@@ -721,14 +723,16 @@ class ApplePredictionNode(Node):
             pts = np.column_stack((X, Y, z))
 
             fitter = Sphere()
-            c, r, ok = fitter.fit(
+            c, r, inliers = fitter.fit(
                 pts,
                 thresh=self.ransac_thresh,
                 maxIteration=self.ransac_iters,
                 lower_rad_bound=self.rad_min,
                 upper_rad_bound=self.rad_max,
             )
-            if ok is False or c is None or r is None \
+            # Sphere.fit returns an empty center and no inliers when no
+            # candidate sphere fell inside the radius bounds.
+            if len(inliers) == 0 or len(c) != 3 \
                     or not np.isfinite(c).all() or not np.isfinite(r):
                 continue
 

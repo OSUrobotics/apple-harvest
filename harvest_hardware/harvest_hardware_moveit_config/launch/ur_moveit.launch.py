@@ -92,30 +92,24 @@ def _launch_setup(context):
         )
     }
 
-    if use_fake:
-        adapter_chain = (
-            "default_planner_request_adapters/ResolveConstraintFrames "
-            "default_planner_request_adapters/FixWorkspaceBounds "
-            "default_planner_request_adapters/FixStartStateBounds "
-            "default_planner_request_adapters/FixStartStateCollision "
-            "default_planner_request_adapters/FixStartStatePathConstraints "
-            "default_planner_request_adapters/AddTimeOptimalParameterization"
-        )
-    else:
-        adapter_chain = (
-            "default_planner_request_adapters/ResolveConstraintFrames "
-            "default_planner_request_adapters/FixWorkspaceBounds "
-            "default_planner_request_adapters/FixStartStateBounds "
-            "default_planner_request_adapters/FixStartStateCollision "
-            "default_planner_request_adapters/FixStartStatePathConstraints "
-            # "default_planner_request_adapters/AddRuckigTrajectorySmoothing"
-            "default_planner_request_adapters/AddTimeOptimalParameterization"
-        )
+    request_adapters = [
+        "default_planning_request_adapters/ResolveConstraintFrames",
+        "default_planning_request_adapters/ValidateWorkspaceBounds",
+        "default_planning_request_adapters/CheckStartStateBounds",
+        "default_planning_request_adapters/CheckStartStateCollision",
+    ]
+    response_adapters = [
+        # "default_planning_response_adapters/AddRuckigTrajectorySmoothing",
+        "default_planning_response_adapters/AddTimeOptimalParameterization",
+        "default_planning_response_adapters/ValidateSolution",
+        "default_planning_response_adapters/DisplayMotionPath",
+    ]
 
     ompl_yaml = {"ompl": load_yaml("harvest_hardware_moveit_config", "config/ompl_planning.yaml")}
     ompl_yaml["ompl"].update({
-        "planning_plugin": "ompl_interface/OMPLPlanner",
-        "request_adapters": adapter_chain,
+        "planning_plugins": ["ompl_interface/OMPLPlanner"],
+        "request_adapters": request_adapters,
+        "response_adapters": response_adapters,
         "start_state_max_bounds_error": 0.1,
         "simplify_solutions": False,
     })
@@ -179,7 +173,7 @@ def _launch_setup(context):
     servo_node = Node(
         package="moveit_servo",
         condition=IfCondition(launch_servo),
-        executable="servo_node_main",
+        executable="servo_node",
         parameters=[
             servo_params,
             robot_description,

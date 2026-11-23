@@ -41,10 +41,13 @@ from rclpy.action import ActionClient
 from rcl_interfaces.msg import Parameter, ParameterValue, ParameterType
 from rcl_interfaces.srv import SetParameters
 from std_srvs.srv import SetBool, Trigger, Empty
-from std_msgs.msg import Int8, Bool, Float32, Float64, Int32MultiArray
+from std_msgs.msg import Bool, Float32, Float64, Int32MultiArray
 from geometry_msgs.msg import Point, Pose, PoseArray
+from visualization_msgs.msg import Marker, MarkerArray
 from harvest_interfaces.srv import ApplePrediction, CoordinateToTrajectory, SendTrajectory, RecordTopics, GetGripperPose, SetValue, MoveToPose, SetAppleTarget
-from controller_manager_msgs.srv import SwitchController
+from controller_manager_msgs.srv import ListControllers, SwitchController
+from moveit_msgs.msg import ServoStatus
+from moveit_msgs.srv import ServoCommandType
 from harvest_interfaces.action import EventDetection
 
 # TEMPLATE: action interfaces that don't exist yet, see module docstring.
@@ -68,6 +71,7 @@ import numpy as np
 import os
 import signal
 import subprocess
+import sys
 import yaml
 import re
 from threading import Condition
@@ -77,9 +81,17 @@ from pathlib import Path
 
 
 class ControllerState(str, Enum):
-    TRAJECTORY = "scaled_joint_trajectory_controller"
-    SERVO = "forward_position_controller"
-    FREEDRIVE = "freedrive_mode_controller"
+    TRAJECTORY = "trajectory"
+    SERVO = "servo"
+    FREEDRIVE = "freedrive"
+
+
+# Real hardware runs scaled_joint_trajectory_controller, fake hardware runs
+# joint_trajectory_controller -- the active one is detected at startup (see
+# _sync_controller_state) unless the 'trajectory_controller' param is set.
+TRAJECTORY_CONTROLLERS = ("scaled_joint_trajectory_controller", "joint_trajectory_controller")
+SERVO_CONTROLLER = "forward_position_controller"
+FREEDRIVE_CONTROLLER = "freedrive_mode_controller"
 
 
 # freedrive_mode_controller drops back out of freedrive if it doesn't see a
@@ -87,6 +99,11 @@ class ControllerState(str, Enum):
 # has been confirmed to keep it engaged reliably.
 FREEDRIVE_ENABLE_TOPIC = '/freedrive_mode_controller/enable_freedrive_mode'
 FREEDRIVE_PUBLISH_RATE_HZ = 2.0
+
+# Pre-saved apple locations are recorded via get_gripper_pose, which reports
+# in amiga__base -- the same frame apple_prediction publishes its markers in.
+APPLE_MARKER_FRAME = 'amiga__base'
+APPLE_MARKER_DEFAULT_RADIUS = 0.04
 
 
 def get_data_storage_dir():
@@ -100,15 +117,15 @@ def get_data_storage_dir():
 
 
 class ServoStatusCode:
-    """Mirrors moveit_servo::StatusCode (moveit_servo/status_codes.h)."""
-    INVALID = -1
-    NO_WARNING = 0
-    DECELERATE_FOR_APPROACHING_SINGULARITY = 1
-    HALT_FOR_SINGULARITY = 2
-    DECELERATE_FOR_COLLISION = 3
-    HALT_FOR_COLLISION = 4
-    JOINT_BOUND = 5
-    DECELERATE_FOR_LEAVING_SINGULARITY = 6
+    """Mirrors moveit_servo::StatusCode via moveit_msgs/msg/ServoStatus (Jazzy numbering)."""
+    INVALID = ServoStatus.INVALID
+    NO_WARNING = ServoStatus.NO_WARNING
+    DECELERATE_FOR_APPROACHING_SINGULARITY = ServoStatus.DECELERATE_FOR_APPROACHING_SINGULARITY
+    HALT_FOR_SINGULARITY = ServoStatus.HALT_FOR_SINGULARITY
+    DECELERATE_FOR_LEAVING_SINGULARITY = ServoStatus.DECELERATE_FOR_LEAVING_SINGULARITY
+    DECELERATE_FOR_COLLISION = ServoStatus.DECELERATE_FOR_COLLISION
+    HALT_FOR_COLLISION = ServoStatus.HALT_FOR_COLLISION
+    JOINT_BOUND = ServoStatus.JOINT_BOUND
 
 
 class HarvestAborted(Exception):
@@ -188,8 +205,14 @@ class StartHarvestAbort(Node):
         # pending service/action call on cb_group.
         self.status_cb_group = ReentrantCallbackGroup()
 
-        # Track ros2 control controller type
+        # Track ros2 control controller type. Assumed until _sync_controller_state
+        # reads the real state from the controller_manager in start().
         self.controller_state = ControllerState.TRAJECTORY
+        self.controller_names = {
+            ControllerState.TRAJECTORY: TRAJECTORY_CONTROLLERS[0],
+            ControllerState.SERVO: SERVO_CONTROLLER,
+            ControllerState.FREEDRIVE: FREEDRIVE_CONTROLLER,
+        }
         self._controller_switch_lock = threading.RLock()
         self._motion_lock = threading.RLock()
         self._motion_depth = 0
@@ -227,6 +250,13 @@ class StartHarvestAbort(Node):
         self.declare_parameter('servo_status_topic', '/servo_node/status')
         self.declare_parameter('abort_on_decelerate', False)
         self.declare_parameter('abort_recovery', 'freedrive')  # 'freedrive' or 'home'
+        # '' = use whichever of TRAJECTORY_CONTROLLERS is active at startup
+        self.declare_parameter('trajectory_controller', '')
+        # Fake hardware: no freedrive, and any abort or stage failure ends the
+        # run instead of recovering (abort_recovery is ignored).
+        self.declare_parameter('use_fake_hardware', False)
+        # Directory holding apple_locations.csv, used when apple prediction is off
+        self.declare_parameter('apple_locations_dir', '~/apple_harvest_data')
 
         self.org_pick_pattern = self.get_parameter('pick_pattern').get_parameter_value().string_value
         self.EVENT_SENSITIVITY = self.get_parameter('event_sensitivity').get_parameter_value().double_value
@@ -244,17 +274,29 @@ class StartHarvestAbort(Node):
         self.freedrive_mode = self.get_parameter('freedrive').get_parameter_value().bool_value
         self.abort_on_decelerate = self.get_parameter('abort_on_decelerate').get_parameter_value().bool_value
         self.abort_recovery_mode = self.get_parameter('abort_recovery').get_parameter_value().string_value
+        self.trajectory_controller_param = self.get_parameter('trajectory_controller').get_parameter_value().string_value
+        self.use_fake_hardware = self.get_parameter('use_fake_hardware').get_parameter_value().bool_value
+        self.run_failed = False
+        if self.use_fake_hardware:
+            if self.freedrive_mode:
+                raise ValueError('freedrive:=true is not available with use_fake_hardware:=true')
+            self.get_logger().info('Fake hardware: freedrive disabled; aborts and stage failures end the run')
         self.PICK_PATTERN = self.org_pick_pattern
 
         if not self.freedrive_mode and not self.enable_apple_prediction:
-            apple_loc_path = "/home/jn2/college/data/apple_locations"
+            apple_loc_path = os.path.expanduser(
+                self.get_parameter('apple_locations_dir').get_parameter_value().string_value)
             self.pre_saved_apple_locations = self.read_apple_locations(apple_loc_path)
+            # Stand in for apple_prediction's markers when it isn't running
+            self.apple_marker_pub = self.create_publisher(MarkerArray, 'apple_markers', 10)
 
 
         # Helper clients
         self.switch_controller_client = self.make_client(SwitchController, '/controller_manager/switch_controller')
-        self.start_servo_client = self.make_client(Trigger, '/servo_node/start_servo')
-        self.configure_servo_cli = self.make_client(SetParameters, '/servo_node/set_parameters')
+        self.list_controllers_client = self.make_client(ListControllers, '/controller_manager/list_controllers')
+        self.pause_servo_client = self.make_client(SetBool, '/servo_node/pause_servo')
+        self.servo_command_type_client = self.make_client(ServoCommandType, '/servo_node/switch_command_type')
+        # self.configure_servo_cli = self.make_client(SetParameters, '/servo_node/set_parameters')
         self.start_move_arm_to_home_client = self.make_client(Trigger, '/move_arm_to_home')
         self.trigger_move_arm_to_config_client = self.make_client(Trigger, 'move_arm_to_config')
         self.coord_to_traj_client = self.make_client(CoordinateToTrajectory, 'coordinate_to_trajectory')
@@ -300,7 +342,7 @@ class StartHarvestAbort(Node):
         self.last_servo_status = ServoStatusCode.NO_WARNING
         servo_status_topic = self.get_parameter('servo_status_topic').get_parameter_value().string_value
         self.servo_status_sub = self.create_subscription(
-            Int8, servo_status_topic, self._servo_status_cb, 10,
+            ServoStatus, servo_status_topic, self._servo_status_cb, 10,
             callback_group=self.status_cb_group,
         )
         # Manual abort service 
@@ -408,6 +450,22 @@ class StartHarvestAbort(Node):
             data = data[np.newaxis, :]
         return data
 
+    def publish_apple_markers(self, apple_poses):
+        # Matches apple_prediction._publish_markers so RViz/bags look the same
+        arr = MarkerArray()
+        for i, pose in enumerate(apple_poses.poses):
+            m = Marker()
+            m.header.frame_id = APPLE_MARKER_FRAME
+            m.header.stamp = self.get_clock().now().to_msg()
+            m.id = i
+            m.type = Marker.SPHERE
+            m.action = Marker.ADD
+            m.scale.x = m.scale.y = m.scale.z = 2.0 * APPLE_MARKER_DEFAULT_RADIUS
+            m.color.r = 1.0; m.color.a = 1.0
+            m.pose = pose
+            arr.markers.append(m)
+        self.apple_marker_pub.publish(arr)
+
     def get_current_gripper_pose(self):
         request = GetGripperPose.Request()
         future = self.get_gripper_pose_client.call_async(request)
@@ -433,12 +491,12 @@ class StartHarvestAbort(Node):
 
     # Abort monitor
     def _servo_status_cb(self, msg):
-        self.last_servo_status = msg.data
+        self.last_servo_status = msg.code
         abort_codes = {ServoStatusCode.HALT_FOR_SINGULARITY, ServoStatusCode.HALT_FOR_COLLISION, ServoStatusCode.JOINT_BOUND}
         if self.abort_on_decelerate:
             abort_codes |= {ServoStatusCode.DECELERATE_FOR_COLLISION, ServoStatusCode.DECELERATE_FOR_APPROACHING_SINGULARITY}
-        if msg.data in abort_codes and not self.abort_event.is_set():
-            self.get_logger().error(f"servo status={msg.data}: aborting current stage")
+        if msg.code in abort_codes and not self.abort_event.is_set():
+            self.get_logger().error(f"servo status={msg.code} ({msg.message}): aborting current stage")
             self.abort_event.set()
 
     def _abort_service_cb(self, request, response):
@@ -486,6 +544,10 @@ class StartHarvestAbort(Node):
         return None
 
     def _freedrive_service_cb(self, request, response):
+        if self.use_fake_hardware:
+            response.success = False
+            response.message = "Freedrive is disabled with fake hardware"
+            return response
         target = "freedrive" if request.data else "trajectory"
         with self._motion_lock:
             if request.data:
@@ -513,7 +575,7 @@ class StartHarvestAbort(Node):
         )
         response.success = already_active or bool(result is not None and result.ok)
         response.message = (
-            f"{self.controller_state.value} active"
+            f"{self.controller_names[self.controller_state]} active"
             if response.success
             else f"Failed to activate {target} controller"
         )
@@ -529,9 +591,14 @@ class StartHarvestAbort(Node):
         if self.enable_recording:
             self.stop_recording()
 
+        self.pause_servo(pause=True)
         self.switch_controller(servo=False)
 
-        if self.abort_recovery_mode == 'freedrive':
+        if self.use_fake_hardware:
+            # Nothing physical to recover -- the caller ends the run.
+            self.run_failed = True
+            self.get_logger().warn("Fake hardware: skipping recovery, ending the run")
+        elif self.abort_recovery_mode == 'freedrive':
             self.get_logger().warn("Switching to freedrive_mode_controller for manual recovery")
             self.switch_free_drive_controller(controller="freedrive")
         else:
@@ -540,6 +607,14 @@ class StartHarvestAbort(Node):
             # self.go_to_home()
 
         self.abort_event.clear()
+
+    def _stage_failed(self, message):
+        """Log a stage failure. With fake hardware this also triggers an abort,
+        so the run stops instead of carrying on past it; on real hardware the
+        operator decides, as before."""
+        self.get_logger().error(message)
+        if self.use_fake_hardware:
+            self.abort_event.set()
 
     def _raise_if_aborted(self, stage_name):
         if self.abort_event.is_set():
@@ -596,6 +671,42 @@ class StartHarvestAbort(Node):
     # ------------------------------------------------------------------
     # Controller switching
     # ------------------------------------------------------------------
+    def _sync_controller_state(self):
+        """Pick the trajectory controller name and the starting controller_state
+        from what the controller_manager actually has active, instead of
+        assuming the real-hardware setup. Needs the executor spinning, so it is
+        called from start() rather than __init__."""
+        future = self.list_controllers_client.call_async(ListControllers.Request())
+        self._wait_for_future(future)
+        result = future.result()
+        if result is None:
+            self.get_logger().error('Failed to call /controller_manager/list_controllers; '
+                                    'keeping assumed controller state')
+            return
+        active = {c.name for c in result.controller if c.state == 'active'}
+
+        with self._controller_switch_lock:
+            trajectory_controller = self.trajectory_controller_param or next(
+                (name for name in TRAJECTORY_CONTROLLERS if name in active), None)
+            if trajectory_controller is None:
+                trajectory_controller = TRAJECTORY_CONTROLLERS[0]
+                self.get_logger().warn(
+                    f'No trajectory controller active; assuming {trajectory_controller}. '
+                    f'Set the trajectory_controller param if this is wrong.')
+            self.controller_names[ControllerState.TRAJECTORY] = trajectory_controller
+
+            if FREEDRIVE_CONTROLLER in active:
+                self.controller_state = ControllerState.FREEDRIVE
+                self._start_freedrive_heartbeat()
+            elif SERVO_CONTROLLER in active:
+                self.controller_state = ControllerState.SERVO
+            else:
+                self.controller_state = ControllerState.TRAJECTORY
+
+        self.get_logger().info(
+            f'Trajectory controller: {trajectory_controller}; '
+            f'active: {self.controller_names[self.controller_state]}')
+
     def switch_controller(self, servo=False, sim=False):
         del sim  # Retained for compatibility with the older call signature.
         return self.switch_free_drive_controller(controller="servo" if servo else "trajectory")
@@ -627,16 +738,18 @@ class StartHarvestAbort(Node):
         }[controller]
 
         with self._controller_switch_lock:
+            target_name = self.controller_names[target_state]
             if target_state == self.controller_state:
-                self.get_logger().info(f'{target_state.value} already active, skipping switch')
+                self.get_logger().info(f'{target_name} already active, skipping switch')
                 return None
 
             # Deactivate whatever is actually tracked as active, including
             # freedrive, before activating the requested controller.
             previous_state = self.controller_state
+            previous_name = self.controller_names[previous_state]
             request = SwitchController.Request()
-            request.deactivate_controllers = [previous_state.value]
-            request.activate_controllers = [target_state.value]
+            request.deactivate_controllers = [previous_name]
+            request.activate_controllers = [target_name]
             request.timeout = rclpy.duration.Duration(seconds=5.0).to_msg()
             request.strictness = SwitchController.Request.BEST_EFFORT
             future = self.switch_controller_client.call_async(request)
@@ -650,7 +763,7 @@ class StartHarvestAbort(Node):
                 elif previous_state == ControllerState.FREEDRIVE:
                     self._stop_freedrive_heartbeat()
             else:
-                self.get_logger().error(f'Failed to switch from {previous_state.value} to {target_state.value}')
+                self._stage_failed(f'Failed to switch from {previous_name} to {target_name}')
 
             return result
 
@@ -672,18 +785,27 @@ class StartHarvestAbort(Node):
                 if self._motion_depth == 0:
                     self._motion_label = None
 
-    def start_servo(self):
-        future = self.start_servo_client.call_async(Trigger.Request())
+    def pause_servo(self, pause=True):
+        if not pause:
+            # Jazzy moveit_servo drops all input until a command type is set.
+            future = self.servo_command_type_client.call_async(
+                ServoCommandType.Request(command_type=ServoCommandType.Request.TWIST))
+            self._wait_for_future(future)
+            if not (future.result() and future.result().success):
+                self.get_logger().error('Failed to switch MoveIt Servo to TWIST commands')
+        future = self.pause_servo_client.call_async(SetBool.Request(data=pause))
         self._wait_for_future(future)
         return future.result()
 
-    def configure_servo(self, frame):
-        # "base_link" for base frame, "tool0" for tool frame
-        req = SetParameters.Request()
-        new_param_value = ParameterValue(type=ParameterType.PARAMETER_STRING, string_value=frame)
-        req.parameters = [Parameter(name='moveit_servo.robot_link_command_frame', value=new_param_value)]
-        future = self.configure_servo_cli.call_async(req)
-        self._wait_for_future(future)
+    # Disabled for Jazzy: the new moveit_servo has no robot_link_command_frame
+    # parameter; the command frame comes from each twist's header.frame_id.
+    # def configure_servo(self, frame):
+    #     # "base_link" for base frame, "tool0" for tool frame
+    #     req = SetParameters.Request()
+    #     new_param_value = ParameterValue(type=ParameterType.PARAMETER_STRING, string_value=frame)
+    #     req.parameters = [Parameter(name='moveit_servo.robot_link_command_frame', value=new_param_value)]
+    #     future = self.configure_servo_cli.call_async(req)
+    #     self._wait_for_future(future)
 
     # ------------------------------------------------------------------
     # Arm motion helpers
@@ -698,6 +820,8 @@ class StartHarvestAbort(Node):
         with self._motion_activity("move arm to scan position"):
             future = self.trigger_move_arm_to_config_client.call_async(Trigger.Request())
             self._wait_for_future(future)
+            if not (future.result() and future.result().success):
+                self._stage_failed('Failed to move arm to scan position')
             return future.result()
 
     def start_apple_prediction(self):
@@ -714,6 +838,8 @@ class StartHarvestAbort(Node):
         request.coordinate = coord
         future = self.coord_to_traj_client.call_async(request)
         self._wait_for_future(future)
+        if not future.result().success:
+            self._stage_failed('No preplanned trajectory found for apple coordinate')
         return future.result().waypoints
 
     def trigger_arm_mover(self, trajectory):
@@ -722,6 +848,8 @@ class StartHarvestAbort(Node):
             request.waypoints = trajectory
             future = self.trigger_arm_mover_client.call_async(request)
             self._wait_for_future(future)
+            if not (future.result() and future.result().success):
+                self._stage_failed('Failed to execute approach trajectory')
             return future.result()
 
     def trigger_move_arm_to_pose(self, apple_pose):
@@ -732,6 +860,8 @@ class StartHarvestAbort(Node):
             request.position.y = request.position.y - 0.3
             future = self.trigger_move_arm_to_pose_client.call_async(request)
             self._wait_for_future(future)
+            if not (future.result() and future.result().result):
+                self._stage_failed('Failed to plan/execute move to apple pose')
             return future.result()
 
     def configure_controller(self):
@@ -769,7 +899,7 @@ class StartHarvestAbort(Node):
 
     def _run_cancelable_action(self, client, goal_msg, label):
         if client is None:
-            self.get_logger().error(f"{label} action client unavailable (interface not implemented yet) -- skipping stage")
+            self._stage_failed(f"{label} action client unavailable (interface not implemented yet) -- skipping stage")
             return None
 
         client.wait_for_server()
@@ -777,7 +907,7 @@ class StartHarvestAbort(Node):
         self._wait_for_future(send_goal_future)
         goal_handle = send_goal_future.result()
         if goal_handle is None or not goal_handle.accepted:
-            self.get_logger().error(f"{label} goal rejected")
+            self._stage_failed(f"{label} goal rejected")
             return None
 
         with self._goal_lock:
@@ -796,7 +926,11 @@ class StartHarvestAbort(Node):
         with self._goal_lock:
             self.current_goal_handle = None
 
-        return result_future.result().result if result_future.done() else None
+        result = result_future.result().result if result_future.done() else None
+        # A cancelled goal also reports success=False -- only flag real failures.
+        if result is not None and not result.success and not self.abort_event.is_set():
+            self._stage_failed(f"{label} failed: {result.message}")
+        return result
 
     def visual_servo_action(self):
         goal = VisualServo.Goal() if VisualServo else None
@@ -818,7 +952,7 @@ class StartHarvestAbort(Node):
             return self._run_sweep_pick()
 
         if PickControl is None:
-            self.get_logger().error("PickController action client unavailable (interface not implemented yet) -- skipping stage")
+            self._stage_failed("PickController action client unavailable (interface not implemented yet) -- skipping stage")
             return None
         self.configure_controller()
         goal = PickControl.Goal()
@@ -841,7 +975,7 @@ class StartHarvestAbort(Node):
         self._wait_for_future(start_future)
 
         if not start_future.result().success:
-            self.get_logger().error(f"sweep failed to start: {start_future.result().message}")
+            self._stage_failed(f"sweep failed to start: {start_future.result().message}")
         else:
             while not self.sweep_running and not self.abort_event.is_set():
                 time.sleep(0.02)
@@ -899,12 +1033,15 @@ class StartHarvestAbort(Node):
             if self.enable_recording:
                 self.start_recording(topics, prefix)
                 time.sleep(self.recording_startup_delay)
-
-            self.switch_controller(servo=use_servo)
             if use_servo:
-                self.start_servo()
-            if servo_frame:
-                self.configure_servo(servo_frame)
+                self.switch_controller(servo=use_servo)
+                self.pause_servo(pause=not use_servo)
+            else:
+                self.pause_servo(pause=not use_servo)
+                self.switch_controller(servo=use_servo)
+
+            # if servo_frame:
+            #     self.configure_servo(servo_frame)
             if action_fn:
                 action_fn()
 
@@ -912,7 +1049,13 @@ class StartHarvestAbort(Node):
                 self.handle_abort()
                 raise HarvestAborted(stage_name)
 
-            self.switch_controller(servo=not use_servo)
+            if use_servo:
+                self.pause_servo(pause=use_servo)
+                self.switch_controller(servo= not use_servo)
+            else:
+                self.switch_controller(servo= not use_servo)
+                self.pause_servo(pause=use_servo)
+
             if self.enable_recording:
                 self.stop_recording()
 
@@ -941,7 +1084,7 @@ class StartHarvestAbort(Node):
             input('Done with approach, hit enter to start pressure servoing and pick controller')
 
             def pick_action():
-                self.configure_servo('tool0')
+                # self.configure_servo('tool0')
                 if self.enable_pressure_servo:
                     self.grasp_controller_action()
                 if self.enable_picking:
@@ -958,9 +1101,9 @@ class StartHarvestAbort(Node):
             )
 
             original_pick_pattern = self.PICK_PATTERN
-            self.configure_servo('base_link')
+            # self.configure_servo('base_link')
             def pull_back_action():
-                self.configure_servo('base_link')
+                # self.configure_servo('base_link')
                 if self.enable_picking:
                     self.PICK_PATTERN = 'linear-pull'
                     self.pick_controller_action()
@@ -1033,7 +1176,7 @@ class StartHarvestAbort(Node):
                     self.switch_controller(servo=False)
                 except HarvestAborted:
                     self.get_logger().error('Aborted during apple prediction')
-                    if self.abort_recovery_mode != 'freedrive':
+                    if self.use_fake_hardware or self.abort_recovery_mode != 'freedrive':
                         self.get_logger().error('Ending batch early')
                         return
                     input('Arm is in freedrive. Reposition it, then hit enter to repeat the scan and prediction: ')
@@ -1053,6 +1196,7 @@ class StartHarvestAbort(Node):
                 Pose(position=Point(x=row[0], y=row[1], z=row[2]))
                 for row in self.pre_saved_apple_locations
             ]
+            self.publish_apple_markers(apple_poses)
         self.apple_coordinates = {
             f'apple_{i + 1}': [p.position.x, p.position.y, p.position.z]
             for i, p in enumerate(apple_poses.poses)
@@ -1106,7 +1250,7 @@ class StartHarvestAbort(Node):
                             self.grasp_controller_action()
                         if self.enable_picking:
                             self.pick_controller_action()
-                        self.configure_servo('tool0')
+                        # self.configure_servo('tool0')
 
                     self.run_stage(
                         self.pressure_servo_and_pick_controller_topics,
@@ -1122,7 +1266,7 @@ class StartHarvestAbort(Node):
                     if self.enable_picking:
                         self.PICK_PATTERN = 'linear-pull'
                         self.pick_controller_action()
-                    self.configure_servo('base_link')
+                    # self.configure_servo('base_link')
 
                 try:
                     self.run_stage(
@@ -1144,7 +1288,7 @@ class StartHarvestAbort(Node):
 
             except HarvestAborted:
                 self.get_logger().error(f'Aborted while working on apple {idx}')
-                if self.abort_recovery_mode == 'freedrive':
+                if not self.use_fake_hardware and self.abort_recovery_mode == 'freedrive':
                     if not self.manual_apple_selection:
                         self.manual_apple_selection = True
                         self.apple_selection.set_available(len(apple_poses.poses))
@@ -1161,10 +1305,15 @@ class StartHarvestAbort(Node):
                 break
 
     def start(self):
+        self._sync_controller_state()
         if self.freedrive_mode:
             self._run_freedrive_loop()
         else:
             self._run_full_batch_flow()
+        if self.use_fake_hardware and self.abort_event.is_set():
+            # A failure after the last abort check (e.g. the final return to
+            # scan) still has to count as a failed run.
+            self.handle_abort()
         self._finish_batch()
 
 
@@ -1185,9 +1334,12 @@ def main(args=None):
     except HarvestAborted as exc:
         node.get_logger().error(f"Harvest aborted during stage: {exc}")
     finally:
+        # Non-zero exit so scripted fake-hardware runs can tell a run failed
+        exit_code = 1 if node.run_failed else 0
         executor.shutdown()
         node.destroy_node()
         rclpy.shutdown()
+    sys.exit(exit_code)
 
 
 if __name__ == '__main__':
